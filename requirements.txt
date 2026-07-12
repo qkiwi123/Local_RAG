@@ -1,0 +1,36 @@
+# Web 框架
+fastapi
+uvicorn[standard]
+python-multipart
+
+# 前端
+streamlit
+httpx
+
+# 向量数据库
+chromadb
+
+# 嵌入模型
+sentence-transformers
+
+# 文档解析
+PyPDF2
+python-docx
+
+# LLM API
+openai
+
+# Reranker（阶段二）
+FlagEmbedding
+
+# 鉴权（阶段三）
+python-jose[cryptography]
+passlib[bcrypt]
+aiosqlite
+
+# 环境管理
+python-dotenv
+
+# 测试
+pytest
+pytest-asyncio
