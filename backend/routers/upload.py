@@ -129,3 +129,27 @@ async def list_documents():
     from backend.services.vector_store import get_document_list
     documents = get_document_list()
     return {"documents": documents}
+
+
+@router.delete("/documents/{document_name}")
+async def delete_document(document_name: str):
+    """
+    删除文档（同时删除磁盘文件 + Chroma 向量数据）。
+
+    DELETE /api/documents/{document_name}
+    """
+    from backend.services.vector_store import delete_document as delete_from_chroma
+
+    # 1. 删除磁盘上的原始文件
+    upload_dir = Path(settings.UPLOAD_DIR)
+    file_path = upload_dir / document_name
+    if file_path.exists():
+        file_path.unlink()
+
+    # 2. 删除 Chroma 中的向量数据
+    success = delete_from_chroma(document_name)
+
+    if success:
+        return {"message": f"文档 '{document_name}' 已删除", "status": "success"}
+    else:
+        raise HTTPException(status_code=500, detail=f"删除文档 '{document_name}' 失败")
