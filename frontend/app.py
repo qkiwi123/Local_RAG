@@ -66,7 +66,7 @@ def upload_file(uploaded_file) -> bool:
     try:
         files = {"file": (uploaded_file.name, uploaded_file.getvalue(),
                           uploaded_file.type or "application/octet-stream")}
-        resp = httpx.post(f"{BACKEND_URL}/api/upload", files=files, timeout=120)
+        resp = httpx.post(f"{BACKEND_URL}/api/upload", files=files, timeout=300)
         if resp.status_code == 200:
             return True
         else:
@@ -74,6 +74,9 @@ def upload_file(uploaded_file) -> bool:
             return False
     except httpx.ConnectError:
         st.error(f"无法连接到后端（{BACKEND_URL}），请先启动后端")
+        return False
+    except httpx.ReadError:
+        st.error("后端连接被关闭。文件可能过大或处理超时，请重试。")
         return False
     except Exception as e:
         st.error(f"上传异常: {str(e)}")

@@ -2,7 +2,7 @@
 FastAPI 应用入口 — 创建应用实例、注册路由、配置中间件。
 
 启动方式：
-    uvicorn backend.main:app --reload
+    uvicorn backend.main:app --reload --reload-dir backend
     然后访问 http://localhost:8000/docs 查看 Swagger 文档
 """
 
