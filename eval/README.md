@@ -22,7 +22,8 @@ PYTHONIOENCODING=utf-8 ./.venv/Scripts/python.exe -m eval.eval run --label smoke
 可选参数：
 - `--overwrite`：同名 label 已有报告时必须加，否则拒绝运行（防覆盖历史数据）
 - `--embedding-model <名>`：临时换 embedding 模型（模型必须已在 HuggingFace 本地缓存，
-  embedding.py 是 `local_files_only=True`；未缓存会报错，需先联网下载一次）
+  embedding.py 是 `local_files_only=True`——这是刻意的，本机到 HF 网络不稳定，勿去掉；
+  下载新模型用 `HF_ENDPOINT=https://hf-mirror.com huggingface-cli download <模型名>`）
 - `--top-k <N>`：临时改检索数量
 - `--limit <N>`：只跑前 N 题
 
