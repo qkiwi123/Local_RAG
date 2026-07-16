@@ -68,8 +68,15 @@ PYTHONIOENCODING=utf-8 ./.venv/Scripts/python.exe -m eval.eval run --label smoke
    变量（backend 的 Chroma/Embedding/LLM 客户端都是模块级单例，import 即初始化）。
    若 config.py 的 `load_dotenv` 被改为 `override=True`，隔离会失效——eval 启动时有断言兜底。
 4. **P0-2 迁移 Milvus 后 eval 自动适配**：adapters.py 的 `_get_store()` 优先 import
-   `backend.services.milvus_store`，不存在则回退 `vector_store`。新 store 需保持
-   `add_chunks(List[DocumentChunk]) -> int` 签名。
+   `backend.services.milvus_store`，不存在则回退 `vector_store`。迁移时的配套清单：
+   - 新 store 保持 `add_chunks(List[DocumentChunk]) -> int` 签名；
+   - `retrieve()` 返回契约不变：`[{"content", "metadata"{document_name, page_number}, "distance"}]`，
+     注意 Milvus 返回相似度（越大越好）而 Chroma 是距离（越小越好），适配层必须统一语义，
+     否则 retriever 的 `distance <= 1.5` 阈值方向会反；
+   - Milvus Lite 的数据文件路径必须从环境变量读取（如 `MILVUS_LITE_PATH`），不能写死——
+     同时更新 eval.py 的 `_setup_env`（注入隔离路径）和 adapters.py 的 `assert_isolation()`，
+     否则 eval 会写进生产库；
+   - 迁移本身不换算法，`compare baseline p0-2-milvus` 检索指标应基本持平（这就是迁移验收）。
 5. **检索命中判定对切分策略鲁棒**：用 文档名 + snippet 归一化包含（NFKC+去空白+小写），
    不用页码。改数据集时 snippet 必须 ≤30 字、单句内、语料内唯一（启动时自动校验，重复即报错退出）。
 6. **拒答短语表**在 `eval/metrics.py` 的 `REFUSAL_PHRASES`——若换 LLM 或大改 prompt 后
