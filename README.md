@@ -76,6 +76,9 @@ noinst 与 inst 的 Hit Rate、Recall 相同；noinst 的 MRR 高 2.94pp，检�
 为 0.067s（inst 为 0.089s），且没有 baseline 通过而新方案失败的回归题。
 默认配置因此切换为 BGE large，query instruction 留空。
 
+完整实验数据已固化在 `eval/results/p1-1-bge/`：两组 `report.md`、
+`report.json` 及 baseline/noinst/inst 对比报告均受 Git 跟踪。
+
 ## 环境准备
 
 当前环境已在 Windows、Python 3.14.0 上验证。

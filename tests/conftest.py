@@ -19,6 +19,8 @@ os.environ["DEEPSEEK_API_KEY"] = "test-key-not-used"
 os.environ["CHROMA_PERSIST_DIR"] = str(_TEST_ROOT / "chroma")
 os.environ["UPLOAD_DIR"] = str(_TEST_ROOT / "uploads")
 os.environ["METADATA_DB_PATH"] = str(_TEST_ROOT / "metadata.db")
+os.environ["EMBEDDING_MODEL"] = "BAAI/bge-large-zh-v1.5"
+os.environ["EMBEDDING_QUERY_INSTRUCTION"] = ""
 
 
 def pytest_addoption(parser):
