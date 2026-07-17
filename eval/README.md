@@ -44,16 +44,19 @@ PYTHONIOENCODING=utf-8 ./.venv/Scripts/python.exe -m eval.eval run --label smoke
 
 ## 指标解读
 
-| 指标 | 含义 | baseline 参考值 |
+| 指标 | 指标含义 | baseline 参考值 |
 |---|---|---|
-| hit_rate | 检索 top-k 命中至少 1 条 gold 证据的题占比（核心指标，确定性）| 41.2% |
-| recall | 每题命中证据数/总证据数均值（多文档题看这个）| 32.4% |
-| mrr | 首个命中 chunk 排名倒数的均值 | 18.7% |
-| keypoint_coverage | 回答命中关键点组的比例（辅助信号，最终以 review.md 人工评审为准）| 57.7% |
-| strict_accuracy | 全部关键点命中且未拒答的题占比 | 41.2% |
-| citation_emission_rate | 回答中带可信 `【来源N】` 标记的占比 | baseline 旧协议为 11.8% |
-| refusal_accuracy | 4 道不可回答题的正确拒答率 | 100% |
-| false_refusal_rate（越低越好）| 可回答题被误拒答的占比（通常是检索未命中所致）| 41.2% |
+| hit_rate | 检索 top-k 中至少命中 1 条 gold 证据的可回答题占比 | 41.2% |
+| recall | 每道可回答题命中的 gold 证据占该题全部 gold 证据的比例，再取平均 | 32.4% |
+| mrr | 每道可回答题首个命中 chunk 的排名倒数，再取平均 | 18.7% |
+| keypoint_coverage | 回答命中的关键点组占全部关键点组的比例，再取平均 | 57.7% |
+| strict_accuracy | 全部关键点命中且未拒答的可回答题占比 | 41.2% |
+| citation_precision | 有效引用文档中属于 gold 文档的比例，再取平均 | 50.0% |
+| citation_recall | 被有效引用的 gold 文档占全部 gold 文档的比例，再取平均 | 5.9% |
+| citation_emission_rate | 包含至少一个引用标记的可回答题占比 | 11.8%（baseline 旧引用协议） |
+| refusal_accuracy | 不可回答题中被正确拒答的题目占比 | 100% |
+| false_refusal_rate | 可回答题中被判定为拒答的题目占比，越低越好 | 41.2% |
+| unanswerable_citation_fp | 不可回答题中出现引用标记的题目数量，越低越好 | 0 |
 
 **噪声界**：LLM temperature=0.3，回答类指标（keypoint/strict/citation）单次波动 <5% 视为噪声；
 检索类指标（hit_rate/recall/mrr）完全确定，任何变化都真实。

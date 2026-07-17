@@ -8,19 +8,19 @@ from datetime import datetime
 from pathlib import Path
 from typing import List
 
-# 汇总表中各指标的展示顺序与中文名（compare 也复用）
+# 汇总表中各指标的展示顺序、中文名与含义（compare 也复用）
 METRIC_LABELS = [
-    ("hit_rate", "检索命中率 hit_rate"),
-    ("recall", "检索召回率 recall"),
-    ("mrr", "MRR"),
-    ("keypoint_coverage", "关键点覆盖率"),
-    ("strict_accuracy", "严格准确率"),
-    ("citation_precision", "引用精确率"),
-    ("citation_recall", "引用召回率"),
-    ("citation_emission_rate", "引用输出率"),
-    ("refusal_accuracy", "拒答准确率"),
-    ("false_refusal_rate", "误拒答率(↓)"),
-    ("unanswerable_citation_fp", "拒答题伪引用数(↓)"),
+    ("hit_rate", "检索命中率 hit_rate", "检索 top-k 中至少命中 1 条 gold 证据的可回答题占比"),
+    ("recall", "检索召回率 recall", "每道可回答题命中的 gold 证据占该题全部 gold 证据的比例，再取平均"),
+    ("mrr", "MRR", "每道可回答题首个命中 chunk 的排名倒数，再取平均"),
+    ("keypoint_coverage", "关键点覆盖率", "回答命中的关键点组占全部关键点组的比例，再取平均"),
+    ("strict_accuracy", "严格准确率", "全部关键点命中且未拒答的可回答题占比"),
+    ("citation_precision", "引用精确率", "有效引用文档中属于 gold 文档的比例，再取平均"),
+    ("citation_recall", "引用召回率", "被有效引用的 gold 文档占全部 gold 文档的比例，再取平均"),
+    ("citation_emission_rate", "引用输出率", "包含至少一个引用标记的可回答题占比"),
+    ("refusal_accuracy", "拒答准确率", "不可回答题中被正确拒答的题目占比"),
+    ("false_refusal_rate", "误拒答率(↓)", "可回答题中被判定为拒答的题目占比，越低越好"),
+    ("unanswerable_citation_fp", "拒答题伪引用数(↓)", "不可回答题中出现引用标记的题目数量，越低越好"),
 ]
 
 
@@ -53,12 +53,12 @@ def write_report_md(run_dir: Path, payload: dict, questions: List[dict], answers
         "",
         "## 汇总指标",
         "",
-        "| 指标 | 值 |",
-        "|---|---|",
+        "| 指标 | 指标含义 | 值 |",
+        "|---|---|---|",
     ]
-    for key, label in METRIC_LABELS:
+    for key, label, meaning in METRIC_LABELS:
         if key in agg:
-            lines.append(f"| {label} | {_fmt(agg[key])} |")
+            lines.append(f"| {label} | {meaning} | {_fmt(agg[key])} |")
     lat = payload["latency"]
     lines += [
         "",
@@ -203,7 +203,7 @@ def render_compare(a: dict, b: dict) -> str:
         "|---|---|---|---|",
     ]
     lower_is_better = {"false_refusal_rate", "unanswerable_citation_fp"}
-    for key, label in METRIC_LABELS:
+    for key, label, _ in METRIC_LABELS:
         va, vb = a["aggregate"].get(key), b["aggregate"].get(key)
         if va is None and vb is None:
             continue
