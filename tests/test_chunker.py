@@ -95,6 +95,18 @@ class TestChunkDocument:
         assert len(chunks) == 1
         assert chunks[0].metadata.document_name == "handbook.pdf"
 
+    def test_document_id_preserved(self):
+        pages = [
+            {
+                "text": "Hello World",
+                "page_number": 1,
+                "document_name": "handbook.pdf",
+                "document_id": "stable-doc-id",
+            },
+        ]
+        chunks = chunk_document(pages, chunk_size=500, overlap=50)
+        assert chunks[0].metadata.document_id == "stable-doc-id"
+
     def test_chunk_index_sequential(self):
         """同一页内的 chunk_index 应连续递增。"""
         pages = [

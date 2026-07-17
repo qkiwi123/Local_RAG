@@ -46,6 +46,13 @@ def assert_isolation():
             f"环境隔离失效！settings.CHROMA_PERSIST_DIR={actual}，"
             f"预期 {expected}。检查 config.py 的 load_dotenv 是否为 override=False。"
         )
+    expected_metadata = os.environ["METADATA_DB_PATH"]
+    actual_metadata = settings.METADATA_DB_PATH
+    if Path(actual_metadata).resolve() != Path(expected_metadata).resolve():
+        raise RuntimeError(
+            f"环境隔离失效！settings.METADATA_DB_PATH={actual_metadata}，"
+            f"预期 {expected_metadata}。"
+        )
 
 
 def get_run_config() -> dict:

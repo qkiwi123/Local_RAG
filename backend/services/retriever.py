@@ -65,10 +65,10 @@ def format_retrieval_context(results: List[dict]) -> str:
     将多条检索结果拼接成一段结构化的上下文文本，供 LLM 使用。
 
     格式：
-        【来源1 - 《文档名》第X页】
+        【来源1】《文档名》第X页
         文本内容...
 
-        【来源2 - 《文档名》第Y页】
+        【来源2】《文档名》第Y页
         文本内容...
 
     这种格式便于 LLM 理解和引用的同时，也便于 citation.py 后续解析。
@@ -88,6 +88,6 @@ def format_retrieval_context(results: List[dict]) -> str:
         page = r["metadata"].get("page_number", "?")
         content = r["content"]
 
-        parts.append(f"【来源{i} - 《{doc_name}》第{page}页】\n{content}")
+        parts.append(f"【来源{i}】《{doc_name}》第{page}页\n{content}")
 
     return "\n\n".join(parts)

@@ -1,36 +1,30 @@
-# Web 框架
-fastapi
-uvicorn[standard]
-python-multipart
+# 运行环境：Python 3.14.0（当前已验证）
 
-# 前端
-streamlit
-httpx
+# Web / frontend
+fastapi==0.139.0
+uvicorn[standard]==0.51.0
+python-multipart==0.0.32
+streamlit==1.59.1
+httpx==0.28.1
 
-# 向量数据库
-chromadb
+# Retrieval / models
+chromadb==1.5.9
+sentence-transformers==5.6.0
+FlagEmbedding==1.4.0
 
-# 嵌入模型
-sentence-transformers
-
-# 文档解析
-PyPDF2
-python-docx
+# Document parsing
+PyPDF2==3.0.1
+python-docx==1.1.2
 
 # LLM API
-openai
+openai==2.45.0
 
-# Reranker（阶段二）
-FlagEmbedding
+# Auth / structured storage (roadmap dependencies already available)
+python-jose[cryptography]==3.5.0
+passlib[bcrypt]==1.7.4
+aiosqlite==0.22.1
 
-# 鉴权（阶段三）
-python-jose[cryptography]
-passlib[bcrypt]
-aiosqlite
-
-# 环境管理
-python-dotenv
-
-# 测试
-pytest
-pytest-asyncio
+# Environment / tests
+python-dotenv==1.0.1
+pytest==8.3.0
+pytest-asyncio==0.24.0

@@ -82,6 +82,7 @@ def chunk_document(
         text = page.get("text", "")
         page_number = page.get("page_number", 1)
         document_name = page.get("document_name", "unknown")
+        document_id = page.get("document_id", document_name)
 
         # 对每页分别切分，避免跨页切分导致页码标注混乱
         page_chunks = _split_text(text, chunk_size, overlap)
@@ -93,6 +94,7 @@ def chunk_document(
             all_chunks.append(DocumentChunk(
                 content=chunk_text,
                 metadata=ChunkMetadata(
+                    document_id=document_id,
                     document_name=document_name,
 
 

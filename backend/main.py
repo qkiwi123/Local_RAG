@@ -46,3 +46,4 @@ async def startup_event():
     print(f"[启动] Embedding 模型: {settings.EMBEDDING_MODEL}")
     print(f"[启动] LLM 模型: {settings.DEEPSEEK_MODEL}")
     print(f"[启动] Chroma 数据目录: {settings.CHROMA_PERSIST_DIR}")
+    print(f"[启动] 文档元数据: {settings.METADATA_DB_PATH}")

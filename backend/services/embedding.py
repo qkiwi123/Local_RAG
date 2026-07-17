@@ -13,21 +13,24 @@
   会利用矩阵运算加速，比逐条调用 embed_query 高效得多。
 """
 
-import os
+from functools import lru_cache
 from typing import List
-from sentence_transformers import SentenceTransformer
 from backend.config import settings
 
 
-# 模块级单例：模型只加载一次，避免每次调用都重新初始化
+# 惰性单例：首次真正编码时才加载，避免导入 API/运行纯单测就占用模型内存。
 # all-MiniLM-L6-v2 首次加载时约 380MB 磁盘空间，384 维向量
 # local_files_only=True: 仅使用本地缓存，不联网（模型已在首次下载到
 #   C:\Users\Acer\.cache\huggingface\hub\models--sentence-transformers--all-MiniLM-L6-v2）
 #   若尚未下载，需先联网下载一次：设置 HF_HUB_OFFLINE=0 启动
-_model = SentenceTransformer(
-    settings.EMBEDDING_MODEL,
-    local_files_only=True,
-)
+@lru_cache(maxsize=1)
+def _get_model():
+    from sentence_transformers import SentenceTransformer
+
+    return SentenceTransformer(
+        settings.EMBEDDING_MODEL,
+        local_files_only=True,
+    )
 
 
 def embed_texts(texts: List[str]) -> List[List[float]]:
@@ -44,7 +47,7 @@ def embed_texts(texts: List[str]) -> List[List[float]]:
         return []
 
     # normalize_embeddings=True: 归一化后点积等价于余弦相似度
-    embeddings = _model.encode(
+    embeddings = _get_model().encode(
         texts,
         normalize_embeddings=True,
         show_progress_bar=False  # 测试和 API 调用时不需要进度条

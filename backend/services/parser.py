@@ -101,13 +101,18 @@ _PARSER_MAP = {
 }
 
 
-def parse_document(file_path: str, document_name: str = None) -> List[dict]:
+def parse_document(
+    file_path: str,
+    document_name: str = None,
+    document_id: str = None,
+) -> List[dict]:
     """
     统一入口：根据文件后缀名分发到对应的解析函数。
 
     Args:
         file_path: 文档的绝对或相对路径
         document_name: 文档名（可选，默认从路径中提取文件名）
+        document_id: 稳定文档 ID（可选；缺省时使用文档名，便于评测可复现）
 
     Returns:
         List[dict]，每个元素包含:
@@ -123,6 +128,8 @@ def parse_document(file_path: str, document_name: str = None) -> List[dict]:
 
     if document_name is None:
         document_name = path.name
+    if document_id is None:
+        document_id = document_name
 
     parse_func = _PARSER_MAP[suffix]
     pages = parse_func(file_path)
@@ -130,5 +137,6 @@ def parse_document(file_path: str, document_name: str = None) -> List[dict]:
     # 将文档名注入每一页的结果中，方便后续 chunker 使用
     for page in pages:
         page["document_name"] = document_name
+        page["document_id"] = document_id
 
     return pages

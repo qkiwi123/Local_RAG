@@ -40,8 +40,8 @@ def add_chunks(chunks: List[DocumentChunk]) -> int:
     2. 批量调用 embedding 模型生成向量
     3. 将向量、原文、metadata 一同存入 Chroma
 
-    ID 生成规则从 {doc_name}_{chunk_index} 改进为 {doc_name}_p{page}_c{chunk_index}，避免同一文档不同页的块 ID 冲突
-    — 同一文档的不同块有唯一 ID，后续可据此更新或删除。
+    ID 使用 {document_id}_p{page}_c{chunk_index}。document_id 由上传链路生成，
+    因此同名文件可以安全共存；旧调用未提供 document_id 时回退到 document_name。
 
     Args:
         chunks: DocumentChunk 列表（来自 chunker.chunk_document）
@@ -54,11 +54,13 @@ def add_chunks(chunks: List[DocumentChunk]) -> int:
 
     texts = [chunk.content for chunk in chunks]
     ids = [
-        f"{chunk.metadata.document_name}_p{chunk.metadata.page_number}_c{chunk.metadata.chunk_index}"
+        f"{chunk.metadata.document_id or chunk.metadata.document_name}"
+        f"_p{chunk.metadata.page_number}_c{chunk.metadata.chunk_index}"
         for chunk in chunks
     ]
     metadatas = [
         {
+            "document_id": chunk.metadata.document_id or chunk.metadata.document_name,
             "document_name": chunk.metadata.document_name,
             "page_number": chunk.metadata.page_number,
             "chunk_index": chunk.metadata.chunk_index,
@@ -96,6 +98,7 @@ def search(query: str, top_k: int = 5) -> List[dict]:
 
     Returns:
         List[dict]，每个元素包含:
+            - chunk_id: 文本块在向量库中的稳定 ID
             - content: 文本块内容
             - metadata: 元信息字典（document_name, page_number, chunk_index）
             - distance: 余弦距离（越小越相似）
@@ -116,10 +119,12 @@ def search(query: str, top_k: int = 5) -> List[dict]:
     documents = results.get("documents", [[]])[0]
     metadatas = results.get("metadatas", [[]])[0]
     distances = results.get("distances", [[]])[0]
+    ids = results.get("ids", [[]])[0]
 
     formatted = []
-    for doc, meta, dist in zip(documents, metadatas, distances):
+    for chunk_id, doc, meta, dist in zip(ids, documents, metadatas, distances):
         formatted.append({
+            "chunk_id": chunk_id,
             "content": doc,
             "metadata": meta,
             "distance": dist,
@@ -143,6 +148,15 @@ def delete_document(document_name: str) -> bool:
     """
     try:
         _collection.delete(where={"document_name": document_name})
+        return True
+    except Exception:
+        return False
+
+
+def delete_document_by_id(document_id: str) -> bool:
+    """按稳定 document_id 删除文档的全部文本块。"""
+    try:
+        _collection.delete(where={"document_id": document_id})
         return True
     except Exception:
         return False

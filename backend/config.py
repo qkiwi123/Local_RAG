@@ -26,6 +26,9 @@ class Settings:
     # ─── 文件存储 ──────────────────────────────────────
     # 相对路径统一基于项目根目录（即 backend/ 的上一级）
     UPLOAD_DIR: str = os.getenv("UPLOAD_DIR", str(BASE_DIR / "data" / "uploads"))
+    METADATA_DB_PATH: str = os.getenv(
+        "METADATA_DB_PATH", str(BASE_DIR / "data" / "metadata.db")
+    )
 
     # ─── Chroma 向量数据库 ─────────────────────────────
     CHROMA_PERSIST_DIR: str = os.getenv(
@@ -61,6 +64,7 @@ class Settings:
         # 确保持久化目录存在
         Path(self.UPLOAD_DIR).mkdir(parents=True, exist_ok=True)
         Path(self.CHROMA_PERSIST_DIR).mkdir(parents=True, exist_ok=True)
+        Path(self.METADATA_DB_PATH).parent.mkdir(parents=True, exist_ok=True)
 
 
 # 模块级单例，其他模块直接 `from backend.config import settings` 即可

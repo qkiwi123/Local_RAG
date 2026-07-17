@@ -4,9 +4,8 @@
 指标口径要点：
 1. 检索命中判定 = 文档名相同 AND norm(snippet) ⊆ norm(chunk内容)。
    不用页码判定（虚拟页码会随切分策略变化，snippet 包含判定对切分策略鲁棒）。
-2. 引用指标只解析原始回答文本中的 【文档名，第X页】 标记。
-   绝不能用 ChatResponse.citations —— backend/utils/citation.py 的 fallback
-   会在 LLM 未输出标记时用检索 top3 伪造引用，导致引用指标虚高。
+2. 引用指标只解析原始回答文本中的 【来源N】 标记，并按 N 映射本次检索结果。
+   不直接使用 ChatResponse.citations，确保不存在的来源编号也能被识别为无效引用。
 3. norm = NFKC 折叠（全半角统一）+ 去所有空白 + 小写，
    兼容 PDF 解析产生的多余空格和 LLM 回答的全半角混用。
 """
@@ -15,8 +14,8 @@ import re
 import unicodedata
 from typing import List, Optional
 
-# 与 backend/utils/citation.py:_CITATION_PATTERN 保持一致（该名称为私有，此处复制并注明来源）
-CITATION_PATTERN = re.compile(r"【([^】]+?)[，,](?:第)?(\d+)(?:页)?】")
+# 与 backend/utils/citation.py:_SOURCE_PATTERN 保持一致（该名称为私有，此处复制并注明来源）
+SOURCE_PATTERN = re.compile(r"【来源\s*(\d+)】")
 
 # 拒答短语表：回答中出现任一短语即判定为拒答（baseline 跑完后校准一次）
 REFUSAL_PHRASES = [
@@ -53,12 +52,43 @@ def norm_doc_name(name: str) -> str:
     return norm(name)
 
 
-def parse_citations(answer: str) -> List[dict]:
-    """从原始回答文本解析引用标记，返回 [{"doc": 原始文档名, "page": int}]。"""
-    return [
-        {"doc": m.group(1), "page": int(m.group(2))}
-        for m in CITATION_PATTERN.finditer(answer)
-    ]
+def parse_citations(answer: str, retrieval: Optional[List[dict]] = None) -> List[dict]:
+    """
+    从原始回答解析去重后的 【来源N】。
+
+    提供 retrieval 时，把有效编号映射为真实文档、页码和 chunk_id；不存在的
+    编号仍保留为 valid=False，使评估能把伪造来源计入引用假阳性。
+    """
+    citations = []
+    seen = set()
+    for match in SOURCE_PATTERN.finditer(answer or ""):
+        source_id = int(match.group(1))
+        if source_id in seen:
+            continue
+        seen.add(source_id)
+
+        item = {
+            "source_id": source_id,
+            "doc": None,
+            "page": None,
+            "chunk_id": None,
+            "valid": False,
+        }
+        result_index = source_id - 1
+        if retrieval is not None and 0 <= result_index < len(retrieval):
+            result = retrieval[result_index]
+            meta = result.get("metadata") or {}
+            doc = meta.get("document_name")
+            page = meta.get("page_number")
+            if doc and isinstance(page, int):
+                item.update({
+                    "doc": doc,
+                    "page": page,
+                    "chunk_id": result.get("chunk_id"),
+                    "valid": True,
+                })
+        citations.append(item)
+    return citations
 
 
 def is_refusal(answer: str) -> bool:
@@ -88,8 +118,12 @@ def score_question(q: dict, answer: str, retrieval: List[dict]) -> dict:
     """
     answerable = q["answerable"]
     refused = is_refusal(answer)
-    citations = parse_citations(answer)
-    cited_docs = {norm_doc_name(c["doc"]) for c in citations}
+    citations = parse_citations(answer, retrieval)
+    cited_docs = {
+        norm_doc_name(c["doc"])
+        for c in citations
+        if c["valid"] and c["doc"]
+    }
 
     row = {
         "id": q["id"],
@@ -124,24 +158,15 @@ def score_question(q: dict, answer: str, retrieval: List[dict]) -> dict:
         gold_docs = {norm_doc_name(ev["document_name"]) for ev in q["evidence"]}
         inter = cited_docs & gold_docs
         row["citation_precision"] = (
-            len(inter) / len(cited_docs) if cited_docs else None
+            len(inter) / len(cited_docs)
+            if cited_docs
+            else (0.0 if citations else None)
         )
         row["citation_recall"] = len(inter) / len(gold_docs) if gold_docs else None
 
-        # 引用落地性：引用的 (doc, page) 是否真实存在于本次检索结果的 metadata 中
-        # （页码只和本 run 的检索比，不和 gold 比——切分策略变化后页码会漂移）
-        retrieved_pairs = {
-            (
-                norm_doc_name(r["metadata"].get("document_name", "")),
-                r["metadata"].get("page_number"),
-            )
-            for r in retrieval
-        }
-        grounded = sum(
-            1
-            for c in citations
-            if (norm_doc_name(c["doc"]), c["page"]) in retrieved_pairs
-        )
+        # 引用落地性：来源编号是否能映射到本次 retrieval 的真实 metadata。
+        # source ID 由本次 retrieval 映射；valid=True 即表示该来源真实落地。
+        grounded = sum(1 for c in citations if c["valid"])
         row["citation_grounded"] = grounded
     else:
         # 不可回答题：拒答正确性 + 是否伪造引用

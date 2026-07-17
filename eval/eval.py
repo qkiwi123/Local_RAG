@@ -57,6 +57,7 @@ def _setup_env(args) -> Path:
 
     os.environ["CHROMA_PERSIST_DIR"] = str(chroma_dir)
     os.environ["UPLOAD_DIR"] = str(run_dir / "uploads")
+    os.environ["METADATA_DB_PATH"] = str(run_dir / "metadata.db")
     if args.embedding_model:
         os.environ["EMBEDDING_MODEL"] = args.embedding_model
     if args.top_k:

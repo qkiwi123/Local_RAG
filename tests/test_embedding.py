@@ -10,7 +10,10 @@
 """
 
 import numpy as np
+import pytest
 from backend.services.embedding import embed_texts, embed_query
+
+pytestmark = pytest.mark.integration
 
 
 def _cosine_similarity(a, b):

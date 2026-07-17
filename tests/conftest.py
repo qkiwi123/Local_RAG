@@ -5,16 +5,54 @@ pytest 共享 fixtures。
 测试文件路径等，供所有测试模块复用。
 """
 
-import pytest
+import os
 import tempfile
 import shutil
 from pathlib import Path
+
+import pytest
+
+
+# 必须在任何 backend import 之前设置。config.py/load_dotenv 默认不会覆盖已存在变量。
+_TEST_ROOT = Path(tempfile.mkdtemp(prefix="rag-pytest-"))
+os.environ["DEEPSEEK_API_KEY"] = "test-key-not-used"
+os.environ["CHROMA_PERSIST_DIR"] = str(_TEST_ROOT / "chroma")
+os.environ["UPLOAD_DIR"] = str(_TEST_ROOT / "uploads")
+os.environ["METADATA_DB_PATH"] = str(_TEST_ROOT / "metadata.db")
+
+
+def pytest_addoption(parser):
+    parser.addoption(
+        "--run-external",
+        action="store_true",
+        default=False,
+        help="运行会调用真实外部 API 的测试",
+    )
+
+
+def pytest_collection_modifyitems(config, items):
+    if config.getoption("--run-external"):
+        return
+    skip_external = pytest.mark.skip(reason="需要 --run-external 才会调用真实 API")
+    for item in items:
+        if "external" in item.keywords:
+            item.add_marker(skip_external)
+
+
+def pytest_sessionfinish(session, exitstatus):
+    """测试结束清理隔离目录；Windows 文件锁失败时留给系统临时目录回收。"""
+    shutil.rmtree(_TEST_ROOT, ignore_errors=True)
 
 
 @pytest.fixture(scope="session")
 def fixtures_dir():
     """测试 fixtures（测试用文件）所在目录。"""
     return Path(__file__).parent / "fixtures"
+
+
+@pytest.fixture(scope="session")
+def isolated_data_dir():
+    return _TEST_ROOT
 
 
 @pytest.fixture(scope="session")

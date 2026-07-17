@@ -10,25 +10,31 @@ DeepSeek API 兼容 OpenAI 接口格式，因此可以直接使用 openai 库。
 - 流式：LLM 每生成一个 token 就 yield 出去，前端逐字显示
 """
 
-from typing import List, Generator
+from functools import lru_cache
+from typing import Generator, List
+
 from openai import OpenAI
 from backend.config import settings
 
 
-# 模块级单例：整个应用共享同一个 OpenAI 客户端
-_client = OpenAI(
-    api_key=settings.DEEPSEEK_API_KEY,
-    base_url=settings.DEEPSEEK_BASE_URL,
-)
+@lru_cache(maxsize=1)
+def _get_client() -> OpenAI:
+    """首次真实调用 LLM 时才创建客户端。"""
+    return OpenAI(
+        api_key=settings.DEEPSEEK_API_KEY,
+        base_url=settings.DEEPSEEK_BASE_URL,
+    )
 
 
 SYSTEM_PROMPT = """你是一个企业知识库问答助手。请根据以下提供的文档内容回答用户的问题。
 
 规则：
 1. 只能根据提供的文档内容回答，如果文档中没有相关信息，请明确告知用户。
-2. 回答时请引用来源，格式为 【文档名，第X页】。
-3. 回答应简洁准确，不要编造文档中没有的信息。
-4. 如果文档内容之间存在矛盾，请指出并分别说明。"""
+2. 文档片段使用【来源N】编号。回答中的每个关键结论都应引用对应来源，格式只能是【来源N】。
+3. N 必须是提供的文档片段中真实存在的编号；不要在方括号内自行填写文档名或页码。
+4. 如果文档不足以回答，明确回答“根据现有文档，未找到相关信息”，且不要附加来源编号。
+5. 回答应简洁准确，不要编造文档中没有的信息。
+6. 如果文档内容之间存在矛盾，请指出并分别引用各自来源。"""
 
 
 def build_messages(question: str, context: str) -> List[dict]:
@@ -71,7 +77,7 @@ def ask(question: str, context: str) -> str:
     """
     messages = build_messages(question, context)
 
-    response = _client.chat.completions.create(
+    response = _get_client().chat.completions.create(
         model=settings.DEEPSEEK_MODEL,
         messages=messages,
         temperature=0.3,  # 低温度：更确定性的回答，减少幻觉
@@ -97,7 +103,7 @@ def ask_stream(question: str, context: str) -> Generator[str, None, None]:
     """
     messages = build_messages(question, context)
 
-    stream = _client.chat.completions.create(
+    stream = _get_client().chat.completions.create(
         model=settings.DEEPSEEK_MODEL,
         messages=messages,
         temperature=0.3,

@@ -1,11 +1,9 @@
 """
-引用来源提取 — 从 LLM 的回答中解析出引用标注，匹配回具体的文档名和页码。
+引用来源提取 — 从 LLM 回答中的稳定 source ID 映射到真实检索结果。
 
-LLM 被要求在回答中使用格式 【文档名，第X页】 进行引用。
-本模块用正则表达式提取这些标记，并与检索结果关联，生成结构化引用信息。
-
-当 LLM 没有生成引用标记时的回退策略：
-在文末附上所有检索到的来源，确保用户知道信息来源。
+LLM 只能使用 【来源N】。N 是本次检索结果的 1-based 序号，文档名、
+页码和 excerpt 全部由后端从检索结果生成，避免模型自由拼写造成伪引用。
+没有引用标记时返回空列表，不再把检索 Top-K 伪装成回答引用。
 """
 
 import re
@@ -13,11 +11,8 @@ from typing import List
 from backend.models.schemas import Citation
 
 
-# 匹配 【文档名，第X页】 格式的正则表达式
-# 支持中文书名号也可能被 LLM 省略或混合使用
-_CITATION_PATTERN = re.compile(
-    r"【([^】]+?)[，,](?:第)?(\d+)(?:页)?】"
-)
+# 匹配稳定来源编号；允许“来源”和数字之间存在少量空白。
+_SOURCE_PATTERN = re.compile(r"【来源\s*(\d+)】")
 
 
 def extract_citations(
@@ -25,12 +20,13 @@ def extract_citations(
     retrieval_results: List[dict]
 ) -> List[Citation]:
     """
-    从 LLM 回答中提取引用标记，匹配回检索结果中的 metadata。
+    从 LLM 回答中提取 【来源N】，按 N 映射回本次检索结果。
 
     流程：
-    1. 正则匹配所有 【文档名，第X页】 格式的引用标记
-    2. 将匹配到的引用与检索结果做关联（按文档名 + 页码匹配）
-    3. 去重后返回结构化的 Citation 列表
+    1. 正则匹配所有 【来源N】
+    2. 验证 N 是否落在本次检索结果范围内
+    3. 直接从对应 result 读取 chunk_id / metadata / content
+    4. 按来源编号去重后返回结构化 Citation
 
     Args:
         answer: LLM 生成的完整回答文本
@@ -40,83 +36,35 @@ def extract_citations(
         Citation 列表（去重）
     """
     citations = []
-    seen = set()  # 用于去重
+    seen_source_ids = set()
 
-    # 1. 正则解析 LLM 回答中的引用标记
-    matches = _CITATION_PATTERN.findall(answer)
+    for match in _SOURCE_PATTERN.finditer(answer or ""):
+        source_id = int(match.group(1))
+        if source_id in seen_source_ids:
+            continue
+        seen_source_ids.add(source_id)
 
-    if matches:
-        # 2. 有引用标记 → 匹配检索结果中的 metadata
-        for doc_name, page_num in matches:
-            # 清理文档名（LLM 可能包含或不包含书名号/扩展名）
-            doc_name = doc_name.strip().strip("《》")
+        result_index = source_id - 1
+        if result_index < 0 or result_index >= len(retrieval_results):
+            # LLM 生成了不存在的编号：不返回伪造 Citation。
+            continue
 
-            # 在检索结果中查找匹配的文本片段
-            excerpt = _find_excerpt(retrieval_results, doc_name, int(page_num))
+        result = retrieval_results[result_index]
+        meta = result.get("metadata") or {}
+        doc_name = meta.get("document_name")
+        page_num = meta.get("page_number")
+        if not doc_name or not isinstance(page_num, int):
+            continue
 
-            # 去重：同一文档 + 同一页码只算一条
-            key = (doc_name, int(page_num))
-            if key not in seen:
-                seen.add(key)
-                citations.append(Citation(
-                    document_name=doc_name,
-                    page_number=int(page_num),
-                    excerpt=excerpt,
-                ))
-    else:
-        # 3. 回退：LLM 没有生成引用标记 → 在文末附上所有检索来源
-        for result in retrieval_results[:3]:  # 最多附 3 条，避免太长
-            meta = result.get("metadata", {})
-            doc_name = meta.get("document_name", "unknown")
-            page_num = meta.get("page_number", 1)
-            content = result.get("content", "")
-
-            key = (doc_name, page_num)
-            if key not in seen:
-                seen.add(key)
-                citations.append(Citation(
-                    document_name=doc_name,
-                    page_number=page_num,
-                    excerpt=content[:200],  # 截取前 200 字符作为预览
-                ))
+        citations.append(Citation(
+            source_id=source_id,
+            chunk_id=result.get("chunk_id"),
+            document_name=doc_name,
+            page_number=page_num,
+            excerpt=result.get("content", "")[:200],
+        ))
 
     return citations
-
-
-def _find_excerpt(
-    retrieval_results: List[dict],
-    doc_name: str,
-    page_number: int
-) -> str:
-    """
-    在检索结果中查找匹配的文本片段。
-
-    先精确匹配（文档名 + 页码），找不到则模糊匹配文档名，
-    再找不到则返回第一条结果的摘要。
-
-    Args:
-        retrieval_results: 检索结果
-        doc_name: 引用中的文档名
-        page_number: 引用中的页码
-
-    Returns:
-        匹配到的文本片段（前 200 字符）
-    """
-    # 精确匹配
-    for result in retrieval_results:
-        meta = result.get("metadata", {})
-        if (meta.get("document_name") == doc_name
-                and meta.get("page_number") == page_number):
-            return result.get("content", "")[:200]
-
-    # 模糊匹配：只匹配文档名
-    for result in retrieval_results:
-        meta = result.get("metadata", {})
-        if meta.get("document_name") == doc_name:
-            return result.get("content", "")[:200]
-
-    # 完全找不到匹配 → 返回空
-    return ""
 
 
 def format_answer_with_citations(answer: str, citations: List[Citation]) -> str:
@@ -145,7 +93,7 @@ def format_answer_with_citations(answer: str, citations: List[Citation]) -> str:
     for i, citation in enumerate(citations, 1):
         excerpt_preview = citation.excerpt[:100].replace("\n", " ")
         lines.append(
-            f"{i}. 《{citation.document_name}》"
+            f"{i}. 【来源{citation.source_id}】《{citation.document_name}》"
             f"第{citation.page_number}页"
         )
         if excerpt_preview:

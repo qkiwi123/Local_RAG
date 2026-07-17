@@ -1,121 +1,198 @@
-"""
-端到端 API 集成测试。
+"""FastAPI 集成测试。
 
-使用 FastAPI TestClient 模拟完整的 HTTP 请求-响应流程，
-覆盖上传和问答两个核心接口。
+外部 LLM 和 Embedding/向量写入均被 Mock；文件与 SQLite 使用 conftest 创建的
+隔离目录，因此默认测试不消耗 API 额度，也不会接触生产数据。
 """
+
+from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
 
 
-# 延迟导入 app，避免在 conftest 加载时就初始化 embedding 模型等
 @pytest.fixture
-def client():
-    """返回 FastAPI TestClient 实例。"""
-    # 在 fixture 内部导入，确保测试隔离
+def client(monkeypatch, isolated_data_dir):
+    from backend.config import settings
+    from backend.routers import chat as chat_router
+    from backend.routers import upload as upload_router
     from backend.main import app
-    return TestClient(app)
+
+    db_path = Path(settings.METADATA_DB_PATH)
+    if db_path.exists():
+        db_path.unlink()
+    upload_dir = Path(settings.UPLOAD_DIR)
+    upload_dir.mkdir(parents=True, exist_ok=True)
+    for path in upload_dir.iterdir():
+        if path.is_file():
+            path.unlink()
+
+    monkeypatch.setattr(upload_router, "add_chunks", lambda chunks: len(chunks))
+    monkeypatch.setattr(upload_router, "delete_document_by_id", lambda document_id: True)
+    monkeypatch.setattr(upload_router, "get_legacy_document_names", lambda: [])
+
+    retrieval = [
+        {
+            "chunk_id": "doc-1_p1_c0",
+            "content": "Employees receive 5 days of annual leave.",
+            "metadata": {
+                "document_id": "doc-1",
+                "document_name": "handbook.pdf",
+                "page_number": 1,
+                "chunk_index": 0,
+            },
+            "distance": 0.2,
+        }
+    ]
+    monkeypatch.setattr(chat_router, "retrieve", lambda question: retrieval)
+    monkeypatch.setattr(
+        chat_router,
+        "ask",
+        lambda question, context: "Employees receive 5 days of annual leave.【来源1】",
+    )
+
+    with TestClient(app) as test_client:
+        yield test_client
+
+
+def _upload_fixture(client, fixture_name="sample.txt", upload_name=None):
+    path = Path("tests/fixtures") / fixture_name
+    with path.open("rb") as file_obj:
+        return client.post(
+            "/api/upload",
+            files={
+                "file": (
+                    upload_name or fixture_name,
+                    file_obj,
+                    "application/octet-stream",
+                )
+            },
+        )
 
 
 class TestUploadAPI:
-    """POST /api/upload 接口测试。"""
+    def test_upload_returns_stable_document_id(self, client):
+        from backend.config import settings
+        from backend.services.document_store import get_document
 
-    def test_upload_pdf_returns_200(self, client):
-        """上传一个测试 PDF，验证返回 200 和正确的 chunk 数量。"""
-        with open("tests/fixtures/sample.pdf", "rb") as f:
-            response = client.post(
-                "/api/upload",
-                files={"file": ("sample.pdf", f, "application/pdf")},
-            )
+        response = _upload_fixture(client)
 
-        assert response.status_code == 200, (
-            f"Expected 200, got {response.status_code}: {response.text}"
-        )
-        data = response.json()
-        assert data["status"] == "success"
-        assert data["document_name"] == "sample.pdf"
-        assert data["chunk_count"] > 0
-        assert "上传成功" in data["message"]
-
-    def test_upload_txt_returns_200(self, client):
-        """上传一个 TXT 文件应成功。"""
-        with open("tests/fixtures/sample.txt", "rb") as f:
-            response = client.post(
-                "/api/upload",
-                files={"file": ("sample.txt", f, "text/plain")},
-            )
-
-        assert response.status_code == 200
+        assert response.status_code == 200, response.text
         data = response.json()
         assert data["status"] == "success"
         assert data["document_name"] == "sample.txt"
+        assert len(data["document_id"]) == 32
         assert data["chunk_count"] > 0
 
-    def test_upload_unsupported_format_returns_400(self, client):
-        """上传不支持的文件类型应返回 400。"""
-        # 创建一个假的 .exe 文件内容
-        fake_content = b"this is not a valid document"
+        record = get_document(data["document_id"])
+        assert record["status"] == "ready"
+        assert record["original_name"] == "sample.txt"
+        assert record["stored_name"] == f"{data['document_id']}.txt"
+        assert (Path(settings.UPLOAD_DIR) / record["stored_name"]).is_file()
+
+    def test_same_name_creates_independent_versions(self, client):
+        first = _upload_fixture(client, upload_name="制度.txt")
+        second = _upload_fixture(client, upload_name="制度.txt")
+
+        assert first.status_code == 200
+        assert second.status_code == 200
+        assert first.json()["document_id"] != second.json()["document_id"]
+
+        payload = client.get("/api/documents").json()
+        versions = [
+            item for item in payload["document_items"]
+            if item["original_name"] == "制度.txt"
+        ]
+        assert len(versions) == 2
+
+    def test_failed_ingest_cleans_files_and_marks_record(self, client, monkeypatch):
+        from backend.config import settings
+        from backend.routers import upload as upload_router
+        from backend.services.document_store import list_documents
+
+        deleted_ids = []
+        monkeypatch.setattr(
+            upload_router,
+            "add_chunks",
+            lambda chunks: (_ for _ in ()).throw(RuntimeError("向量写入失败")),
+        )
+        monkeypatch.setattr(
+            upload_router,
+            "delete_document_by_id",
+            lambda document_id: deleted_ids.append(document_id) or True,
+        )
+
+        response = _upload_fixture(client)
+
+        assert response.status_code == 500
+        records = list_documents(status=None)
+        assert len(records) == 1
+        assert records[0]["status"] == "failed"
+        assert "向量写入失败" in records[0]["error"]
+        assert deleted_ids == [records[0]["document_id"]]
+        assert list(Path(settings.UPLOAD_DIR).iterdir()) == []
+
+    def test_delete_by_document_id(self, client):
+        from backend.config import settings
+        from backend.services.document_store import get_document
+
+        uploaded = _upload_fixture(client).json()
+        document_id = uploaded["document_id"]
+        record = get_document(document_id)
+        stored_path = Path(settings.UPLOAD_DIR) / record["stored_name"]
+
+        response = client.delete(f"/api/documents/id/{document_id}")
+
+        assert response.status_code == 200
+        assert get_document(document_id) is None
+        assert not stored_path.exists()
+
+    def test_rejects_unsupported_format(self, client):
         response = client.post(
             "/api/upload",
-            files={"file": ("malware.exe", fake_content, "application/octet-stream")},
+            files={"file": ("malware.exe", b"not executable", "application/octet-stream")},
         )
         assert response.status_code == 400
         assert "不支持的文件格式" in response.json()["detail"]
 
-    def test_upload_no_filename(self, client):
-        """上传空文件名的请求应返回 400 或 422（FastAPI 自动校验）。"""
-        response = client.post(
-            "/api/upload",
-            files={"file": ("", b"content", "application/pdf")},
-        )
-        # FastAPI/Starlette 可能返回 400 或 422
-        assert response.status_code in [400, 422]
+    def test_rejects_path_in_filename(self):
+        from backend.routers.upload import _validate_filename
 
-    def test_list_documents(self, client):
-        """GET /api/documents 应返回文档列表（包含之前上传的）。"""
+        with pytest.raises(Exception, match="文件名不能包含路径"):
+            _validate_filename("../outside.txt")
+        with pytest.raises(Exception, match="文件名不能包含路径"):
+            _validate_filename("folder\\outside.txt")
+
+    def test_list_documents_has_legacy_and_structured_fields(self, client):
+        _upload_fixture(client)
+
         response = client.get("/api/documents")
+
         assert response.status_code == 200
         data = response.json()
-        assert "documents" in data
-        assert isinstance(data["documents"], list)
-        print(f"\n  Documents in store: {data['documents']}")
+        assert data["documents"] == ["sample.txt"]
+        assert data["document_items"][0]["document_id"]
 
 
 class TestChatAPI:
-    """POST /api/chat 接口测试。"""
-
-    def test_chat_returns_answer(self, client):
-        """先确保有文档入库，再提问验证返回答案。"""
-        # 先上传一个文档（确保库中有数据）
-        with open("tests/fixtures/sample.pdf", "rb") as f:
-            upload_resp = client.post(
-                "/api/upload",
-                files={"file": ("sample.pdf", f, "application/pdf")},
-            )
-        assert upload_resp.status_code == 200
-
-        # 提问
+    def test_chat_uses_mocked_llm_and_returns_grounded_citation(self, client):
         response = client.post(
             "/api/chat",
-            json={"question": "What is the annual leave policy?"},
+            json={"question": "How many days of annual leave do employees get?"},
         )
 
-        assert response.status_code == 200, (
-            f"Expected 200, got {response.status_code}: {response.text}"
-        )
+        assert response.status_code == 200
         data = response.json()
-        assert "answer" in data
-        assert len(data["answer"]) > 0
-        assert "citations" in data
-        print(f"\n  Answer: {data['answer'][:300]}")
-        if data["citations"]:
-            print(f"  Citations: {len(data['citations'])} found")
+        assert "5 days" in data["answer"]
+        assert data["citations"] == [
+            {
+                "source_id": 1,
+                "chunk_id": "doc-1_p1_c0",
+                "document_name": "handbook.pdf",
+                "page_number": 1,
+                "excerpt": "Employees receive 5 days of annual leave.",
+            }
+        ]
 
     def test_chat_empty_question_returns_422(self, client):
-        """空问题应返回 422（FastAPI 自动校验 Pydantic）。"""
-        response = client.post(
-            "/api/chat",
-            json={"question": ""},
-        )
+        response = client.post("/api/chat", json={"question": ""})
         assert response.status_code == 422

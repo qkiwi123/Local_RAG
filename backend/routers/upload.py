@@ -1,155 +1,246 @@
-"""
-文档上传接口 — POST /api/upload
+"""文档上传与管理接口。
 
-接收用户上传的文件，走完完整入库链路：
-保存文件 → 解析 → 切分 → 向量化 → 存入 Chroma
-
-路由层保持轻薄：只做参数校验和调用 services，业务逻辑全部在 services 中。
+入库采用稳定 document_id 和版本化文件名：原始文件名只负责展示，磁盘文件、
+向量 metadata、chunk ID 与删除操作全部通过 document_id 对齐。
 """
 
+import logging
 import os
-import shutil
 from pathlib import Path
+from uuid import uuid4
 
-from fastapi import APIRouter, UploadFile, File, HTTPException
+from fastapi import APIRouter, File, HTTPException, UploadFile
+
 from backend.config import settings
 from backend.models.schemas import UploadResponse
-from backend.services.parser import parse_document
 from backend.services.chunker import chunk_document
-from backend.services.embedding import embed_texts
-from backend.services.vector_store import add_chunks
+from backend.services.document_store import (
+    create_document,
+    delete_record,
+    get_document,
+    list_documents as list_document_records,
+    mark_failed,
+    mark_ready,
+)
+from backend.services.parser import parse_document
+from backend.services.vector_store import (
+    add_chunks,
+    delete_document as delete_legacy_vectors,
+    delete_document_by_id,
+    get_document_list as get_legacy_document_names,
+)
 
 router = APIRouter(tags=["upload"])
+logger = logging.getLogger(__name__)
 
-# 允许上传的文件类型
 ALLOWED_EXTENSIONS = {".pdf", ".docx", ".txt"}
-
-# 文件大小上限：50MB
 MAX_FILE_SIZE = 50 * 1024 * 1024
+
+
+def _validate_filename(filename: str) -> str:
+    """只接受纯文件名，拒绝绝对路径和目录穿越。"""
+    cleaned = filename.strip()
+    if not cleaned:
+        raise HTTPException(status_code=400, detail="未提供文件名")
+    if Path(cleaned).name != cleaned or "/" in cleaned or "\\" in cleaned:
+        raise HTTPException(status_code=400, detail="文件名不能包含路径")
+    if cleaned in {".", ".."}:
+        raise HTTPException(status_code=400, detail="文件名无效")
+    return cleaned
+
+
+def _safe_unlink(path: Path, upload_dir: Path) -> None:
+    """仅删除 UPLOAD_DIR 直属文件，避免错误路径造成越界删除。"""
+    try:
+        resolved = path.resolve()
+        if resolved.parent == upload_dir.resolve() and resolved.is_file():
+            resolved.unlink()
+    except OSError:
+        # 清理失败不掩盖原始入库异常；failed 记录中仍保留错误供排查。
+        pass
+
+
+def _cleanup_failed_ingest(
+    document_id: str,
+    upload_dir: Path,
+    paths: tuple[Path, ...],
+    error: Exception,
+    record_created: bool,
+) -> None:
+    delete_document_by_id(document_id)
+    for path in paths:
+        _safe_unlink(path, upload_dir)
+    if record_created:
+        try:
+            mark_failed(document_id, str(error))
+        except Exception:
+            pass
 
 
 @router.post("/upload", response_model=UploadResponse)
 async def upload_document(file: UploadFile = File(...)):
-    """
-    上传文档并走完入库链路。
-
-    流程：
-    1. 校验文件类型（只允许 pdf / docx / txt）
-    2. 校验文件大小（不超过 50MB）
-    3. 保存文件到 data/uploads/
-    4. 调用 parser → chunker → embedding → vector_store 完成入库
-    5. 返回 UploadResponse（状态、文档名、块数量）
-    """
-    # ── 1. 校验文件类型 ──
-    if not file.filename:
-        raise HTTPException(status_code=400, detail="未提供文件名")
-
-    suffix = Path(file.filename).suffix.lower()
+    """保存文件并完成 parse → chunk → embedding → vector store 入库。"""
+    original_name = _validate_filename(file.filename or "")
+    suffix = Path(original_name).suffix.lower()
     if suffix not in ALLOWED_EXTENSIONS:
         raise HTTPException(
             status_code=400,
-            detail=f"不支持的文件格式: {suffix}（当前支持: .pdf, .docx, .txt）"
+            detail=f"不支持的文件格式: {suffix}（当前支持: .pdf, .docx, .txt）",
         )
 
-    # ── 2. 校验文件大小（先读取全部内容）──
     content = await file.read()
-
     if len(content) > MAX_FILE_SIZE:
         raise HTTPException(
             status_code=413,
-            detail=f"文件过大（{len(content)} bytes），最大允许 50MB"
+            detail=f"文件过大（{len(content)} bytes），最大允许 50MB",
         )
 
-    # ── 3. 保存文件到本地 ──
+    document_id = uuid4().hex
+    stored_name = f"{document_id}{suffix}"
     upload_dir = Path(settings.UPLOAD_DIR)
     upload_dir.mkdir(parents=True, exist_ok=True)
+    temp_path = upload_dir / f".{document_id}.uploading{suffix}"
+    final_path = upload_dir / stored_name
+    record_created = False
 
-    # 处理文件名冲突：重名文件追加数字后缀
-    file_path = upload_dir / file.filename
-    counter = 1
-    while file_path.exists():
-        stem = Path(file.filename).stem
-        file_path = upload_dir / f"{stem}_{counter}{suffix}"
-        counter += 1
-
-    with open(file_path, "wb") as f:
-        f.write(content)
-
-    # ── 4. 入库链路：parser → chunker → embedding → vector_store ──
     try:
-        # 4a. 解析文档
-        pages = parse_document(str(file_path), document_name=file.filename)
+        with open(temp_path, "xb") as output:
+            output.write(content)
 
+        create_document(
+            document_id=document_id,
+            original_name=original_name,
+            stored_name=stored_name,
+            size_bytes=len(content),
+        )
+        record_created = True
+
+        pages = parse_document(
+            str(temp_path),
+            document_name=original_name,
+            document_id=document_id,
+        )
         if not pages:
-            raise HTTPException(
-                status_code=500,
-                detail="文档解析失败：未能提取到任何文本内容"
-            )
+            raise ValueError("文档解析失败：未能提取到任何文本内容")
 
-        # 4b. 文本切分
         chunks = chunk_document(
             pages,
             chunk_size=settings.CHUNK_SIZE,
             overlap=settings.CHUNK_OVERLAP,
         )
-
         if not chunks:
-            raise HTTPException(
-                status_code=500,
-                detail="文档切分失败：未能生成任何文本块"
-            )
+            raise ValueError("文档切分失败：未能生成任何文本块")
 
-        # 4c + 4d: 向量化 + 存入 Chroma（add_chunks 内部调用 embedding）
         chunk_count = add_chunks(chunks)
+        os.replace(temp_path, final_path)
+        mark_ready(document_id, chunk_count)
 
         return UploadResponse(
             message="上传成功，文档已入库",
-            document_name=file.filename,
+            document_id=document_id,
+            document_name=original_name,
             chunk_count=chunk_count,
             status="success",
         )
-
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise HTTPException(
-            status_code=500,
-            detail=f"文档处理失败: {str(e)}"
+    except HTTPException as error:
+        _cleanup_failed_ingest(
+            document_id,
+            upload_dir,
+            (temp_path, final_path),
+            error,
+            record_created,
         )
+        raise
+    except Exception as error:
+        logger.exception(
+            "Document ingest failed: document_id=%s original_name=%r size_bytes=%d",
+            document_id,
+            original_name,
+            len(content),
+        )
+        _cleanup_failed_ingest(
+            document_id,
+            upload_dir,
+            (temp_path, final_path),
+            error,
+            record_created,
+        )
+        raise HTTPException(status_code=500, detail=f"文档处理失败: {error}") from error
 
 
 @router.get("/documents")
 async def list_documents():
-    """
-    获取已上传文档列表。
+    """返回新 document_id 记录，同时兼容迁移前的 Chroma 文档。"""
+    records = list_document_records(status="ready")
+    registered_names = {record["original_name"] for record in records}
+    legacy_items = [
+        {
+            "document_id": None,
+            "original_name": name,
+            "stored_name": name,
+            "size_bytes": None,
+            "status": "legacy",
+            "chunk_count": None,
+            "created_at": None,
+        }
+        for name in get_legacy_document_names()
+        if name not in registered_names
+    ]
+    items = records + legacy_items
+    return {
+        # 保留旧字段，旧前端和外部调用仍可读取名称列表。
+        "documents": [item["original_name"] for item in items],
+        "document_items": items,
+    }
 
-    GET /api/documents → 返回所有已入库的文档名列表。
-    供前端侧边栏展示"已上传文档"。
-    """
-    from backend.services.vector_store import get_document_list
-    documents = get_document_list()
-    return {"documents": documents}
+
+def _delete_registered_document(document_id: str) -> dict:
+    record = get_document(document_id)
+    if not record:
+        raise HTTPException(status_code=404, detail=f"文档不存在: {document_id}")
+
+    if not delete_document_by_id(document_id):
+        raise HTTPException(status_code=500, detail="删除向量数据失败")
+
+    upload_dir = Path(settings.UPLOAD_DIR)
+    _safe_unlink(upload_dir / record["stored_name"], upload_dir)
+    delete_record(document_id)
+    return record
+
+
+@router.delete("/documents/id/{document_id}")
+async def delete_document_by_stable_id(document_id: str):
+    """按稳定 ID 删除一份具体文档版本。"""
+    record = _delete_registered_document(document_id)
+    return {
+        "message": f"文档 '{record['original_name']}' 已删除",
+        "document_id": document_id,
+        "status": "success",
+    }
 
 
 @router.delete("/documents/{document_name}")
 async def delete_document(document_name: str):
-    """
-    删除文档（同时删除磁盘文件 + Chroma 向量数据）。
+    """兼容旧 API：按展示名删除该名称的所有登记版本或旧 Chroma 数据。"""
+    matching = [
+        record
+        for record in list_document_records(status=None)
+        if record["original_name"] == document_name
+    ]
+    if matching:
+        for record in matching:
+            _delete_registered_document(record["document_id"])
+        return {
+            "message": f"文档 '{document_name}' 的 {len(matching)} 个版本已删除",
+            "status": "success",
+        }
 
-    DELETE /api/documents/{document_name}
-    """
-    from backend.services.vector_store import delete_document as delete_from_chroma
-
-    # 1. 删除磁盘上的原始文件
     upload_dir = Path(settings.UPLOAD_DIR)
-    file_path = upload_dir / document_name
-    if file_path.exists():
-        file_path.unlink()
+    legacy_path = upload_dir / document_name
+    if legacy_path.resolve().parent != upload_dir.resolve():
+        raise HTTPException(status_code=400, detail="文档名无效")
+    _safe_unlink(legacy_path, upload_dir)
 
-    # 2. 删除 Chroma 中的向量数据
-    success = delete_from_chroma(document_name)
-
-    if success:
+    if delete_legacy_vectors(document_name):
         return {"message": f"文档 '{document_name}' 已删除", "status": "success"}
-    else:
-        raise HTTPException(status_code=500, detail=f"删除文档 '{document_name}' 失败")
+    raise HTTPException(status_code=500, detail=f"删除文档 '{document_name}' 失败")

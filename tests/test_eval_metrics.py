@@ -43,12 +43,31 @@ class TestNormDocName:
 
 class TestParseCitations:
     def test_standard_marker(self):
-        cites = parse_citations("答案见【员工手册，第3页】。")
-        assert cites == [{"doc": "员工手册", "page": 3}]
+        retrieval = [
+            {
+                "chunk_id": "chunk-1",
+                "content": "年假规定",
+                "metadata": {"document_name": "员工手册.pdf", "page_number": 3},
+            }
+        ]
+        cites = parse_citations("答案见【来源1】。", retrieval)
+        assert cites == [
+            {
+                "source_id": 1,
+                "doc": "员工手册.pdf",
+                "page": 3,
+                "chunk_id": "chunk-1",
+                "valid": True,
+            }
+        ]
 
     def test_variants(self):
-        # 半角逗号、省略"第/页"
-        assert parse_citations("【文档A,5】")[0]["page"] == 5
+        assert parse_citations("【来源 5】")[0]["source_id"] == 5
+
+    def test_invalid_source_is_preserved_for_scoring(self):
+        cite = parse_citations("伪造来源【来源9】", [])[0]
+        assert cite["source_id"] == 9
+        assert cite["valid"] is False
 
     def test_no_marker(self):
         assert parse_citations("没有引用的回答") == []
@@ -65,7 +84,7 @@ class TestIsRefusal:
         assert is_refusal("根据提供的文档内容，文档中没有关于年终奖的信息。")
 
     def test_normal_answer(self):
-        assert not is_refusal("年假为5天，详见【员工手册，第1页】。")
+        assert not is_refusal("年假为5天，详见【来源1】。")
 
 
 # ─── 证据匹配 ────────────────────────────────────────────
@@ -124,7 +143,7 @@ Q_UNANSWERABLE = {
 
 class TestScoreQuestion:
     def test_full_pass(self):
-        answer = "1956 年达特茅斯会议提出【AI概述，第1页】。"
+        answer = "1956 年达特茅斯会议提出【来源1】。"
         row = score_question(Q_ANSWERABLE, answer, RETRIEVAL)
         assert row["hit"] is True
         assert row["first_match_rank"] == 1
@@ -156,13 +175,13 @@ class TestScoreQuestion:
         assert row["citation_fp"] is False
 
     def test_unanswerable_hallucinated_citation(self):
-        answer = "年终奖为3个月工资【员工手册，第9页】。"
+        answer = "年终奖为3个月工资【来源9】。"
         row = score_question(Q_UNANSWERABLE, answer, RETRIEVAL)
         assert row["refusal_correct"] is False
         assert row["citation_fp"] is True
 
     def test_wrong_citation_doc(self):
-        answer = "1956 年达特茅斯会议【LLM指南，第3页】。"
+        answer = "1956 年达特茅斯会议【来源2】。"
         row = score_question(Q_ANSWERABLE, answer, RETRIEVAL)
         assert row["citation_precision"] == 0.0  # 引用了非 gold 文档
         assert row["citation_grounded"] == 1  # 但该文档确实在检索结果里 → 落地
@@ -175,7 +194,7 @@ class TestAggregate:
     def test_mixed_aggregate(self):
         rows = [
             score_question(
-                Q_ANSWERABLE, "1956 年达特茅斯会议【AI概述，第1页】。", RETRIEVAL
+                Q_ANSWERABLE, "1956 年达特茅斯会议【来源1】。", RETRIEVAL
             ),
             score_question(Q_UNANSWERABLE, "文档中没有相关信息。", RETRIEVAL),
         ]
@@ -199,7 +218,7 @@ class TestAggregate:
         # 两题：一题带正确引用、一题无引用 → precision 应为 1.0（None 不计入均值）
         rows = [
             score_question(
-                Q_ANSWERABLE, "1956 达特茅斯【AI概述，第1页】", RETRIEVAL
+                Q_ANSWERABLE, "1956 达特茅斯【来源1】", RETRIEVAL
             ),
             score_question(Q_ANSWERABLE, "1956 达特茅斯，无引用", RETRIEVAL),
         ]

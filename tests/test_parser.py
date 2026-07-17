@@ -57,3 +57,11 @@ class TestParseDocument:
             document_name="custom_name.txt"
         )
         assert all(p["document_name"] == "custom_name.txt" for p in pages)
+
+    def test_document_id_is_preserved(self):
+        pages = parse_document(
+            "tests/fixtures/sample.txt",
+            document_name="custom_name.txt",
+            document_id="stable-doc-id",
+        )
+        assert all(p["document_id"] == "stable-doc-id" for p in pages)

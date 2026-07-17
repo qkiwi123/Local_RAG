@@ -10,17 +10,43 @@
 import pytest
 from backend.services.retriever import retrieve, format_retrieval_context
 
+pytestmark = pytest.mark.integration
+
+
+@pytest.fixture(scope="module", autouse=True)
+def seeded_retriever_store():
+    """检索测试自行准备数据，不依赖 test_vector_store 的执行顺序。"""
+    from backend.models.schemas import ChunkMetadata, DocumentChunk
+    from backend.services.vector_store import add_chunks, delete_document
+
+    delete_document("retriever_seed.pdf")
+    chunks = [
+        DocumentChunk(
+            content=(
+                f"Policy section {i}: employees receive annual leave and must follow "
+                "company workplace guidelines."
+            ),
+            metadata=ChunkMetadata(
+                document_id="retriever-seed",
+                document_name="retriever_seed.pdf",
+                page_number=1,
+                chunk_index=i,
+            ),
+        )
+        for i in range(10)
+    ]
+    add_chunks(chunks)
+    yield
+    delete_document("retriever_seed.pdf")
+
 
 class TestRetrieve:
     """检索功能测试。"""
 
     def test_relevant_query_returns_results(self):
         """用相关查询检索，应返回非空结果。"""
-        # 注意：依赖之前的 vector_store 测试数据（test_handbook.pdf 已在库中）
         results = retrieve("annual leave policy", top_k=5)
-        # 如果测试库中有数据，应能召回
-        # 如果没有（测试环境重新初始化），也接受空结果
-        assert isinstance(results, list)
+        assert results
 
     def test_empty_query_returns_empty(self):
         """空查询应返回空列表。"""
@@ -39,23 +65,6 @@ class TestRetrieve:
 
     def test_same_document_limit(self):
         """同一文档的结果不应超过 3 条。"""
-        # 添加多条同一文档的内容
-        from backend.services.vector_store import add_chunks
-        from backend.models.schemas import DocumentChunk, ChunkMetadata
-
-        chunks = []
-        for i in range(10):
-            chunks.append(DocumentChunk(
-                content=f"Policy section {i}: All employees must follow company guidelines regarding workplace conduct.",
-                metadata=ChunkMetadata(
-                    document_name="many_chunks_test.pdf",
-                    page_number=1,
-                    chunk_index=i,
-                ),
-            ))
-
-        add_chunks(chunks)
-
         results = retrieve("company guidelines workplace conduct", top_k=8)
         doc_counts = {}
         for r in results:
@@ -68,9 +77,6 @@ class TestRetrieve:
                 f"should be at most 3"
             )
 
-        # 清理
-        from backend.services.vector_store import delete_document
-        delete_document("many_chunks_test.pdf")
 
     def test_top_k_respected(self):
         """返回结果数不超过请求的 top_k。"""
@@ -105,8 +111,8 @@ class TestFormatRetrievalContext:
         context = format_retrieval_context(results)
 
         # 应包含来源标注
-        assert "来源1" in context
-        assert "来源2" in context
+        assert "【来源1】《handbook.pdf》第3页" in context
+        assert "【来源2】《handbook.pdf》第5页" in context
         assert "《handbook.pdf》第3页" in context
         assert "《handbook.pdf》第5页" in context
         assert "Employees are entitled" in context
@@ -130,6 +136,6 @@ class TestFormatRetrievalContext:
             },
         ]
         context = format_retrieval_context(results)
-        assert "来源1" in context
-        assert "来源2" not in context  # 只有一条
+        assert "【来源1】《test.pdf》第1页" in context
+        assert "【来源2】" not in context  # 只有一条
         assert "Test content." in context

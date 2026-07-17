@@ -1,0 +1,12 @@
+# CI 只运行不依赖本地模型权重的测试；版本与 requirements.txt 对齐。
+fastapi==0.139.0
+uvicorn[standard]==0.51.0
+python-multipart==0.0.32
+httpx==0.28.1
+chromadb==1.5.9
+PyPDF2==3.0.1
+python-docx==1.1.2
+openai==2.45.0
+python-dotenv==1.0.1
+pytest==8.3.0
+pytest-asyncio==0.24.0

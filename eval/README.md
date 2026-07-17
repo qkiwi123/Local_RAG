@@ -51,7 +51,7 @@ PYTHONIOENCODING=utf-8 ./.venv/Scripts/python.exe -m eval.eval run --label smoke
 | mrr | 首个命中 chunk 排名倒数的均值 | 18.7% |
 | keypoint_coverage | 回答命中关键点组的比例（辅助信号，最终以 review.md 人工评审为准）| 57.7% |
 | strict_accuracy | 全部关键点命中且未拒答的题占比 | 41.2% |
-| citation_emission_rate | 回答中带 `【文档名，第X页】` 标记的占比 | 11.8% |
+| citation_emission_rate | 回答中带可信 `【来源N】` 标记的占比 | baseline 旧协议为 11.8% |
 | refusal_accuracy | 4 道不可回答题的正确拒答率 | 100% |
 | false_refusal_rate（越低越好）| 可回答题被误拒答的占比（通常是检索未命中所致）| 41.2% |
 
@@ -62,10 +62,11 @@ PYTHONIOENCODING=utf-8 ./.venv/Scripts/python.exe -m eval.eval run --label smoke
 
 1. **q11/q12 是表格金丝雀**：证据在 docx 表格里，当前 parser 不解析表格，这两题检索必然
    不命中——做完 P3-4 表格提取后应转为命中。数据集校验时对它们报「snippet 未出现」警告属预期。
-2. **引用指标解析原始回答文本**，不用 ChatResponse.citations（citation.py 的 fallback 会用
-   检索 top3 伪造引用）。baseline 已发现：LLM 实际输出 `【来源N - ...】` 格式（照抄上下文
-   标签），与正则不匹配 → 引用输出率低是真实系统缺陷（P3-5 优化点）。
-3. **环境隔离机制**：eval.py 在 import 任何 backend 模块前设置 `CHROMA_PERSIST_DIR` 等环境
+2. **引用指标解析原始回答文本中的 `【来源N】`**，并按 N 映射本次 retrieval。
+   2026-07-17 的 P0-1 已移除 citation fallback：无引用标记时 ChatResponse.citations 为空；
+   不存在的来源编号会被评估为无效引用。baseline 报告仍保留旧协议的 11.8% 作为历史起点。
+3. **环境隔离机制**：eval.py 在 import 任何 backend 模块前设置 `CHROMA_PERSIST_DIR`、
+   `METADATA_DB_PATH` 等环境
    变量（backend 的 Chroma/Embedding/LLM 客户端都是模块级单例，import 即初始化）。
    若 config.py 的 `load_dotenv` 被改为 `override=True`，隔离会失效——eval 启动时有断言兜底。
 4. **P0-2 迁移 Milvus 后 eval 自动适配**：adapters.py 的 `_get_store()` 优先 import

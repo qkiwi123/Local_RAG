@@ -21,7 +21,7 @@ class TestBuildMessages:
         """应返回包含 system 和 user 两条消息的列表。"""
         messages = build_messages(
             question="年假有多少天？",
-            context="【来源1 - 《员工手册》第3页】\n公司规定员工每年享有5天带薪年假。",
+            context="【来源1】《员工手册》第3页\n公司规定员工每年享有5天带薪年假。",
         )
         assert len(messages) == 2
         assert messages[0]["role"] == "system"
@@ -38,7 +38,7 @@ class TestBuildMessages:
 
     def test_context_in_user_content(self):
         """检索上下文应出现在 user 消息中。"""
-        context = "【来源1 - 《员工手册》第3页】\n测试内容"
+        context = "【来源1】《员工手册》第3页\n测试内容"
         messages = build_messages(
             question="测试问题",
             context=context,
@@ -52,8 +52,11 @@ class TestBuildMessages:
         assert "企业知识库问答助手" in system
         assert "根据提供的文档内容回答" in system
         assert "编造文档中没有的信息" in system
+        assert "【来源N】" in system
+        assert "不要在方括号内自行填写文档名或页码" in system
 
 
+@pytest.mark.external
 class TestAsk:
     """LLM 调用测试（会消耗 API 额度）。"""
 
@@ -64,7 +67,7 @@ class TestAsk:
         使用英文上下文来匹配 all-MiniLM-L6-v2 的语种。
         """
         context = (
-            "【来源1 - 《Employee Handbook》第3页】\n"
+            "【来源1】《Employee Handbook》第3页\n"
             "Company policy: employees are entitled to 5 days of paid annual leave per year.\n"
             "Annual leave must be applied to the direct supervisor one week in advance."
         )
@@ -87,7 +90,7 @@ class TestAsk:
         上下文与问题完全无关，LLM 应诚实告知而非编造。
         """
         context = (
-            "【来源1 - 《Weather Report》第1页】\n"
+            "【来源1】《Weather Report》第1页\n"
             "Today's weather is sunny with a high of 25 degrees Celsius.\n"
             "Tomorrow will be cloudy with a chance of rain in the afternoon."
         )
@@ -106,12 +109,13 @@ class TestAsk:
             print(f"  [Note] No explicit refusal keyword found, but answer is: {answer[:200]}")
 
 
+@pytest.mark.external
 class TestAskStream:
     """流式 LLM 调用测试（会消耗 API 额度）。"""
 
     def test_stream_returns_tokens(self):
         """流式调用应能收集到非空 token。"""
-        context = "【来源1 - 《Handbook》第1页】\nThe sky is blue."
+        context = "【来源1】《Handbook》第1页\nThe sky is blue."
         question = "What color is the sky?"
 
         tokens = list(ask_stream(question, context))
