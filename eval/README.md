@@ -24,13 +24,16 @@ PYTHONIOENCODING=utf-8 ./.venv/Scripts/python.exe -m eval.eval run --label smoke
 - `--embedding-model <名>`：临时换 embedding 模型（模型必须已在 HuggingFace 本地缓存，
   embedding.py 是 `local_files_only=True`——这是刻意的，本机到 HF 网络不稳定，勿去掉；
   下载新模型用 `HF_ENDPOINT=https://hf-mirror.com huggingface-cli download <模型名>`）
+- `--query-instruction <文本>`：仅在 query 编码前添加 instruction；传空字符串表示不添加，
+  文档侧始终不添加
 - `--top-k <N>`：临时改检索数量
 - `--limit <N>`：只跑前 N 题
 
 ## label 命名约定
 
-与优化步骤对应，方便回溯：`baseline`（已提交，勿覆盖）、`p0-1-bge`、`p0-3-chunk`、
-`p1-1-rerank`、`p1-2-hybrid`…… 一次改多项时合并命名如 `p0-all`。
+与优化步骤对应，方便回溯：`baseline`（已提交，勿覆盖）、
+`p1-1-bge-large-noinst`、`p1-1-bge-large-inst`、`p1-2-docx-table`、
+`p1-3-recursive-600-100`…… 一次改多项时合并命名。
 
 ## 产物（eval/runs/<label>/，除 baseline 报告外均被 gitignore）
 

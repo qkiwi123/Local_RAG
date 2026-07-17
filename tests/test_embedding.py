@@ -2,7 +2,7 @@
 测试 backend/services/embedding.py — 嵌入模型。
 
 覆盖：
-- 向量维度正确（all-MiniLM-L6-v2 → 384 维）
+- 向量维度正确（BAAI/bge-large-zh-v1.5 → 1024 维）
 - 向量值在合理范围内（归一化后应在 [-1, 1]）
 - 语义相近的句子余弦相似度更高
 - 批处理与单条处理结果一致
@@ -25,12 +25,12 @@ class TestEmbedTexts:
     """批量向量化测试。"""
 
     def test_output_dimension(self):
-        """all-MiniLM-L6-v2 输出应为 384 维。"""
-        texts = ["Hello world", "This is a test"]
+        """bge-large-zh-v1.5 输出应为 1024 维。"""
+        texts = ["你好，世界", "这是一个测试"]
         embeddings = embed_texts(texts)
         assert len(embeddings) == 2
         for vec in embeddings:
-            assert len(vec) == 384, f"Expected 384, got {len(vec)}"
+            assert len(vec) == 1024, f"Expected 1024, got {len(vec)}"
 
     def test_values_in_range(self):
         """归一化后的向量值应在 [-1, 1] 范围内。"""
@@ -46,13 +46,11 @@ class TestEmbedTexts:
         """
         语义相近的句子余弦相似度应明显高于无关句子。
 
-        注意：all-MiniLM-L6-v2 是英文模型，对中文支持有限，
-        因此本测试使用英文句子。阶段二切换 BAAI/bge-large-zh-v1.5
-        后应补充中文语义相似度测试。
+        默认模型面向中文检索，因此使用中文语义样例。
         """
-        similar_1 = "Employees are entitled to five days of paid annual leave per year."
-        similar_2 = "Workers receive 5 days of paid vacation annually."
-        unrelated = "The weather today is very sunny and warm."
+        similar_1 = "员工每年享有五天带薪年假。"
+        similar_2 = "公司员工每年可以获得五天带薪休假。"
+        unrelated = "今天的天气晴朗，适合户外运动。"
 
         embeddings = embed_texts([similar_1, similar_2, unrelated])
 
@@ -78,10 +76,10 @@ class TestEmbedTexts:
 class TestEmbedQuery:
     """单条查询向量化测试。"""
 
-    def test_returns_384_dim_vector(self):
-        """embed_query 返回 384 维向量。"""
-        vec = embed_query("What is the annual leave policy?")
-        assert len(vec) == 384
+    def test_returns_1024_dim_vector(self):
+        """embed_query 返回 1024 维向量。"""
+        vec = embed_query("公司的年假政策是什么？")
+        assert len(vec) == 1024
 
     def test_consistent_with_embed_texts(self):
         """embed_query 的结果应与 embed_texts([text])[0] 一致。"""

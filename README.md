@@ -58,6 +58,24 @@ docs/交接_阶段一优化.md   当前阶段交接和施工约束
 
 完整口径见 `eval/README.md` 和 `eval/runs/baseline/report.md`。baseline 的引用数据使用历史旧协议；新 run 使用 `【来源N】` 可信引用协议。
 
+## P1-1 中文 Embedding 实验
+
+保持 500/50 字符滑窗、Top 5、阈值和 parser 不变，对
+`BAAI/bge-large-zh-v1.5` 做 query instruction A/B。最终选择 **noinst**：
+
+| 指标 | baseline | BGE large noinst | 变化 |
+|---|---:|---:|---:|
+| Hit Rate | 41.18% | 82.35% | +41.17pp |
+| Recall | 32.35% | 76.47% | +44.12pp |
+| MRR | 18.73% | 69.61% | +50.88pp |
+| Strict Accuracy | 41.18% | 82.35% | +41.17pp |
+| False Refusal Rate | 41.18% | 11.76% | -29.42pp |
+| Refusal Accuracy | 100% | 100% | 持平 |
+
+noinst 与 inst 的 Hit Rate、Recall 相同；noinst 的 MRR 高 2.94pp，检索平均延迟
+为 0.067s（inst 为 0.089s），且没有 baseline 通过而新方案失败的回归题。
+默认配置因此切换为 BGE large，query instruction 留空。
+
 ## 环境准备
 
 当前环境已在 Windows、Python 3.14.0 上验证。
@@ -75,7 +93,10 @@ Copy-Item .env.example .env
 DEEPSEEK_API_KEY=your_key
 ```
 
-Embedding 使用 `local_files_only=True`。运行前需确保模型已存在于本地 Hugging Face 缓存；这样服务启动和测试不会因网络检查随机失败。
+Embedding 使用 `local_files_only=True`。运行前需确保
+`BAAI/bge-large-zh-v1.5` 已存在于本地 Hugging Face 缓存；这样服务启动和测试不会
+因网络检查随机失败。该模型输出 1024 维向量，旧 384 维 Chroma 索引不能直接复用，
+切换现有环境前必须重建索引或重新上传文档。
 
 ## 启动
 
@@ -172,11 +193,10 @@ $env:PYTHONIOENCODING='utf-8'
 
 ## 下一阶段
 
-1. 中文 BGE 模型与 query instruction A/B；
-2. 文本清洗和 DOCX 表格解析；
-3. Token-aware 递归切分；
-4. 检索阈值校准；
-5. Reranker；
-6. Dense + BM25 + RRF 混合检索。
+1. 文本清洗和 DOCX 表格解析；
+2. Token-aware 递归切分；
+3. 检索阈值校准；
+4. Reranker；
+5. Dense + BM25 + RRF 混合检索。
 
 所有简历指标都以实际 eval 报告为准，不预先填写目标值。

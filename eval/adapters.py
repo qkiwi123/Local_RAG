@@ -61,6 +61,7 @@ def get_run_config() -> dict:
 
     return {
         "embedding_model": settings.EMBEDDING_MODEL,
+        "embedding_query_instruction": settings.EMBEDDING_QUERY_INSTRUCTION,
         "chunk_size": settings.CHUNK_SIZE,
         "chunk_overlap": settings.CHUNK_OVERLAP,
         "top_k": settings.RETRIEVAL_TOP_K,

@@ -19,9 +19,9 @@ from backend.config import settings
 
 
 # 惰性单例：首次真正编码时才加载，避免导入 API/运行纯单测就占用模型内存。
-# all-MiniLM-L6-v2 首次加载时约 380MB 磁盘空间，384 维向量
+# 默认 BAAI/bge-large-zh-v1.5 输出 1024 维向量。
 # local_files_only=True: 仅使用本地缓存，不联网（模型已在首次下载到
-#   C:\Users\Acer\.cache\huggingface\hub\models--sentence-transformers--all-MiniLM-L6-v2）
+#   C:\Users\Acer\.cache\huggingface\hub\models--BAAI--bge-large-zh-v1.5）
 #   若尚未下载，需先联网下载一次：设置 HF_HUB_OFFLINE=0 启动
 @lru_cache(maxsize=1)
 def _get_model():
@@ -41,7 +41,7 @@ def embed_texts(texts: List[str]) -> List[List[float]]:
         texts: 文本字符串列表（批处理，效率更高）
 
     Returns:
-        对应向量列表，每个向量为 384 维 float 列表（模型 all-MiniLM-L6-v2）
+        对应向量列表，每个向量维度由当前模型决定
     """
     if not texts:
         return []
@@ -66,7 +66,8 @@ def embed_query(query: str) -> List[float]:
         query: 用户问题或查询文本
 
     Returns:
-        384 维 float 列表
+        当前模型对应维度的 float 列表
     """
-    return embed_texts([query])[0]
-    #复用embed_texts,确保所有查询向量和文档向量都处于同种embed计算方式，统一对向量归一化和统一输出二维浮点数列表
+    # 复用 embed_texts，统一向量归一化与输出格式；仅查询侧可配置 instruction。
+    query_text = f"{settings.EMBEDDING_QUERY_INSTRUCTION}{query}"
+    return embed_texts([query_text])[0]

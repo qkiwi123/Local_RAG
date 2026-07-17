@@ -43,10 +43,13 @@ class Settings:
     RETRIEVAL_TOP_K: int = int(os.getenv("RETRIEVAL_TOP_K", "5"))
 
     # ─── Embedding 模型 ───────────────────────────────
-    # 阶段一使用英文轻量模型 all-MiniLM-L6-v2，384 维向量
-    # 阶段二切换为 BAAI/bge-large-zh-v1.5（中文专优，1024 维）
+    # P1-1 实验选择 BAAI/bge-large-zh-v1.5（中文检索，1024 维）。
+    # query instruction A/B 中 noinst 的 MRR 与检索延迟更优，因此默认留空。
     EMBEDDING_MODEL: str = os.getenv(
-        "EMBEDDING_MODEL", "all-MiniLM-L6-v2"
+        "EMBEDDING_MODEL", "BAAI/bge-large-zh-v1.5"
+    )
+    EMBEDDING_QUERY_INSTRUCTION: str = os.getenv(
+        "EMBEDDING_QUERY_INSTRUCTION", ""
     )
 
     def __init__(self):

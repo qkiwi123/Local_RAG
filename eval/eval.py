@@ -60,6 +60,8 @@ def _setup_env(args) -> Path:
     os.environ["METADATA_DB_PATH"] = str(run_dir / "metadata.db")
     if args.embedding_model:
         os.environ["EMBEDDING_MODEL"] = args.embedding_model
+    if args.query_instruction is not None:
+        os.environ["EMBEDDING_QUERY_INSTRUCTION"] = args.query_instruction
     if args.top_k:
         os.environ["RETRIEVAL_TOP_K"] = str(args.top_k)
     return run_dir
@@ -209,6 +211,10 @@ def main():
     p_run.add_argument("--limit", type=int, help="只跑前 N 题（冒烟测试）")
     p_run.add_argument("--overwrite", action="store_true", help="覆盖同名 label 的已有报告")
     p_run.add_argument("--embedding-model", help="覆盖 EMBEDDING_MODEL（需模型已在本地缓存）")
+    p_run.add_argument(
+        "--query-instruction",
+        help="仅在 query 编码前添加的 instruction；传空字符串表示不添加",
+    )
     p_run.add_argument("--top-k", type=int, help="覆盖 RETRIEVAL_TOP_K")
     p_run.set_defaults(func=cmd_run)
 
