@@ -133,3 +133,29 @@ class TestVectorStore:
 
         results = search("anything", top_k=0)
         assert results == []
+
+    def test_add_chunks_persists_content_type(self, monkeypatch):
+        from backend.models.schemas import ChunkMetadata, DocumentChunk
+        from backend.services import vector_store
+
+        captured = {}
+
+        class FakeCollection:
+            def add(self, **kwargs):
+                captured.update(kwargs)
+
+        monkeypatch.setattr(vector_store, "_collection", FakeCollection())
+        monkeypatch.setattr(vector_store, "embed_texts", lambda texts: [[0.0, 1.0]])
+        chunk = DocumentChunk(
+            content="| 技术 | 成熟度 |",
+            metadata=ChunkMetadata(
+                document_id="doc-table",
+                document_name="report.docx",
+                page_number=2,
+                chunk_index=0,
+                content_type="table",
+            ),
+        )
+
+        assert vector_store.add_chunks([chunk]) == 1
+        assert captured["metadatas"][0]["content_type"] == "table"

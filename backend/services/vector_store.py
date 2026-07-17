@@ -64,6 +64,7 @@ def add_chunks(chunks: List[DocumentChunk]) -> int:
             "document_name": chunk.metadata.document_name,
             "page_number": chunk.metadata.page_number,
             "chunk_index": chunk.metadata.chunk_index,
+            "content_type": chunk.metadata.content_type,
         }
         for chunk in chunks
     ]

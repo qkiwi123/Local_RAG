@@ -107,6 +107,47 @@ class TestChunkDocument:
         chunks = chunk_document(pages, chunk_size=500, overlap=50)
         assert chunks[0].metadata.document_id == "stable-doc-id"
 
+    def test_content_type_preserved(self):
+        pages = [
+            {
+                "text": "| 技术 | 成熟度 |\n| --- | --- |\n| RAG | 成熟 |",
+                "page_number": 2,
+                "document_name": "report.docx",
+                "document_id": "stable-doc-id",
+                "content_type": "table",
+            },
+        ]
+
+        chunks = chunk_document(pages, chunk_size=500, overlap=50)
+
+        assert chunks[0].metadata.content_type == "table"
+
+    def test_chunk_index_is_unique_across_blocks_on_same_page(self):
+        pages = [
+            {
+                "text": "表格前正文",
+                "page_number": 1,
+                "document_name": "report.docx",
+                "content_type": "paragraph",
+            },
+            {
+                "text": "| 技术 | 成熟度 |\n| --- | --- |\n| RAG | 成熟 |",
+                "page_number": 1,
+                "document_name": "report.docx",
+                "content_type": "table",
+            },
+            {
+                "text": "表格后正文",
+                "page_number": 1,
+                "document_name": "report.docx",
+                "content_type": "paragraph",
+            },
+        ]
+
+        chunks = chunk_document(pages, chunk_size=500, overlap=50)
+
+        assert [chunk.metadata.chunk_index for chunk in chunks] == [0, 1, 2]
+
     def test_chunk_index_sequential(self):
         """同一页内的 chunk_index 应连续递增。"""
         pages = [

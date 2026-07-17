@@ -18,6 +18,10 @@ class ChunkMetadata(BaseModel):
     document_name: str = Field(..., description="文档文件名")
     page_number: int = Field(..., description="页码（从 1 开始）")
     chunk_index: int = Field(..., description="该块在当前文档中的序号（从 0 开始）")
+    content_type: str = Field(
+        default="paragraph",
+        description="解析内容类型：paragraph 或 table",
+    )
 
 
 class DocumentChunk(BaseModel):

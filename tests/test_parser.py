@@ -10,6 +10,8 @@
 """
 
 import pytest
+from docx import Document
+
 from backend.services.parser import parse_document
 
 
@@ -65,3 +67,85 @@ class TestParseDocument:
             document_id="stable-doc-id",
         )
         assert all(p["document_id"] == "stable-doc-id" for p in pages)
+
+    def test_text_normalization_is_conservative(self, tmp_path):
+        source = tmp_path / "whitespace.txt"
+        source.write_text(
+            "ＡＩ\u3000技术\t应用，保留中文括号（ＳＯＰ）"
+            "\r\n\r\n\r\n第二段  保留数字 ２０２４-２０２５",
+            encoding="utf-8",
+        )
+
+        pages = parse_document(str(source))
+
+        assert pages[0]["text"] == (
+            "AI 技术 应用，保留中文括号（SOP）\n\n第二段 保留数字 2024-2025"
+        )
+        assert pages[0]["content_type"] == "paragraph"
+
+    def test_docx_preserves_paragraph_table_order(self, tmp_path):
+        source = tmp_path / "ordered.docx"
+        document = Document()
+        document.add_paragraph("表格前的正文")
+        table = document.add_table(rows=2, cols=2)
+        table.cell(0, 0).text = "技术"
+        table.cell(0, 1).text = "成熟度"
+        table.cell(1, 0).text = "RAG"
+        table.cell(1, 1).text = "成熟"
+        document.add_paragraph("表格后的正文")
+        document.save(source)
+
+        pages = parse_document(str(source))
+
+        assert [page["content_type"] for page in pages] == [
+            "paragraph",
+            "table",
+            "paragraph",
+        ]
+        assert pages[0]["text"] == "表格前的正文"
+        assert pages[1]["text"] == (
+            "| 技术 | 成熟度 |\n"
+            "| --- | --- |\n"
+            "| RAG | 成熟 |"
+        )
+        assert pages[2]["text"] == "表格后的正文"
+
+    def test_docx_table_handles_merged_empty_and_repeated_header_rows(self, tmp_path):
+        source = tmp_path / "table-cases.docx"
+        document = Document()
+        table = document.add_table(rows=5, cols=2)
+        table.cell(0, 0).text = "字段"
+        table.cell(0, 1).text = "值"
+        table.cell(1, 0).text = "模型"
+        table.cell(1, 1).text = "BGE"
+        table.cell(2, 0).text = "字段"
+        table.cell(2, 1).text = "值"
+        table.cell(4, 0).merge(table.cell(4, 1)).text = "合并说明"
+        document.save(source)
+
+        pages = parse_document(str(source))
+        table_text = next(
+            page["text"] for page in pages if page["content_type"] == "table"
+        )
+
+        assert table_text.count("| 字段 | 值 |") == 1
+        assert "| 模型 | BGE |" in table_text
+        assert "| 合并说明 |  |" in table_text
+        assert "|  |  |" not in table_text
+
+    def test_docx_table_keeps_virtual_page_number(self, tmp_path):
+        source = tmp_path / "page-number.docx"
+        document = Document()
+        for index in range(31):
+            document.add_paragraph(f"第 {index + 1} 个段落")
+        table = document.add_table(rows=2, cols=2)
+        table.cell(0, 0).text = "技术"
+        table.cell(0, 1).text = "时间"
+        table.cell(1, 0).text = "RAG"
+        table.cell(1, 1).text = "2024-2025"
+        document.save(source)
+
+        pages = parse_document(str(source))
+        table_page = next(page for page in pages if page["content_type"] == "table")
+
+        assert table_page["page_number"] == 2

@@ -77,16 +77,20 @@ def chunk_document(
         DocumentChunk 列表
     """
     all_chunks: List[DocumentChunk] = []
+    page_chunk_offsets = {}
 
     for page in pages:
         text = page.get("text", "")
         page_number = page.get("page_number", 1)
         document_name = page.get("document_name", "unknown")
         document_id = page.get("document_id", document_name)
+        content_type = page.get("content_type", "paragraph")
 
         # 对每页分别切分，避免跨页切分导致页码标注混乱
         page_chunks = _split_text(text, chunk_size, overlap)
 
+        page_key = (document_id, page_number)
+        chunk_offset = page_chunk_offsets.get(page_key, 0)
         for i, chunk_text in enumerate(page_chunks):#用i和chunk_text遍历page_chunks,用i标记页内的chunk块号
             if not chunk_text.strip():
                 continue
@@ -96,11 +100,11 @@ def chunk_document(
                 metadata=ChunkMetadata(
                     document_id=document_id,
                     document_name=document_name,
-
-
                     page_number=page_number,
-                    chunk_index=i
+                    chunk_index=chunk_offset + i,
+                    content_type=content_type,
                 )
             ))
+        page_chunk_offsets[page_key] = chunk_offset + len(page_chunks)
 
     return all_chunks
