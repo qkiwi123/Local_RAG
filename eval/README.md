@@ -66,8 +66,8 @@ PYTHONIOENCODING=utf-8 ./.venv/Scripts/python.exe -m eval.eval run --label smoke
 
 ## 已知设计要点（改动相关代码前必读）
 
-1. **q11/q12 是表格金丝雀**：证据在 docx 表格里，当前 parser 不解析表格，这两题检索必然
-   不命中——做完 P3-4 表格提取后应转为命中。数据集校验时对它们报「snippet 未出现」警告属预期。
+1. **q11/q12 是表格金丝雀**：证据在 docx 表格里。P1-2 已将表格按原顺序转为 Markdown，
+   两题分别以第 2/第 1 名命中；后续 parser 改动必须保持这两题命中。
 2. **引用指标解析原始回答文本中的 `【来源N】`**，并按 N 映射本次 retrieval。
    2026-07-17 的 P0-1 已移除 citation fallback：无引用标记时 ChatResponse.citations 为空；
    不存在的来源编号会被评估为无效引用。baseline 报告仍保留旧协议的 11.8% 作为历史起点。

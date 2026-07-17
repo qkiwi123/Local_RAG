@@ -79,6 +79,24 @@ noinst 与 inst 的 Hit Rate、Recall 相同；noinst 的 MRR 高 2.94pp，检�
 完整实验数据已固化在 `eval/results/p1-1-bge/`：两组 `report.md`、
 `report.json` 及 baseline/noinst/inst 对比报告均受 Git 跟踪。
 
+## P1-2 文本清洗与 DOCX 表格
+
+保持 BGE noinst、500/50、Top 5 和阈值不变，只增加保守空白清洗、DOCX 段落/表格
+原序解析、表格 Markdown 化和 `content_type` 元数据：
+
+| 指标 | P1-1 BGE noinst | P1-2 DOCX table | 变化 |
+|---|---:|---:|---:|
+| Hit Rate | 82.35% | 94.12% | +11.77pp |
+| Recall | 76.47% | 85.29% | +8.82pp |
+| MRR | 69.61% | 75.49% | +5.88pp |
+| Strict Accuracy | 82.35% | 82.35% | 持平 |
+| Citation Precision | 94.44% | 100.00% | +5.56pp |
+| False Refusal Rate | 11.76% | 0.00% | -11.76pp |
+| Refusal Accuracy | 100.00% | 100.00% | 持平 |
+
+表格金丝雀 q11/q12 分别以第 2/第 1 名命中，且没有普通题从检索命中退化为未命中。
+完整报告和 P1-1 对比保存在 `eval/results/p1-2-docx-table/`。
+
 ## 环境准备
 
 当前环境已在 Windows、Python 3.14.0 上验证。
@@ -113,6 +131,8 @@ Embedding 使用 `local_files_only=True`。运行前需确保
 
 校验成功后，再把 `.env` 中的 `EMBEDDING_MODEL` 和 `CHROMA_PERSIST_DIR` 一起切到新模型
 与新目录。脚本不会覆盖旧索引或非空目标目录；旧索引可保留到人工回归完成后再清理。
+parser 变化导致 chunk 数合理变化时，显式增加 `--accept-chunk-count-change`；脚本只会在
+新索引完成数量、document_id 和维度校验后，事务同步 SQLite 登记。
 
 ## 启动
 
@@ -134,6 +154,21 @@ Embedding 使用 `local_files_only=True`。运行前需确保
 
 ```powershell
 .\scripts\start.ps1 -Reload
+```
+
+`start.ps1` 使用独立隐藏进程，脚本结束后 `Ctrl+C` 不会停止服务。优先使用启动输出中的
+Backend/Frontend PID：
+
+```powershell
+Stop-Process -Id <Backend PID>,<Frontend PID>
+```
+
+若已找不到 PID，可按项目端口关闭：
+
+```powershell
+Get-NetTCPConnection -LocalPort 8000,8501 -State Listen |
+  Select-Object -ExpandProperty OwningProcess -Unique |
+  ForEach-Object { Stop-Process -Id $_ }
 ```
 
 脚本会等待后端健康检查通过后再启动前端，避免页面先出现、后端尚未就绪的竞态。
@@ -209,10 +244,9 @@ $env:PYTHONIOENCODING='utf-8'
 
 ## 下一阶段
 
-1. 文本清洗和 DOCX 表格解析；
-2. Token-aware 递归切分；
-3. 检索阈值校准；
-4. Reranker；
-5. Dense + BM25 + RRF 混合检索。
+1. Token-aware 递归切分；
+2. 检索阈值校准；
+3. Reranker；
+4. Dense + BM25 + RRF 混合检索。
 
 所有简历指标都以实际 eval 报告为准，不预先填写目标值。

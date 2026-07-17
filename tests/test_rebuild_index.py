@@ -100,6 +100,17 @@ def test_prepare_documents_preserves_ids_and_checks_chunk_count(tmp_path):
             overlap=50,
         )
 
+    prepared = rebuild.prepare_documents(
+        records,
+        tmp_path,
+        parse_document=fake_parse,
+        chunk_document=fake_chunk,
+        chunk_size=500,
+        overlap=50,
+        enforce_registered_counts=False,
+    )
+    assert prepared == [(records[0], ["chunk-1", "chunk-2"])]
+
 
 def test_ensure_safe_target_rejects_source_or_nonempty_directory(tmp_path):
     rebuild = _rebuild_module()
@@ -164,3 +175,47 @@ def test_verify_collection_checks_counts_document_ids_and_dimension():
             expected_counts={"doc-1": 2, "doc-2": 1},
             expected_dimension=384,
         )
+
+
+def test_update_document_chunk_counts_is_transactional(tmp_path):
+    rebuild = _rebuild_module()
+    db_path = tmp_path / "metadata.db"
+    connection = sqlite3.connect(db_path)
+    connection.execute(
+        """
+        CREATE TABLE documents (
+            document_id TEXT PRIMARY KEY,
+            status TEXT NOT NULL,
+            chunk_count INTEGER NOT NULL,
+            updated_at TEXT NOT NULL
+        )
+        """
+    )
+    connection.executemany(
+        "INSERT INTO documents VALUES (?, 'ready', ?, 'old')",
+        [("doc-1", 2), ("doc-2", 1)],
+    )
+    connection.commit()
+    connection.close()
+
+    rebuild.update_document_chunk_counts(db_path, {"doc-1": 3, "doc-2": 4})
+
+    connection = sqlite3.connect(db_path)
+    rows = dict(connection.execute(
+        "SELECT document_id, chunk_count FROM documents ORDER BY document_id"
+    ).fetchall())
+    connection.close()
+    assert rows == {"doc-1": 3, "doc-2": 4}
+
+    with pytest.raises(RuntimeError, match="missing-doc"):
+        rebuild.update_document_chunk_counts(
+            db_path,
+            {"doc-1": 9, "missing-doc": 1},
+        )
+
+    connection = sqlite3.connect(db_path)
+    doc_1_count = connection.execute(
+        "SELECT chunk_count FROM documents WHERE document_id = 'doc-1'"
+    ).fetchone()[0]
+    connection.close()
+    assert doc_1_count == 3

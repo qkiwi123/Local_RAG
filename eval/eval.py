@@ -75,7 +75,7 @@ def _load_dataset(path: Path) -> dict:
 def _validate_dataset(dataset: dict, corpus_texts: dict):
     """
     dataset 自检：每条 evidence snippet 必须在对应文档解析文本中至多出现一次。
-    出现 0 次仅警告（表格题的 snippet 在 P3-4 表格提取前解析不到，属预期）；
+    出现 0 次仅警告（说明当前 parser 未提取该证据，需结合实验阶段判断）；
     出现多次报错退出（命中判定会歧义）。
     """
     from eval.metrics import norm
@@ -90,7 +90,7 @@ def _validate_dataset(dataset: dict, corpus_texts: dict):
                 continue
             count = normed[doc].count(norm(ev["snippet"]))
             if count == 0:
-                warns.append(f"{q['id']}: snippet 未出现于解析文本（表格题预期）：{ev['snippet']}")
+                warns.append(f"{q['id']}: snippet 未出现于解析文本：{ev['snippet']}")
             elif count > 1:
                 errors.append(f"{q['id']}: snippet 出现 {count} 次，须唯一：{ev['snippet']}")
     for w in warns:

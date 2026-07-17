@@ -6,6 +6,7 @@ import argparse
 import json
 import os
 import sqlite3
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Iterable
 
@@ -56,6 +57,7 @@ def prepare_documents(
     chunk_document: Callable[..., list[Any]],
     chunk_size: int,
     overlap: int,
+    enforce_registered_counts: bool = True,
 ) -> list[tuple[dict[str, Any], list[Any]]]:
     """解析并切分全部源文件；块数不一致时在写向量前终止。"""
     records = list(records)
@@ -79,13 +81,42 @@ def prepare_documents(
         chunks = chunk_document(pages, chunk_size, overlap)
         expected = int(record["chunk_count"])
         actual = len(chunks)
-        if actual != expected:
+        if enforce_registered_counts and actual != expected:
             raise RuntimeError(
                 f"文档 {record['document_id']} 在 SQLite 登记为 {expected} chunks，"
                 f"实际生成 {actual} chunks；为避免登记与索引不一致，已终止重建"
             )
         prepared.append((record, chunks))
     return prepared
+
+
+def update_document_chunk_counts(
+    metadata_db_path: str | Path,
+    chunk_counts: dict[str, int],
+) -> None:
+    """在新索引校验成功后，事务化同步 ready 文档的 chunk 数。"""
+    connection = sqlite3.connect(Path(metadata_db_path), timeout=10)
+    timestamp = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    try:
+        for document_id, chunk_count in chunk_counts.items():
+            cursor = connection.execute(
+                """
+                UPDATE documents
+                SET chunk_count = ?, updated_at = ?
+                WHERE document_id = ? AND status = 'ready'
+                """,
+                (chunk_count, timestamp, document_id),
+            )
+            if cursor.rowcount != 1:
+                raise RuntimeError(
+                    f"无法同步 ready 文档的 chunk 数: {document_id}"
+                )
+        connection.commit()
+    except Exception:
+        connection.rollback()
+        raise
+    finally:
+        connection.close()
 
 
 def verify_collection(
@@ -144,6 +175,11 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--expected-dimension", type=int, default=1024)
     parser.add_argument("--chunk-size", type=int, help="默认读取 .env 或使用 500")
     parser.add_argument("--chunk-overlap", type=int, help="默认读取 .env 或使用 50")
+    parser.add_argument(
+        "--accept-chunk-count-change",
+        action="store_true",
+        help="接受 parser 变化产生的新 chunk 数，并在索引校验后同步 SQLite",
+    )
     return parser
 
 
@@ -191,6 +227,7 @@ def main(argv: list[str] | None = None) -> int:
         chunk_document=chunk_document,
         chunk_size=chunk_size,
         overlap=overlap,
+        enforce_registered_counts=not args.accept_chunk_count_change,
     )
     print(
         f"准备重建 {len(prepared)} 份文档、"
@@ -204,20 +241,36 @@ def main(argv: list[str] | None = None) -> int:
             )
         print(f"已写入 {record['original_name']}: {added} chunks")
 
-    expected_counts = {
+    registered_counts = {
         record["document_id"]: int(record["chunk_count"])
         for record in records
     }
+    actual_counts = {
+        record["document_id"]: len(chunks)
+        for record, chunks in prepared
+    }
     summary = verify_collection(
         vector_store._collection,
-        expected_counts=expected_counts,
+        expected_counts=actual_counts,
         expected_dimension=args.expected_dimension,
     )
+    changed_counts = {
+        document_id: {
+            "before": registered_counts[document_id],
+            "after": actual_count,
+        }
+        for document_id, actual_count in actual_counts.items()
+        if registered_counts[document_id] != actual_count
+    }
+    if changed_counts:
+        update_document_chunk_counts(metadata_db_path, actual_counts)
     summary.update(
         {
             "model": model,
             "source_index_dir": str(source_index_dir),
             "target_index_dir": str(target_index_dir),
+            "chunk_count_changes": changed_counts,
+            "metadata_updated": bool(changed_counts),
         }
     )
     print("索引重建与校验成功：")
