@@ -101,6 +101,19 @@ Embedding 使用 `local_files_only=True`。运行前需确保
 因网络检查随机失败。该模型输出 1024 维向量，旧 384 维 Chroma 索引不能直接复用，
 切换现有环境前必须重建索引或重新上传文档。
 
+已有 SQLite 文档登记和原始上传文件时，使用安全重建脚本迁移到独立目录：
+
+```powershell
+.\.venv\Scripts\python.exe -m scripts.rebuild_index `
+  --source-index-dir data/chroma_db `
+  --target-dir data/chroma_bge_large_zh_v1_5 `
+  --model BAAI/bge-large-zh-v1.5 `
+  --expected-dimension 1024
+```
+
+校验成功后，再把 `.env` 中的 `EMBEDDING_MODEL` 和 `CHROMA_PERSIST_DIR` 一起切到新模型
+与新目录。脚本不会覆盖旧索引或非空目标目录；旧索引可保留到人工回归完成后再清理。
+
 ## 启动
 
 开发时分别启动：
