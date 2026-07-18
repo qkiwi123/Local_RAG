@@ -203,3 +203,56 @@ class TestVectorStore:
             "char_count": 4,
             "token_count": 6,
         }]
+
+    def test_get_all_chunks_returns_sparse_index_contract(self, monkeypatch):
+        from backend.services import vector_store
+
+        class FakeCollection:
+            def get(self, include):
+                assert include == ["documents", "metadatas"]
+                return {
+                    "ids": ["c1"],
+                    "documents": ["Qwen 2.5 模型"],
+                    "metadatas": [
+                        {"document_name": "doc.txt", "page_number": 1}
+                    ],
+                }
+
+        monkeypatch.setattr(vector_store, "_collection", FakeCollection())
+
+        assert vector_store.get_all_chunks() == [
+            {
+                "chunk_id": "c1",
+                "content": "Qwen 2.5 模型",
+                "metadata": {"document_name": "doc.txt", "page_number": 1},
+            }
+        ]
+
+    def test_revision_changes_after_successful_add_and_delete(self, monkeypatch):
+        from backend.models.schemas import ChunkMetadata, DocumentChunk
+        from backend.services import vector_store
+
+        class FakeCollection:
+            def add(self, **kwargs):
+                return None
+
+            def delete(self, **kwargs):
+                return None
+
+        monkeypatch.setattr(vector_store, "_collection", FakeCollection())
+        monkeypatch.setattr(vector_store, "embed_texts", lambda texts: [[0.0]])
+        monkeypatch.setattr(vector_store, "_index_revision", 100, raising=False)
+        chunk = DocumentChunk(
+            content="测试内容",
+            metadata=ChunkMetadata(
+                document_id="doc-1",
+                document_name="doc.txt",
+                page_number=1,
+                chunk_index=0,
+            ),
+        )
+
+        assert vector_store.add_chunks([chunk]) == 1
+        assert vector_store.get_index_revision() == 101
+        assert vector_store.delete_document_by_id("doc-1") is True
+        assert vector_store.get_index_revision() == 102

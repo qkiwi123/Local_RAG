@@ -30,6 +30,19 @@ _collection = _client.get_or_create_collection(
     metadata={"hnsw:space": "cosine"}  # 使用余弦距离
 )
 
+# 应用进程内的索引版本。BM25 以此判断 Chroma 内容是否发生过增删。
+_index_revision = 0
+
+
+def _bump_index_revision() -> None:
+    global _index_revision
+    _index_revision += 1
+
+
+def get_index_revision() -> int:
+    """返回当前进程观察到的 Chroma 内容版本。"""
+    return _index_revision
+
 
 def add_chunks(chunks: List[DocumentChunk]) -> int:
     """
@@ -86,6 +99,7 @@ def add_chunks(chunks: List[DocumentChunk]) -> int:
         embeddings=embeddings,
         metadatas=metadatas,
     )
+    _bump_index_revision()
 
     return len(chunks)
 
@@ -157,6 +171,7 @@ def delete_document(document_name: str) -> bool:
     """
     try:
         _collection.delete(where={"document_name": document_name})
+        _bump_index_revision()
         return True
     except Exception:
         return False
@@ -166,6 +181,7 @@ def delete_document_by_id(document_id: str) -> bool:
     """按稳定 document_id 删除文档的全部文本块。"""
     try:
         _collection.delete(where={"document_id": document_id})
+        _bump_index_revision()
         return True
     except Exception:
         return False
@@ -196,3 +212,20 @@ def get_document_list() -> List[str]:
             document_names.add(meta["document_name"])
 
     return sorted(document_names)
+
+
+def get_all_chunks() -> List[dict]:
+    """读取 Sparse 索引所需的全部 chunk，不加载 embedding。"""
+    results = _collection.get(include=["documents", "metadatas"])
+    return [
+        {
+            "chunk_id": chunk_id,
+            "content": content,
+            "metadata": metadata or {},
+        }
+        for chunk_id, content, metadata in zip(
+            results.get("ids", []),
+            results.get("documents", []),
+            results.get("metadatas", []),
+        )
+    ]
