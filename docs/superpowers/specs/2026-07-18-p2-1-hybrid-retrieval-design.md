@@ -117,7 +117,8 @@ distance?, dense_rank?, bm25_score?, bm25_rank?, rrf_score?, reranker_score?
 1. Dense；
 2. BM25；
 3. Hybrid；
-4. Hybrid + Reranker。
+4. Hybrid + Reranker；
+5. Dense + Reranker（当前生产链路的同数据集部署对照，不计入优化文案要求的四组消融）。
 
 每组输出逐题 JSONL，并汇总 Hit Rate、Recall、MRR、原 21 题回归、新增题指标、不可回答题进入 LLM 比例、mean/P50/P95 检索延迟和改善/回归题。
 
