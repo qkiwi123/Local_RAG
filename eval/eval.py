@@ -41,8 +41,14 @@ def _setup_env(args) -> Path:
     run_dir = EVAL_DIR / "runs" / args.label
     chroma_dir = run_dir / "chroma"
 
-    completed_outputs = (run_dir / "report.json", run_dir / "retrieval-sweep.json")
-    if any(path.exists() for path in completed_outputs) and not args.overwrite:
+    completed_outputs = (
+        run_dir / "report.json",
+        run_dir / "retrieval-sweep.json",
+        run_dir / "hybrid-ablation.json",
+    )
+    if any(path.exists() for path in completed_outputs) and not getattr(
+        args, "overwrite", False
+    ):
         sys.exit(f"运行目录已存在报告：{run_dir}，如需覆盖请加 --overwrite")
 
     # Windows 下 Chroma 的 sqlite 文件锁：必须在 PersistentClient 创建前删除旧库
@@ -59,12 +65,14 @@ def _setup_env(args) -> Path:
     os.environ["CHROMA_PERSIST_DIR"] = str(chroma_dir)
     os.environ["UPLOAD_DIR"] = str(run_dir / "uploads")
     os.environ["METADATA_DB_PATH"] = str(run_dir / "metadata.db")
-    if args.embedding_model:
+    if getattr(args, "embedding_model", None):
         os.environ["EMBEDDING_MODEL"] = args.embedding_model
-    if args.query_instruction is not None:
+    if getattr(args, "query_instruction", None) is not None:
         os.environ["EMBEDDING_QUERY_INSTRUCTION"] = args.query_instruction
-    if args.top_k:
+    if getattr(args, "top_k", None):
         os.environ["RETRIEVAL_TOP_K"] = str(args.top_k)
+    if getattr(args, "retrieval_mode", None):
+        os.environ["RETRIEVAL_MODE"] = args.retrieval_mode
     if getattr(args, "distance_threshold", None) is not None:
         os.environ["RETRIEVAL_DISTANCE_THRESHOLD"] = str(args.distance_threshold)
     if getattr(args, "reranker_enabled", None) is not None:
@@ -75,6 +83,14 @@ def _setup_env(args) -> Path:
         os.environ["RERANKER_MODEL"] = args.reranker_model
     if getattr(args, "reranker_candidate_k", None) is not None:
         os.environ["RERANKER_CANDIDATE_K"] = str(args.reranker_candidate_k)
+    if getattr(args, "bm25_top_k", None) is not None:
+        os.environ["BM25_TOP_K"] = str(args.bm25_top_k)
+    if getattr(args, "bm25_k1", None) is not None:
+        os.environ["BM25_K1"] = str(args.bm25_k1)
+    if getattr(args, "bm25_b", None) is not None:
+        os.environ["BM25_B"] = str(args.bm25_b)
+    if getattr(args, "rrf_k", None) is not None:
+        os.environ["RRF_K"] = str(args.rrf_k)
     if getattr(args, "chunk_strategy", None):
         os.environ["CHUNK_STRATEGY"] = args.chunk_strategy
     if getattr(args, "chunk_size", None) is not None:
@@ -351,6 +367,101 @@ def cmd_retrieval_sweep(args):
         settings.RERANKER_CANDIDATE_K = original_candidate_k
 
 
+def cmd_hybrid_ablation(args):
+    """一次入库后比较 Dense/BM25/Hybrid 及两组 Reranker 对照。"""
+    run_dir = _setup_env(args)
+
+    from backend.config import settings
+    from eval import adapters
+    from eval.hybrid_ablation import (
+        ABLATION_CONFIGS,
+        build_hybrid_ablation,
+        build_mode_result,
+        render_hybrid_ablation,
+    )
+
+    adapters.assert_isolation()
+    corpus_dir = Path(args.corpus)
+    dataset = _load_dataset(Path(args.dataset))
+    questions = dataset["questions"]
+
+    print(f"[1/3] 校验数据集（{len(questions)} 题）…")
+    corpus_texts = adapters.parse_corpus(corpus_dir)
+    _validate_dataset(dataset, corpus_texts)
+
+    print(f"[2/3] 入库语料 → {os.environ['CHROMA_PERSIST_DIR']}")
+    ingest_info = adapters.ingest_corpus(corpus_dir)
+    print(
+        f"  共 {ingest_info['total_chunks']} chunks，"
+        f"耗时 {ingest_info['ingest_s']}s"
+    )
+
+    print(f"[3/3] 执行 {len(ABLATION_CONFIGS)} 组检索消融…")
+    original_mode = settings.RETRIEVAL_MODE
+    original_reranker = settings.RERANKER_ENABLED
+    try:
+        results = []
+        for name, mode, reranker_enabled in ABLATION_CONFIGS:
+            settings.RETRIEVAL_MODE = mode
+            settings.RERANKER_ENABLED = reranker_enabled
+            retrievals, timings = {}, []
+            raw_path = run_dir / f"retrieval-{name}.jsonl"
+            with open(raw_path, "w", encoding="utf-8") as raw_file:
+                for index, question in enumerate(questions, 1):
+                    result = adapters.retrieve_only(question["question"])
+                    retrievals[question["id"]] = result["retrieval"]
+                    timings.append(result["retrieval_s"])
+                    raw_file.write(
+                        json.dumps(
+                            {"id": question["id"], **result},
+                            ensure_ascii=False,
+                        )
+                        + "\n"
+                    )
+                    raw_file.flush()
+                    print(
+                        f"  [{name}] [{index}/{len(questions)}] "
+                        f"{question['id']} {result['retrieval_s']}s"
+                    )
+            results.append(
+                build_mode_result(
+                    name=name,
+                    questions=questions,
+                    retrievals=retrievals,
+                    timings_s=timings,
+                )
+            )
+
+        config = adapters.get_run_config()
+        config["ablation_configs"] = [
+            {
+                "name": name,
+                "retrieval_mode": mode,
+                "reranker_enabled": enabled,
+            }
+            for name, mode, enabled in ABLATION_CONFIGS
+        ]
+        payload = build_hybrid_ablation(
+            label=args.label,
+            config=config,
+            ingest=ingest_info,
+            results=results,
+            dataset_version=dataset["version"],
+        )
+        with open(run_dir / "hybrid-ablation.json", "w", encoding="utf-8") as f:
+            json.dump(payload, f, ensure_ascii=False, indent=2)
+        with open(run_dir / "hybrid-ablation.md", "w", encoding="utf-8") as f:
+            f.write(render_hybrid_ablation(payload))
+
+        comparison = payload["deployment_comparison"]
+        gate = "通过" if comparison["offline_gate_passed"] else "未通过"
+        print(f"离线部署门槛：{gate}")
+        print(f"报告：{run_dir / 'hybrid-ablation.md'}")
+    finally:
+        settings.RETRIEVAL_MODE = original_mode
+        settings.RERANKER_ENABLED = original_reranker
+
+
 def main():
     parser = argparse.ArgumentParser(description="RAG 评估基准")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -367,6 +478,11 @@ def main():
         help="仅在 query 编码前添加的 instruction；传空字符串表示不添加",
     )
     p_run.add_argument("--top-k", type=int, help="覆盖 RETRIEVAL_TOP_K")
+    p_run.add_argument(
+        "--retrieval-mode",
+        choices=("dense", "bm25", "hybrid"),
+        help="覆盖 RETRIEVAL_MODE",
+    )
     p_run.add_argument(
         "--distance-threshold",
         type=float,
@@ -392,6 +508,10 @@ def main():
         type=int,
         help="覆盖 RERANKER_CANDIDATE_K",
     )
+    p_run.add_argument("--bm25-top-k", type=int, help="覆盖 BM25_TOP_K")
+    p_run.add_argument("--bm25-k1", type=float, help="覆盖 BM25_K1")
+    p_run.add_argument("--bm25-b", type=float, help="覆盖 BM25_B")
+    p_run.add_argument("--rrf-k", type=int, help="覆盖 RRF_K")
     p_run.add_argument(
         "--chunk-strategy",
         choices=("fixed", "recursive"),
@@ -462,6 +582,37 @@ def main():
         func=cmd_retrieval_sweep,
         reranker_enabled=True,
         reranker_candidate_k=None,
+    )
+
+    p_hybrid = sub.add_parser(
+        "hybrid-ablation",
+        help="一次入库后执行 P2-1 五组混合检索消融（不调用 LLM）",
+    )
+    p_hybrid.add_argument("--label", required=True, help="实验标签")
+    p_hybrid.add_argument(
+        "--dataset",
+        default=str(EVAL_DIR / "dataset" / "questions_v2.json"),
+    )
+    p_hybrid.add_argument("--corpus", default=str(EVAL_DIR / "corpus"))
+    p_hybrid.add_argument("--overwrite", action="store_true")
+    p_hybrid.add_argument("--embedding-model")
+    p_hybrid.add_argument("--query-instruction")
+    p_hybrid.add_argument("--top-k", type=int)
+    p_hybrid.add_argument("--distance-threshold", type=float)
+    p_hybrid.add_argument("--reranker-model")
+    p_hybrid.add_argument("--reranker-candidate-k", type=int)
+    p_hybrid.add_argument("--bm25-top-k", type=int)
+    p_hybrid.add_argument("--bm25-k1", type=float)
+    p_hybrid.add_argument("--bm25-b", type=float)
+    p_hybrid.add_argument("--rrf-k", type=int)
+    p_hybrid.add_argument("--chunk-strategy", choices=("fixed", "recursive"))
+    p_hybrid.add_argument("--chunk-size", type=int)
+    p_hybrid.add_argument("--chunk-overlap", type=int)
+    p_hybrid.add_argument("--chunk-max-tokens", type=int)
+    p_hybrid.set_defaults(
+        func=cmd_hybrid_ablation,
+        retrieval_mode=None,
+        reranker_enabled=None,
     )
 
     args = parser.parse_args()

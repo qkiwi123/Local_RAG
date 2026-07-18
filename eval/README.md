@@ -27,6 +27,10 @@ PYTHONIOENCODING=utf-8 ./.venv/Scripts/python.exe -m eval.eval threshold-sweep \
 # 一次入库后比较多个 Reranker 候选数（不调用 DeepSeek）
 HF_HUB_OFFLINE=1 PYTHONIOENCODING=utf-8 ./.venv/Scripts/python.exe \
     -m eval.eval retrieval-sweep --label <扫描标签> --candidate-ks 15 20 30
+
+# 一次入库后执行 Dense / BM25 / Hybrid 五组消融（不调用 DeepSeek）
+HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1 PYTHONIOENCODING=utf-8 \
+    ./.venv/Scripts/python.exe -m eval.eval hybrid-ablation --label <实验标签>
 ```
 
 可选参数：
@@ -37,7 +41,10 @@ HF_HUB_OFFLINE=1 PYTHONIOENCODING=utf-8 ./.venv/Scripts/python.exe \
 - `--query-instruction <文本>`：仅在 query 编码前添加 instruction；传空字符串表示不添加，
   文档侧始终不添加
 - `--top-k <N>`：临时改检索数量
+- `--retrieval-mode dense|bm25|hybrid`：正式评测时临时切换召回模式
 - `--distance-threshold <值>`：临时覆盖 Chroma cosine distance 阈值（越小越严格）
+- `--bm25-top-k / --bm25-k1 / --bm25-b`：覆盖 BM25 候选数及参数
+- `--rrf-k <N>`：覆盖 Hybrid 模式的 RRF 排名平滑常数
 - `--reranker` / `--no-reranker`：临时开启或关闭 Cross-encoder 精排
 - `--reranker-model <名>`：临时覆盖 Reranker 模型（必须已在本地缓存）
 - `--reranker-candidate-k <N>`：精排前的 Dense 候选数量
@@ -65,6 +72,11 @@ HF_HUB_OFFLINE=1 PYTHONIOENCODING=utf-8 ./.venv/Scripts/python.exe \
 `retrieval-sweep` 只执行 parse/chunk/embed/retrieve，一次入库后为每个候选数生成
 `retrieval-k<N>.jsonl`，并汇总为 `retrieval-sweep.json` 和 `retrieval-sweep.md`；它不会
 调用 DeepSeek，适合先确定候选数，再用正式 `run --reranker` 验证回答与引用指标。
+
+`hybrid-ablation` 默认使用 `questions_v2.json`，一次入库后固定执行 Dense、BM25、Hybrid、
+Hybrid + Reranker、Dense + Reranker 五组对照。原始结果写入 `retrieval-<模式>.jsonl`，汇总为
+`hybrid-ablation.json` 和 `hybrid-ablation.md`。最后一组是当前生产链路的同数据集控制组，
+用于判断 Hybrid + Reranker 是否真的值得部署。
 
 ## 指标解读
 
@@ -129,4 +141,6 @@ PYTHONIOENCODING=utf-8 ./.venv/Scripts/python.exe -m eval.eval compare \
   （改动会使历史 run 不可比）。
 - 数据集：`eval/dataset/questions.json` 21 题——fact 6、numeric 4、table 2、multi_doc 3、
   procedural 2、unanswerable 4（2 域外 + 2 域内相邻陷阱题 q20/q21）。
+- P2-1 数据集：`eval/dataset/questions_v2.json` 保留上述 21 题并追加 6 道 lexical/精确术语题，
+  用于观测 BM25 与 Hybrid 的增量；跨版本报告不能直接计算回归。
 - 若增删题目：bump `version` 字段，并注意历史 report 的 `dataset_version` 不同则不可直接对比。

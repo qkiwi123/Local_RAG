@@ -30,7 +30,7 @@ def _latency(values: list[float]) -> dict:
     }
 
 
-def _aggregate_rows(rows: list[dict]) -> dict:
+def aggregate_rows(rows: list[dict]) -> dict:
     answerable = [row for row in rows if row["answerable"]]
     unanswerable = [row for row in rows if not row["answerable"]]
     result = {"question_count": len(rows)}
@@ -100,9 +100,9 @@ def build_candidate_result(
             row["llm_entry"] = bool(retrieval)
         rows.append(row)
 
-    aggregate = _aggregate_rows(rows)
+    aggregate = aggregate_rows(rows)
     by_category = {
-        category: _aggregate_rows(
+        category: aggregate_rows(
             [row for row in rows if row["category"] == category]
         )
         for category in sorted({row["category"] for row in rows})
