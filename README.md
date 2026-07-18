@@ -157,6 +157,28 @@ q02，并改善 q08、q16；已知回归是 q05 的黄金证据被同文档更�
 缺少本地模型的 CI/新环境安全启动。完整候选扫描、正式报告、逐题数据、P1-4 对比和
 生产 HTTP 冒烟结果保存在 `eval/results/p1-5-reranker/`。
 
+## P2-1 Dense + BM25 + RRF 混合检索
+
+应用侧已增加中文 BM25（jieba 分词 + rank-bm25）、基于稳定 `chunk_id` 的 RRF 融合，
+并支持 `dense`、`bm25`、`hybrid` 三种召回模式。RRF 只融合排名，不直接混加 Dense
+distance、BM25 score 与 Reranker score；索引内容变更后 BM25 快照按 revision 懒重建。
+
+dataset v2 在原 21 题外增加 6 道精确术语题。五组真实离线消融复用同一次 68 chunks
+入库，结果如下：
+
+| 模式 | Hit Rate | Recall | MRR | Lexical Recall | 不可回答题进入 LLM | P95 |
+|---|---:|---:|---:|---:|---:|---:|
+| Dense | 90.91% | 86.36% | 78.79% | 80.00% | 80.00% | 0.088s |
+| BM25 | 95.45% | 90.91% | 86.74% | 100.00% | 100.00% | 0.000s |
+| Hybrid | 95.45% | 90.91% | 82.95% | 100.00% | 100.00% | 0.082s |
+| Hybrid + Reranker | 100.00% | 95.45% | 95.45% | 100.00% | 100.00% | 8.097s |
+| **Dense + Reranker（当前生产）** | **100.00%** | **95.45%** | **95.45%** | **100.00%** | **80.00%** | **8.452s** |
+
+Hybrid + Reranker 相对当前链路没有改善题或指标增量，且 q18 完全域外题因 BM25 普通词
+命中而从空检索变成非空检索。因此部署门槛未通过，生产继续使用 `dense + reranker`；
+Hybrid 能力保留为显式配置和后续扩大语料后的实验基线。完整指标口径、逐题结果与不部署
+原因保存在 `eval/results/p2-1-hybrid-retrieval/`。
+
 ## 环境准备
 
 当前环境已在 Windows、Python 3.14.0 上验证。
@@ -315,6 +337,15 @@ $env:HF_HUB_OFFLINE='1'
   --candidate-ks 15 20 30
 ```
 
+一次入库后执行 P2-1 五组混合检索消融（不调用 DeepSeek）：
+
+```powershell
+$env:HF_HUB_OFFLINE='1'
+$env:TRANSFORMERS_OFFLINE='1'
+.\.venv\Scripts\python.exe -m eval.eval hybrid-ablation `
+  --label <ablation-label>
+```
+
 对比两个 run：
 
 ```powershell
@@ -327,9 +358,9 @@ $env:HF_HUB_OFFLINE='1'
 
 ## 下一阶段
 
-1. Dense + BM25 + RRF 混合检索；
-2. 检索过程可视化；
-3. 引用原文预览与高亮；
+1. 检索过程可视化；
+2. 引用原文预览与高亮；
+3. 扩充真实业务语料与 harder lexical 数据后复测 Hybrid；
 4. 结合真实延迟数据评估 Reranker 的 GPU/量化部署。
 
 所有简历指标都以实际 eval 报告为准，不预先填写目标值。

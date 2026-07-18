@@ -118,7 +118,10 @@ def test_ablation_compares_hybrid_reranker_to_dense_reranker():
 
     assert payload["deployment_comparison"]["hit_rate_delta"] == 1.0
     assert payload["deployment_comparison"]["improved_ids"] == ["q01"]
-    assert "Dense + Reranker" in render_hybrid_ablation(payload)
+    report = render_hybrid_ablation(payload)
+    assert "Dense + Reranker" in report
+    assert "| 指标 | 指标含义 |" in report
+    assert "不可回答题进入 LLM" in report
 
 
 def test_hybrid_ablation_cli_ingests_once_and_restores_settings(

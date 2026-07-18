@@ -124,13 +124,31 @@ def _percent(value) -> str:
 def render_hybrid_ablation(payload: dict) -> str:
     """渲染五组指标、同数据集部署对照和逐题变化。"""
     comparison = payload["deployment_comparison"]
+    question_count = max(
+        (row.get("question_count", 0) for row in payload["results"]),
+        default=0,
+    )
     lines = [
         f"# P2-1 混合检索消融 — {payload['label']}",
         "",
-        f"- Dataset：v{payload['config']['dataset_version']}（27 题）",
+        f"- Dataset：v{payload['config']['dataset_version']}（{question_count} 题）",
         f"- 入库：{payload['ingest']['total_chunks']} chunks，"
         f"{payload['ingest']['ingest_s']}s",
         "- 部署对照：Dense + Reranker → Hybrid + Reranker",
+        "",
+        "## 指标口径",
+        "",
+        "| 指标 | 指标含义 |",
+        "|---|---|",
+        "| Hit Rate | 可回答题中，Top 5 至少命中一条 gold 证据的题目占比 |",
+        "| Recall | 每道可回答题命中的 gold 证据比例，再对题目取平均 |",
+        "| MRR | 每道可回答题首条 gold 证据排名的倒数，再取平均 |",
+        "| 原21题 Recall | 仅在 v1 原有 q01-q21 上计算的 Recall，用于守住历史能力 |",
+        "| Lexical Recall | 仅在 v2 新增精确术语题上计算的 Recall |",
+        "| 不可回答题进入 LLM | 无 gold 证据题仍返回检索结果的比例，越低越好 |",
+        "| P95(s) | 本次数据集单题检索耗时的第 95 百分位，单位为秒 |",
+        "",
+        "## 消融结果",
         "",
         "| 模式 | Hit Rate | Recall | MRR | 原21题 Recall | Lexical Recall | 不可回答题进入 LLM | P95(s) |",
         "|---|---:|---:|---:|---:|---:|---:|---:|",
