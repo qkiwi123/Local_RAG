@@ -67,6 +67,13 @@ def get_run_config() -> dict:
         "chunk_strategy": settings.CHUNK_STRATEGY,
         "chunk_max_tokens": settings.CHUNK_MAX_TOKENS,
         "top_k": settings.RETRIEVAL_TOP_K,
+        "retrieval_distance_threshold": settings.RETRIEVAL_DISTANCE_THRESHOLD,
+        "reranker_enabled": settings.RERANKER_ENABLED,
+        "reranker_model": settings.RERANKER_MODEL,
+        "reranker_candidate_k": settings.RERANKER_CANDIDATE_K,
+        "reranker_device": settings.RERANKER_DEVICE,
+        "reranker_batch_size": settings.RERANKER_BATCH_SIZE,
+        "reranker_max_length": settings.RERANKER_MAX_LENGTH,
         "llm_model": settings.DEEPSEEK_MODEL,
     }
 
@@ -161,4 +168,16 @@ def answer_question(question: str) -> dict:
         "retrieval_s": round(t_retrieval, 3),
         "llm_s": round(t_llm, 3),
         "total_s": round(time.perf_counter() - t0, 3),
+    }
+
+
+def retrieve_only(question: str) -> dict:
+    """只执行检索链路，供 Reranker 候选实验复用，不调用 LLM。"""
+    from backend.services.retriever import retrieve
+
+    started = time.perf_counter()
+    retrieval = retrieve(question)
+    return {
+        "retrieval": retrieval,
+        "retrieval_s": round(time.perf_counter() - started, 3),
     }

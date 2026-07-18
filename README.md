@@ -119,6 +119,44 @@ q02，并改善 q08、q16；已知回归是 q05 的黄金证据被同文档更�
 完整离线候选、正式报告和 P1-2 对比保存在
 `eval/results/p1-3-recursive-chunking/`。
 
+## P1-4 检索阈值与拒答校准
+
+保持 P1-3 的语料、parser、切分、Embedding 和 Top 5 不变，使用真实评测检索结果扫描
+`0.50–0.75` 及历史值 `1.50`。最终选择 Chroma cosine distance `0.67`：
+
+| 指标 | P1-3 threshold 1.50 | P1-4 threshold 0.67 | 变化 |
+|---|---:|---:|---:|
+| Hit Rate | 94.12% | 94.12% | 持平 |
+| Recall | 88.24% | 88.24% | 持平 |
+| MRR | 81.37% | 81.37% | 持平 |
+| 阈值诱发误拒答率 | 0.00% | 0.00% | 持平 |
+| 不可回答题进入 LLM 比例 | 100.00% | 75.00% | -25.00pp |
+| Refusal Accuracy | 100.00% | 100.00% | 持平 |
+
+`0.66–0.68` 是当前数据上的等价最优平台，选择中点可避免贴近边界。q18 被检索层短路，
+不再调用 LLM；q19–q21 与语料存在语义重叠，若继续降低阈值会先误伤可回答的 q03，
+因此保留给 LLM 做上下文不足判断。完整扫描、真实 21 题评测和 P1-3 对比保存在
+`eval/results/p1-4-threshold-calibration/`。
+
+## P1-5 Cross-encoder Reranker
+
+在 `distance <= 0.67` 后保留更多 Dense 候选，再使用 `BAAI/bge-reranker-v2-m3`
+按 query/chunk 相关性精排，最后执行每文档最多 3 条和 Top 5 截断。离线扫描
+候选数 15/20/30 的质量完全相同，因此选择延迟最低的 15：
+
+| 候选数 | Hit Rate | Recall | MRR | 检索 P95 |
+|---:|---:|---:|---:|---:|
+| **15** | **100.00%** | **94.12%** | **97.06%** | **8.628s** |
+| 20 | 100.00% | 94.12% | 97.06% | 9.596s |
+| 30 | 100.00% | 94.12% | 97.06% | 12.831s |
+
+真实 DeepSeek 21 题对比 P1-4：Hit Rate `+5.88pp`、Recall `+5.88pp`、MRR
+`+15.69pp`、Strict Accuracy `+5.88pp`，且无回归题；P1-3/P1-4 的已知失败题 q05
+被修复。代价是 CPU 检索平均耗时由轻量 Dense 检索增加到 `6.879s`，总耗时由
+`2.043s` 增至 `9.314s`。生产 `.env` 已启用该高质量模式；代码层仍默认关闭，便于
+缺少本地模型的 CI/新环境安全启动。完整候选扫描、正式报告、逐题数据、P1-4 对比和
+生产 HTTP 冒烟结果保存在 `eval/results/p1-5-reranker/`。
+
 ## 环境准备
 
 当前环境已在 Windows、Python 3.14.0 上验证。
@@ -140,6 +178,10 @@ Embedding 使用 `local_files_only=True`。运行前需确保
 `BAAI/bge-large-zh-v1.5` 已存在于本地 Hugging Face 缓存；这样服务启动和测试不会
 因网络检查随机失败。该模型输出 1024 维向量，旧 384 维 Chroma 索引不能直接复用，
 切换现有环境前必须重建索引或重新上传文档。
+
+启用 `RERANKER_ENABLED=true` 时，还需预先缓存 `BAAI/bge-reranker-v2-m3`（约 2.14 GiB）。
+Embedding 和 Reranker 都只从本地快照加载，不会在服务请求期间隐式联网。当前依赖固定
+`transformers==4.57.6`，用于兼容 `FlagEmbedding==1.4.0` 的 encoder-only Reranker。
 
 已有 SQLite 文档登记和原始上传文件时，使用安全重建脚本迁移到独立目录：
 
@@ -254,6 +296,25 @@ $env:PYTHONIOENCODING='utf-8'
 .\.venv\Scripts\python.exe -m eval.eval run --label <label>
 ```
 
+基于已有真实检索结果离线扫描阈值（不调用 DeepSeek）：
+
+```powershell
+.\.venv\Scripts\python.exe -m eval.eval threshold-sweep `
+  eval/runs/<label>/raw_answers.jsonl `
+  --label <sweep-label> `
+  --thresholds 0.60 0.61 0.62 0.63 0.64 0.65 0.66 0.67 0.68 0.69 0.70 `
+  --output-dir eval/runs/<sweep-label>
+```
+
+一次入库后比较多个 Reranker 候选数（不调用 DeepSeek）：
+
+```powershell
+$env:HF_HUB_OFFLINE='1'
+.\.venv\Scripts\python.exe -m eval.eval retrieval-sweep `
+  --label <sweep-label> `
+  --candidate-ks 15 20 30
+```
+
 对比两个 run：
 
 ```powershell
@@ -266,9 +327,9 @@ $env:PYTHONIOENCODING='utf-8'
 
 ## 下一阶段
 
-1. Token-aware 递归切分；
-2. 检索阈值校准；
-3. Reranker；
-4. Dense + BM25 + RRF 混合检索。
+1. Dense + BM25 + RRF 混合检索；
+2. 检索过程可视化；
+3. 引用原文预览与高亮；
+4. 结合真实延迟数据评估 Reranker 的 GPU/量化部署。
 
 所有简历指标都以实际 eval 报告为准，不预先填写目标值。

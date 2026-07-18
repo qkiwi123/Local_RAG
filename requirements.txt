@@ -11,6 +11,8 @@ httpx==0.28.1
 chromadb==1.5.9
 sentence-transformers==5.6.0
 FlagEmbedding==1.4.0
+# FlagEmbedding 1.4.0 的 encoder-only reranker 仍依赖 4.x tokenizer API。
+transformers==4.57.6
 
 # Document parsing
 PyPDF2==3.0.1

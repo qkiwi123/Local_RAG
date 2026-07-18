@@ -26,9 +26,10 @@ from backend.config import settings
 @lru_cache(maxsize=1)
 def _get_model():
     from sentence_transformers import SentenceTransformer
+    from backend.services.model_cache import resolve_cached_snapshot
 
     return SentenceTransformer(
-        settings.EMBEDDING_MODEL,
+        resolve_cached_snapshot(settings.EMBEDDING_MODEL),
         local_files_only=True,
     )
 

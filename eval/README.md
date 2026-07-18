@@ -8,7 +8,7 @@
 **必须**：在仓库根目录 `D:\ProgramFiles\RAG` 下、用项目 venv 的 Python 运行。
 
 ```bash
-# 完整评估（21 题，约 17 次 DeepSeek 调用，约 1 分钟）
+# 完整评估（21 题，最多 21 次 DeepSeek 调用；空检索会短路）
 PYTHONIOENCODING=utf-8 ./.venv/Scripts/python.exe -m eval.eval run --label <标签名>
 
 # 对比两次运行（差值表 + 回归题清单，不消耗 API）
@@ -17,6 +17,16 @@ PYTHONIOENCODING=utf-8 ./.venv/Scripts/python.exe -m eval.eval compare \
 
 # 冒烟测试（只跑前 2 题，验证链路，改动 eval 代码后先跑这个）
 PYTHONIOENCODING=utf-8 ./.venv/Scripts/python.exe -m eval.eval run --label smoke --limit 2 --overwrite
+
+# 基于已有真实 retrieval 扫描阈值（不调用 DeepSeek）
+PYTHONIOENCODING=utf-8 ./.venv/Scripts/python.exe -m eval.eval threshold-sweep \
+    eval/runs/<标签名>/raw_answers.jsonl --label <扫描标签> \
+    --thresholds 0.60 0.61 0.62 0.63 0.64 0.65 0.66 0.67 0.68 0.69 0.70 \
+    --output-dir eval/runs/<扫描标签>
+
+# 一次入库后比较多个 Reranker 候选数（不调用 DeepSeek）
+HF_HUB_OFFLINE=1 PYTHONIOENCODING=utf-8 ./.venv/Scripts/python.exe \
+    -m eval.eval retrieval-sweep --label <扫描标签> --candidate-ks 15 20 30
 ```
 
 可选参数：
@@ -27,6 +37,10 @@ PYTHONIOENCODING=utf-8 ./.venv/Scripts/python.exe -m eval.eval run --label smoke
 - `--query-instruction <文本>`：仅在 query 编码前添加 instruction；传空字符串表示不添加，
   文档侧始终不添加
 - `--top-k <N>`：临时改检索数量
+- `--distance-threshold <值>`：临时覆盖 Chroma cosine distance 阈值（越小越严格）
+- `--reranker` / `--no-reranker`：临时开启或关闭 Cross-encoder 精排
+- `--reranker-model <名>`：临时覆盖 Reranker 模型（必须已在本地缓存）
+- `--reranker-candidate-k <N>`：精排前的 Dense 候选数量
 - `--limit <N>`：只跑前 N 题
 
 ## label 命名约定
@@ -44,6 +58,13 @@ PYTHONIOENCODING=utf-8 ./.venv/Scripts/python.exe -m eval.eval run --label smoke
 | `review.md` | 人工评审文档（每题：问题/系统回答/标准答案/证据原文），整体贴给网页端 AI 可批量判分 |
 | `raw_answers.jsonl` | 每题原始回答+完整检索结果，逐题落盘，调试用 |
 | `chroma/` | 本次运行的隔离向量库，可整目录删除 |
+
+`threshold-sweep` 额外生成 `threshold-sweep.json` 和 `threshold-sweep.md`，分别用于机器读取
+和人工审查；其中明确区分阈值诱发误拒答率与不可回答题进入 LLM 比例。
+
+`retrieval-sweep` 只执行 parse/chunk/embed/retrieve，一次入库后为每个候选数生成
+`retrieval-k<N>.jsonl`，并汇总为 `retrieval-sweep.json` 和 `retrieval-sweep.md`；它不会
+调用 DeepSeek，适合先确定候选数，再用正式 `run --reranker` 验证回答与引用指标。
 
 ## 指标解读
 
@@ -80,7 +101,7 @@ PYTHONIOENCODING=utf-8 ./.venv/Scripts/python.exe -m eval.eval run --label smoke
    - 新 store 保持 `add_chunks(List[DocumentChunk]) -> int` 签名；
    - `retrieve()` 返回契约不变：`[{"content", "metadata"{document_name, page_number}, "distance"}]`，
      注意 Milvus 返回相似度（越大越好）而 Chroma 是距离（越小越好），适配层必须统一语义，
-     否则 retriever 的 `distance <= 1.5` 阈值方向会反；
+     否则 retriever 的 `distance <= RETRIEVAL_DISTANCE_THRESHOLD` 方向会反；
    - Milvus Lite 的数据文件路径必须从环境变量读取（如 `MILVUS_LITE_PATH`），不能写死——
      同时更新 eval.py 的 `_setup_env`（注入隔离路径）和 adapters.py 的 `assert_isolation()`，
      否则 eval 会写进生产库；

@@ -21,6 +21,8 @@ os.environ["UPLOAD_DIR"] = str(_TEST_ROOT / "uploads")
 os.environ["METADATA_DB_PATH"] = str(_TEST_ROOT / "metadata.db")
 os.environ["EMBEDDING_MODEL"] = "BAAI/bge-large-zh-v1.5"
 os.environ["EMBEDDING_QUERY_INSTRUCTION"] = ""
+# 单元测试默认不加载约 2.2 GB 的 Reranker；专项测试会显式开启。
+os.environ["RERANKER_ENABLED"] = "false"
 
 
 def pytest_addoption(parser):

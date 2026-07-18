@@ -13,6 +13,7 @@
 
 from typing import List
 from backend.config import settings
+from backend.services.reranker import rerank
 from backend.services.vector_store import search as vector_search
 
 
@@ -34,27 +35,40 @@ def retrieve(question: str, top_k: int = None) -> List[dict]:
     if top_k is None:
         top_k = settings.RETRIEVAL_TOP_K
 
-    # 1. 从向量库检索
-    raw_results = vector_search(question, top_k=top_k * 2)#多选择数据做候选
+    # 1. 从向量库检索。关闭 reranker 时保持 P1-4 的 top_k * 2 行为。
+    candidate_k = (
+        max(top_k, settings.RERANKER_CANDIDATE_K)
+        if settings.RERANKER_ENABLED
+        else top_k * 2
+    )
+    raw_results = vector_search(question, top_k=candidate_k)
 
     if not raw_results:
         return []
 
     # 2. 相似度阈值过滤
     # Chroma 用余弦距离，值在 [0, 2] 之间，越小越相似
-    # 阈值设为 1.5：超过此值认为基本不相关
-    SIMILARITY_THRESHOLD = 1.5
-    filtered = [r for r in raw_results if r["distance"] <= SIMILARITY_THRESHOLD]
+    filtered = [
+        {**row, "dense_rank": dense_rank}
+        for dense_rank, row in enumerate(raw_results, 1)
+        if row["distance"] <= settings.RETRIEVAL_DISTANCE_THRESHOLD
+    ]
 
-    # 3. 同文档去重：每个文档最多保留 3 条
+    # 3. 先精排全部候选，避免在 Rerank 前按文档限额而提前删掉黄金证据。
+    ranked = rerank(question, filtered) if settings.RERANKER_ENABLED else filtered
+
+    # 4. 最终结果再限制每文档最多 3 条，兼顾证据质量与来源多样性。
     MAX_PER_DOC = 3
     doc_counts = {}
     deduped = []
-    for r in filtered:
-        doc_name = r["metadata"].get("document_name", "unknown")
-        if doc_counts.get(doc_name, 0) < MAX_PER_DOC:
+    for r in ranked:
+        metadata = r["metadata"]
+        document_key = metadata.get("document_id") or metadata.get(
+            "document_name", "unknown"
+        )
+        if doc_counts.get(document_key, 0) < MAX_PER_DOC:
             deduped.append(r)
-            doc_counts[doc_name] = doc_counts.get(doc_name, 0) + 1
+            doc_counts[document_key] = doc_counts.get(document_key, 0) + 1
 
     # 取最终 top_k
     return deduped[:top_k]

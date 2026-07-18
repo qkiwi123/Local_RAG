@@ -15,6 +15,19 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 load_dotenv(BASE_DIR / ".env")
 
 
+def _env_bool(name: str, default: bool = False) -> bool:
+    """Parse a strict boolean environment variable."""
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    normalized = raw.strip().lower()
+    if normalized in {"1", "true", "yes", "on"}:
+        return True
+    if normalized in {"0", "false", "no", "off"}:
+        return False
+    raise ValueError(f"{name} 必须是 true/false、1/0、yes/no 或 on/off")
+
+
 class Settings:
     """应用全局配置类，所有配置项通过实例属性访问。"""
 
@@ -45,6 +58,22 @@ class Settings:
 
     # ─── 检索参数 ─────────────────────────────────────
     RETRIEVAL_TOP_K: int = int(os.getenv("RETRIEVAL_TOP_K", "5"))
+    # Chroma cosine distance 越小越相似；P1-4 在真实评测集上校准为 0.67。
+    RETRIEVAL_DISTANCE_THRESHOLD: float = float(
+        os.getenv("RETRIEVAL_DISTANCE_THRESHOLD", "0.67")
+    )
+
+    # ─── Reranker ────────────────────────────────────
+    # 安全默认关闭，生产环境通过 .env 显式启用高质量模式。
+    RERANKER_ENABLED: bool = _env_bool("RERANKER_ENABLED", False)
+    RERANKER_MODEL: str = os.getenv(
+        "RERANKER_MODEL", "BAAI/bge-reranker-v2-m3"
+    )
+    # P1-5 的 k=15/20/30 扫描质量持平，选择延迟最低的 k=15。
+    RERANKER_CANDIDATE_K: int = int(os.getenv("RERANKER_CANDIDATE_K", "15"))
+    RERANKER_DEVICE: str = os.getenv("RERANKER_DEVICE", "cpu")
+    RERANKER_BATCH_SIZE: int = int(os.getenv("RERANKER_BATCH_SIZE", "8"))
+    RERANKER_MAX_LENGTH: int = int(os.getenv("RERANKER_MAX_LENGTH", "512"))
 
     # ─── Embedding 模型 ───────────────────────────────
     # P1-1 实验选择 BAAI/bge-large-zh-v1.5（中文检索，1024 维）。
@@ -76,6 +105,14 @@ class Settings:
             raise ValueError("CHUNK_OVERLAP 必须满足 0 <= overlap < CHUNK_SIZE")
         if self.CHUNK_MAX_TOKENS <= 0:
             raise ValueError("CHUNK_MAX_TOKENS 必须大于 0")
+        if not 0 <= self.RETRIEVAL_DISTANCE_THRESHOLD <= 2:
+            raise ValueError("RETRIEVAL_DISTANCE_THRESHOLD 必须在 0 到 2 之间")
+        if self.RERANKER_CANDIDATE_K < self.RETRIEVAL_TOP_K:
+            raise ValueError("RERANKER_CANDIDATE_K 不能小于 RETRIEVAL_TOP_K")
+        if self.RERANKER_BATCH_SIZE <= 0:
+            raise ValueError("RERANKER_BATCH_SIZE 必须大于 0")
+        if self.RERANKER_MAX_LENGTH <= 0:
+            raise ValueError("RERANKER_MAX_LENGTH 必须大于 0")
         # 确保持久化目录存在
         Path(self.UPLOAD_DIR).mkdir(parents=True, exist_ok=True)
         Path(self.CHROMA_PERSIST_DIR).mkdir(parents=True, exist_ok=True)

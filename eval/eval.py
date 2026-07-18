@@ -41,7 +41,8 @@ def _setup_env(args) -> Path:
     run_dir = EVAL_DIR / "runs" / args.label
     chroma_dir = run_dir / "chroma"
 
-    if (run_dir / "report.json").exists() and not args.overwrite:
+    completed_outputs = (run_dir / "report.json", run_dir / "retrieval-sweep.json")
+    if any(path.exists() for path in completed_outputs) and not args.overwrite:
         sys.exit(f"运行目录已存在报告：{run_dir}，如需覆盖请加 --overwrite")
 
     # Windows 下 Chroma 的 sqlite 文件锁：必须在 PersistentClient 创建前删除旧库
@@ -64,6 +65,16 @@ def _setup_env(args) -> Path:
         os.environ["EMBEDDING_QUERY_INSTRUCTION"] = args.query_instruction
     if args.top_k:
         os.environ["RETRIEVAL_TOP_K"] = str(args.top_k)
+    if getattr(args, "distance_threshold", None) is not None:
+        os.environ["RETRIEVAL_DISTANCE_THRESHOLD"] = str(args.distance_threshold)
+    if getattr(args, "reranker_enabled", None) is not None:
+        os.environ["RERANKER_ENABLED"] = (
+            "true" if args.reranker_enabled else "false"
+        )
+    if getattr(args, "reranker_model", None):
+        os.environ["RERANKER_MODEL"] = args.reranker_model
+    if getattr(args, "reranker_candidate_k", None) is not None:
+        os.environ["RERANKER_CANDIDATE_K"] = str(args.reranker_candidate_k)
     if getattr(args, "chunk_strategy", None):
         os.environ["CHUNK_STRATEGY"] = args.chunk_strategy
     if getattr(args, "chunk_size", None) is not None:
@@ -211,6 +222,135 @@ def cmd_compare(args):
         print(output)
 
 
+def cmd_threshold_sweep(args):
+    """离线重放真实 retrieval，输出阈值候选的质量和门控对比。"""
+    from eval.threshold import build_threshold_sweep, render_threshold_report
+
+    dataset = _load_dataset(Path(args.dataset))
+    answers = {}
+    with open(args.raw_answers, encoding="utf-8") as raw_file:
+        for line_number, line in enumerate(raw_file, 1):
+            if not line.strip():
+                continue
+            row = json.loads(line)
+            question_id = row.get("id")
+            if not question_id:
+                sys.exit(f"raw_answers 第 {line_number} 行缺少 id")
+            answers[question_id] = row
+
+    missing = [
+        question["id"]
+        for question in dataset["questions"]
+        if question["id"] not in answers
+    ]
+    if missing:
+        sys.exit(f"raw_answers 缺少题目：{', '.join(missing)}")
+
+    payload = build_threshold_sweep(
+        label=args.label,
+        questions=dataset["questions"],
+        answers=answers,
+        thresholds=args.thresholds,
+        source=str(args.raw_answers),
+    )
+    output_dir = Path(args.output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    with open(output_dir / "threshold-sweep.json", "w", encoding="utf-8") as f:
+        json.dump(payload, f, ensure_ascii=False, indent=2)
+    with open(output_dir / "threshold-sweep.md", "w", encoding="utf-8") as f:
+        f.write(render_threshold_report(payload))
+
+    print(f"推荐阈值：{payload['recommended_threshold']:.2f}")
+    print(f"报告：{output_dir / 'threshold-sweep.md'}")
+
+
+def cmd_retrieval_sweep(args):
+    """一次入库后比较多个 Reranker candidate_k，全程不调用 LLM。"""
+    run_dir = _setup_env(args)
+
+    from backend.config import settings
+    from eval import adapters
+    from eval.retrieval_sweep import (
+        build_candidate_result,
+        build_retrieval_sweep,
+        render_retrieval_sweep,
+    )
+
+    adapters.assert_isolation()
+    corpus_dir = Path(args.corpus)
+    dataset = _load_dataset(Path(args.dataset))
+    questions = dataset["questions"]
+
+    print(f"[1/3] 校验数据集（{len(questions)} 题）…")
+    corpus_texts = adapters.parse_corpus(corpus_dir)
+    _validate_dataset(dataset, corpus_texts)
+
+    print(f"[2/3] 入库语料 → {os.environ['CHROMA_PERSIST_DIR']}")
+    ingest_info = adapters.ingest_corpus(corpus_dir)
+    print(
+        f"  共 {ingest_info['total_chunks']} chunks，"
+        f"耗时 {ingest_info['ingest_s']}s"
+    )
+
+    print(f"[3/3] Reranker 候选数扫描：{args.candidate_ks}")
+    original_enabled = settings.RERANKER_ENABLED
+    original_candidate_k = settings.RERANKER_CANDIDATE_K
+    try:
+        settings.RERANKER_ENABLED = True
+        candidate_results = []
+        for candidate_k in args.candidate_ks:
+            settings.RERANKER_CANDIDATE_K = candidate_k
+            retrievals = {}
+            timings = []
+            raw_path = run_dir / f"retrieval-k{candidate_k}.jsonl"
+            with open(raw_path, "w", encoding="utf-8") as raw_file:
+                for index, question in enumerate(questions, 1):
+                    result = adapters.retrieve_only(question["question"])
+                    retrievals[question["id"]] = result["retrieval"]
+                    timings.append(result["retrieval_s"])
+                    raw_file.write(
+                        json.dumps(
+                            {"id": question["id"], **result},
+                            ensure_ascii=False,
+                        )
+                        + "\n"
+                    )
+                    raw_file.flush()
+                    print(
+                        f"  [k={candidate_k}] [{index}/{len(questions)}] "
+                        f"{question['id']} {result['retrieval_s']}s"
+                    )
+            candidate_results.append(
+                build_candidate_result(
+                    candidate_k=candidate_k,
+                    questions=questions,
+                    retrievals=retrievals,
+                    timings_s=timings,
+                )
+            )
+
+        config = adapters.get_run_config()
+        config.pop("reranker_candidate_k", None)
+        config["reranker_candidate_ks"] = list(args.candidate_ks)
+        payload = build_retrieval_sweep(
+            label=args.label,
+            config=config,
+            ingest=ingest_info,
+            candidates=candidate_results,
+            dataset_version=dataset["version"],
+        )
+        with open(run_dir / "retrieval-sweep.json", "w", encoding="utf-8") as f:
+            json.dump(payload, f, ensure_ascii=False, indent=2)
+        with open(run_dir / "retrieval-sweep.md", "w", encoding="utf-8") as f:
+            f.write(render_retrieval_sweep(payload))
+
+        print(f"推荐候选数：{payload['recommended_candidate_k']}")
+        print(f"报告：{run_dir / 'retrieval-sweep.md'}")
+    finally:
+        settings.RERANKER_ENABLED = original_enabled
+        settings.RERANKER_CANDIDATE_K = original_candidate_k
+
+
 def main():
     parser = argparse.ArgumentParser(description="RAG 评估基准")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -227,6 +367,31 @@ def main():
         help="仅在 query 编码前添加的 instruction；传空字符串表示不添加",
     )
     p_run.add_argument("--top-k", type=int, help="覆盖 RETRIEVAL_TOP_K")
+    p_run.add_argument(
+        "--distance-threshold",
+        type=float,
+        help="覆盖 RETRIEVAL_DISTANCE_THRESHOLD（Chroma cosine distance）",
+    )
+    reranker_group = p_run.add_mutually_exclusive_group()
+    reranker_group.add_argument(
+        "--reranker",
+        dest="reranker_enabled",
+        action="store_true",
+        default=None,
+        help="启用 Cross-encoder Reranker",
+    )
+    reranker_group.add_argument(
+        "--no-reranker",
+        dest="reranker_enabled",
+        action="store_false",
+        help="显式关闭 Cross-encoder Reranker",
+    )
+    p_run.add_argument("--reranker-model", help="覆盖 RERANKER_MODEL")
+    p_run.add_argument(
+        "--reranker-candidate-k",
+        type=int,
+        help="覆盖 RERANKER_CANDIDATE_K",
+    )
     p_run.add_argument(
         "--chunk-strategy",
         choices=("fixed", "recursive"),
@@ -246,6 +411,58 @@ def main():
     p_cmp.add_argument("report_b")
     p_cmp.add_argument("-o", "--output", help="输出 md 文件路径（缺省打印到终端）")
     p_cmp.set_defaults(func=cmd_compare)
+
+    p_threshold = sub.add_parser(
+        "threshold-sweep",
+        help="基于已有 raw_answers 离线扫描检索距离阈值",
+    )
+    p_threshold.add_argument("raw_answers", help="真实评测生成的 raw_answers.jsonl")
+    p_threshold.add_argument("--label", required=True, help="阈值扫描标签")
+    p_threshold.add_argument(
+        "--dataset",
+        default=str(EVAL_DIR / "dataset" / "questions.json"),
+    )
+    p_threshold.add_argument(
+        "--thresholds",
+        nargs="+",
+        type=float,
+        required=True,
+        help="候选 distance 阈值列表，例如 0.60 0.61 0.62",
+    )
+    p_threshold.add_argument("--output-dir", required=True, help="扫描报告输出目录")
+    p_threshold.set_defaults(func=cmd_threshold_sweep)
+
+    p_retrieval = sub.add_parser(
+        "retrieval-sweep",
+        help="一次入库后离线比较多个 Reranker 候选数（不调用 LLM）",
+    )
+    p_retrieval.add_argument("--label", required=True, help="实验标签")
+    p_retrieval.add_argument(
+        "--dataset", default=str(EVAL_DIR / "dataset" / "questions.json")
+    )
+    p_retrieval.add_argument("--corpus", default=str(EVAL_DIR / "corpus"))
+    p_retrieval.add_argument(
+        "--candidate-ks",
+        nargs="+",
+        type=int,
+        required=True,
+        help="Reranker 候选数，例如 15 20 30",
+    )
+    p_retrieval.add_argument("--overwrite", action="store_true")
+    p_retrieval.add_argument("--embedding-model")
+    p_retrieval.add_argument("--query-instruction")
+    p_retrieval.add_argument("--top-k", type=int)
+    p_retrieval.add_argument("--distance-threshold", type=float)
+    p_retrieval.add_argument("--reranker-model")
+    p_retrieval.add_argument("--chunk-strategy", choices=("fixed", "recursive"))
+    p_retrieval.add_argument("--chunk-size", type=int)
+    p_retrieval.add_argument("--chunk-overlap", type=int)
+    p_retrieval.add_argument("--chunk-max-tokens", type=int)
+    p_retrieval.set_defaults(
+        func=cmd_retrieval_sweep,
+        reranker_enabled=True,
+        reranker_candidate_k=None,
+    )
 
     args = parser.parse_args()
     args.func(args)
