@@ -22,6 +22,12 @@ class ChunkMetadata(BaseModel):
         default="paragraph",
         description="解析内容类型：paragraph 或 table",
     )
+    chunk_id: str = Field(default="", description="由来源位置确定的稳定 chunk ID")
+    block_index: int = Field(default=0, description="同一逻辑页内的 parser 块序号")
+    start_char: int = Field(default=0, description="chunk 在解析后逻辑页文本中的起始偏移")
+    end_char: int = Field(default=0, description="chunk 在解析后逻辑页文本中的结束偏移")
+    char_count: int = Field(default=0, description="chunk 字符数")
+    token_count: int = Field(default=0, description="embedding tokenizer 的实际 token 数")
 
 
 class DocumentChunk(BaseModel):

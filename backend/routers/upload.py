@@ -22,6 +22,7 @@ from backend.services.document_store import (
     mark_failed,
     mark_ready,
 )
+from backend.services.embedding import count_tokens
 from backend.services.parser import parse_document
 from backend.services.vector_store import (
     add_chunks,
@@ -127,6 +128,9 @@ async def upload_document(file: UploadFile = File(...)):
             pages,
             chunk_size=settings.CHUNK_SIZE,
             overlap=settings.CHUNK_OVERLAP,
+            max_tokens=settings.CHUNK_MAX_TOKENS,
+            token_counter=count_tokens,
+            strategy=settings.CHUNK_STRATEGY,
         )
         if not chunks:
             raise ValueError("文档切分失败：未能生成任何文本块")

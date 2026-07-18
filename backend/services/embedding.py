@@ -71,3 +71,16 @@ def embed_query(query: str) -> List[float]:
     # 复用 embed_texts，统一向量归一化与输出格式；仅查询侧可配置 instruction。
     query_text = f"{settings.EMBEDDING_QUERY_INSTRUCTION}{query}"
     return embed_texts([query_text])[0]
+
+
+def count_tokens(text: str) -> int:
+    """Return the embedding model's actual token count, including special tokens."""
+    tokenizer = _get_model().tokenizer
+    return len(
+        tokenizer.encode(
+            text,
+            add_special_tokens=True,
+            truncation=False,
+            verbose=False,
+        )
+    )

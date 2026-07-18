@@ -64,6 +64,8 @@ def get_run_config() -> dict:
         "embedding_query_instruction": settings.EMBEDDING_QUERY_INSTRUCTION,
         "chunk_size": settings.CHUNK_SIZE,
         "chunk_overlap": settings.CHUNK_OVERLAP,
+        "chunk_strategy": settings.CHUNK_STRATEGY,
+        "chunk_max_tokens": settings.CHUNK_MAX_TOKENS,
         "top_k": settings.RETRIEVAL_TOP_K,
         "llm_model": settings.DEEPSEEK_MODEL,
     }
@@ -91,6 +93,7 @@ def ingest_corpus(corpus_dir: Path) -> dict:
     from backend.config import settings
     from backend.services.parser import parse_document
     from backend.services.chunker import chunk_document
+    from backend.services.embedding import count_tokens
 
     store = _get_store()
     t0 = time.perf_counter()
@@ -99,7 +102,14 @@ def ingest_corpus(corpus_dir: Path) -> dict:
         if not f.is_file():
             continue
         pages = parse_document(str(f))
-        chunks = chunk_document(pages, settings.CHUNK_SIZE, settings.CHUNK_OVERLAP)
+        chunks = chunk_document(
+            pages,
+            settings.CHUNK_SIZE,
+            settings.CHUNK_OVERLAP,
+            max_tokens=settings.CHUNK_MAX_TOKENS,
+            token_counter=count_tokens,
+            strategy=settings.CHUNK_STRATEGY,
+        )
         n = store.add_chunks(chunks)
         doc_chunks[f.name] = n
     return {

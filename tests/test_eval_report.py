@@ -2,7 +2,7 @@
 
 from pathlib import Path
 
-from eval.report import METRIC_LABELS, render_compare, write_report_md
+from eval.report import METRIC_LABELS, render_compare, write_report_md, write_review_md
 
 
 EXPECTED_METRICS = [
@@ -61,3 +61,33 @@ def test_readme_documents_all_metric_meanings():
 
     for key, _, meaning in EXPECTED_METRICS:
         assert f"| {key} | {meaning} |" in readme
+
+
+def test_review_blockquotes_do_not_emit_trailing_spaces(tmp_path):
+    payload = _payload()
+    payload["per_question"] = [
+        {
+            "id": "q01",
+            "answerable": True,
+            "hit": True,
+            "keypoint_satisfied": 1,
+            "keypoint_total": 1,
+            "citation_count": 1,
+        }
+    ]
+    questions = [
+        {
+            "id": "q01",
+            "category": "fact",
+            "question": "测试问题",
+            "reference_answer": "标准答案",
+            "evidence": [],
+        }
+    ]
+    answers = {"q01": {"answer": "第一段\n\n第二段"}}
+
+    write_review_md(tmp_path, payload, questions, answers)
+    review = (tmp_path / "review.md").read_text(encoding="utf-8")
+
+    assert ">\n" in review
+    assert not any(line.endswith(" ") for line in review.splitlines())

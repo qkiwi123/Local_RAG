@@ -159,3 +159,47 @@ class TestVectorStore:
 
         assert vector_store.add_chunks([chunk]) == 1
         assert captured["metadatas"][0]["content_type"] == "table"
+
+    def test_add_chunks_uses_stable_chunk_id_and_persists_position_stats(self, monkeypatch):
+        from backend.models.schemas import ChunkMetadata, DocumentChunk
+        from backend.services import vector_store
+
+        captured = {}
+
+        class FakeCollection:
+            def add(self, **kwargs):
+                captured.update(kwargs)
+
+        monkeypatch.setattr(vector_store, "_collection", FakeCollection())
+        monkeypatch.setattr(vector_store, "embed_texts", lambda texts: [[0.0] for _ in texts])
+        chunk = DocumentChunk(
+            content="测试内容",
+            metadata=ChunkMetadata(
+                document_id="doc-1",
+                document_name="report.docx",
+                page_number=2,
+                chunk_index=3,
+                content_type="paragraph",
+                chunk_id="doc-1_p2_b0_s10_e14",
+                block_index=0,
+                start_char=10,
+                end_char=14,
+                char_count=4,
+                token_count=6,
+            ),
+        )
+
+        assert vector_store.add_chunks([chunk]) == 1
+        assert captured["ids"] == ["doc-1_p2_b0_s10_e14"]
+        assert captured["metadatas"] == [{
+            "document_id": "doc-1",
+            "document_name": "report.docx",
+            "page_number": 2,
+            "chunk_index": 3,
+            "content_type": "paragraph",
+            "block_index": 0,
+            "start_char": 10,
+            "end_char": 14,
+            "char_count": 4,
+            "token_count": 6,
+        }]

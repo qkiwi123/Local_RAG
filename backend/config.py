@@ -38,6 +38,10 @@ class Settings:
     # ─── 文本切分参数 ─────────────────────────────────
     CHUNK_SIZE: int = int(os.getenv("CHUNK_SIZE", "500"))
     CHUNK_OVERLAP: int = int(os.getenv("CHUNK_OVERLAP", "50"))
+    # 缺失显式配置时保守回退 fixed；已迁移环境通过 .env 启用 recursive。
+    CHUNK_STRATEGY: str = os.getenv("CHUNK_STRATEGY", "fixed").strip().lower()
+    # BGE 最大 512 token；预留 32 token 给特殊标记及后续扩展。
+    CHUNK_MAX_TOKENS: int = int(os.getenv("CHUNK_MAX_TOKENS", "480"))
 
     # ─── 检索参数 ─────────────────────────────────────
     RETRIEVAL_TOP_K: int = int(os.getenv("RETRIEVAL_TOP_K", "5"))
@@ -64,6 +68,14 @@ class Settings:
                 "请在项目根目录的 .env 文件中设置 DEEPSEEK_API_KEY=你的API密钥\n"
                 "（可参考 .env.example 模板）"
             )
+        if self.CHUNK_STRATEGY not in {"fixed", "recursive"}:
+            raise ValueError("CHUNK_STRATEGY 仅支持 fixed 或 recursive")
+        if self.CHUNK_SIZE <= 0:
+            raise ValueError("CHUNK_SIZE 必须大于 0")
+        if self.CHUNK_OVERLAP < 0 or self.CHUNK_OVERLAP >= self.CHUNK_SIZE:
+            raise ValueError("CHUNK_OVERLAP 必须满足 0 <= overlap < CHUNK_SIZE")
+        if self.CHUNK_MAX_TOKENS <= 0:
+            raise ValueError("CHUNK_MAX_TOKENS 必须大于 0")
         # 确保持久化目录存在
         Path(self.UPLOAD_DIR).mkdir(parents=True, exist_ok=True)
         Path(self.CHROMA_PERSIST_DIR).mkdir(parents=True, exist_ok=True)

@@ -64,6 +64,14 @@ def _setup_env(args) -> Path:
         os.environ["EMBEDDING_QUERY_INSTRUCTION"] = args.query_instruction
     if args.top_k:
         os.environ["RETRIEVAL_TOP_K"] = str(args.top_k)
+    if getattr(args, "chunk_strategy", None):
+        os.environ["CHUNK_STRATEGY"] = args.chunk_strategy
+    if getattr(args, "chunk_size", None) is not None:
+        os.environ["CHUNK_SIZE"] = str(args.chunk_size)
+    if getattr(args, "chunk_overlap", None) is not None:
+        os.environ["CHUNK_OVERLAP"] = str(args.chunk_overlap)
+    if getattr(args, "chunk_max_tokens", None) is not None:
+        os.environ["CHUNK_MAX_TOKENS"] = str(args.chunk_max_tokens)
     return run_dir
 
 
@@ -99,6 +107,13 @@ def _validate_dataset(dataset: dict, corpus_texts: dict):
         for e in errors:
             print(f"  [错误] {e}")
         sys.exit("dataset 校验失败，请修正 questions.json")
+
+
+def _format_progress_status(question: dict, row: dict) -> str:
+    """Build a Windows GBK-safe progress label for one evaluated question."""
+    if question["answerable"]:
+        return "命中 PASS" if row.get("hit") else "命中 FAIL"
+    return "拒答 PASS" if row.get("refusal_correct") else "拒答 FAIL"
 
 
 def cmd_run(args):
@@ -149,11 +164,7 @@ def cmd_run(args):
             timings.append(
                 {k: result[k] for k in ("retrieval_s", "llm_s", "total_s")}
             )
-            status = (
-                ("命中✓" if row.get("hit") else "命中✗")
-                if q["answerable"]
-                else ("拒答✓" if row.get("refusal_correct") else "拒答✗")
-            )
+            status = _format_progress_status(q, row)
             print(f"  [{i}/{len(questions)}] {q['id']} {status} ({result['total_s']}s)")
 
     print("[4/4] 计算指标并生成报告…")
@@ -216,6 +227,18 @@ def main():
         help="仅在 query 编码前添加的 instruction；传空字符串表示不添加",
     )
     p_run.add_argument("--top-k", type=int, help="覆盖 RETRIEVAL_TOP_K")
+    p_run.add_argument(
+        "--chunk-strategy",
+        choices=("fixed", "recursive"),
+        help="覆盖 CHUNK_STRATEGY；P1-3 候选使用 recursive",
+    )
+    p_run.add_argument("--chunk-size", type=int, help="覆盖目标 chunk 字符数")
+    p_run.add_argument("--chunk-overlap", type=int, help="覆盖相邻 chunk 重叠字符数")
+    p_run.add_argument(
+        "--chunk-max-tokens",
+        type=int,
+        help="覆盖 embedding tokenizer 的硬 token 上限",
+    )
     p_run.set_defaults(func=cmd_run)
 
     p_cmp = sub.add_parser("compare", help="对比两份 report.json")

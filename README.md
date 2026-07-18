@@ -32,7 +32,7 @@ docs/交接_阶段一优化.md   当前阶段交接和施工约束
 ## 已有能力
 
 - PDF、DOCX、TXT 解析；
-- 滑窗切分和 Chroma 余弦检索；
+- Token-aware 中文递归切分和 Chroma 余弦检索；
 - DeepSeek OpenAI-compatible API；
 - 基于 source ID 的可信引用，不使用 Top-K 伪引用 fallback；
 - 稳定 `document_id`、版本化同名上传、SQLite 文档登记；
@@ -96,6 +96,28 @@ noinst 与 inst 的 Hit Rate、Recall 相同；noinst 的 MRR 高 2.94pp，检�
 
 表格金丝雀 q11/q12 分别以第 2/第 1 名命中，且没有普通题从检索命中退化为未命中。
 完整报告和 P1-1 对比保存在 `eval/results/p1-2-docx-table/`。
+
+## P1-3 Token-aware 递归切分
+
+保持 P1-2 parser、BGE noinst、Top 5 和阈值不变，比较 recursive 400/80、600/100、
+800/120，使用 BGE tokenizer 将单 chunk 硬上限设为 480 tokens。最终选择 400/80：
+
+| 指标 | P1-2 fixed 500/50 | P1-3 recursive 400/80 | 变化 |
+|---|---:|---:|---:|
+| Hit Rate | 94.12% | 94.12% | 持平 |
+| Recall | 85.29% | 88.24% | +2.95pp |
+| MRR | 75.49% | 81.37% | +5.88pp |
+| Keypoint Coverage | 90.00% | 94.12% | +4.12pp |
+| Strict Accuracy | 82.35% | 94.12% | +11.77pp |
+| Citation Precision | 100.00% | 97.92% | -2.08pp |
+| False Refusal Rate | 0.00% | 5.88% | +5.88pp |
+| Refusal Accuracy | 100.00% | 100.00% | 持平 |
+
+新切分器按段落、句子、子句、字符兜底的层级选择边界，保留 overlap，并记录稳定
+chunk ID、逻辑页 `start_char/end_char`、字符数、token 数和 `content_type`。正式评估恢复
+q02，并改善 q08、q16；已知回归是 q05 的黄金证据被同文档更高相似块挤出最终 Top 5。
+完整离线候选、正式报告和 P1-2 对比保存在
+`eval/results/p1-3-recursive-chunking/`。
 
 ## 环境准备
 

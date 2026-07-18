@@ -55,6 +55,42 @@ class TestSplitText:
         chunks = _split_text("   \n  \t  ", chunk_size=500, overlap=50)
         assert chunks == []
 
+    def test_prefers_recursive_chinese_semantic_boundaries(self):
+        """优先按段落切分，其次句子和子句，不应在可用边界前硬截断。"""
+        text = "第一段包含完整信息。\n\n第二段也包含完整信息。\n\n第三段结束。"
+
+        chunks = _split_text(text, chunk_size=18, overlap=0)
+
+        assert chunks == [
+            "第一段包含完整信息。\n\n",
+            "第二段也包含完整信息。\n\n",
+            "第三段结束。",
+        ]
+
+    def test_merges_small_clause_units_until_target_size(self):
+        """短子句应合并为有用 chunk，而不是每个逗号都生成一个碎片。"""
+        text = "甲，乙，丙，丁，戊。"
+
+        chunks = _split_text(text, chunk_size=8, overlap=0)
+
+        assert chunks == ["甲，乙，丙，丁，", "戊。"]
+
+    def test_token_limit_is_a_hard_ceiling(self):
+        """即使字符数未超目标，也必须按 tokenizer 的真实计数继续切分。"""
+        token_counter = lambda value: len(value) * 2 + 2
+        text = "甲乙丙丁戊己庚辛壬癸"
+
+        chunks = _split_text(
+            text,
+            chunk_size=20,
+            overlap=2,
+            max_tokens=10,
+            token_counter=token_counter,
+        )
+
+        assert len(chunks) > 1
+        assert all(token_counter(chunk) <= 10 for chunk in chunks)
+
 
 class TestChunkDocument:
     """带 metadata 的文档切分函数测试。"""
@@ -66,10 +102,9 @@ class TestChunkDocument:
             {"text": "B" * 80, "page_number": 2, "document_name": "test.pdf"},
         ]
         chunks = chunk_document(pages, chunk_size=30, overlap=5)
-        # Page 1: 100 chars / step 25 → 4 chunks
-        # Page 2: 80 chars / step 25 → 4 chunks
-        # Total: 8
-        assert len(chunks) == 8
+        # Page 1: starts at 0/25/50/75 → 4 chunks
+        # Page 2: 0/25/50 已完整覆盖 80 字符，不再生成全重复的 5 字符尾块
+        assert len(chunks) == 7
 
     def test_page_number_preserved(self):
         """每块的页码应与来源页面一致，不跨页。"""
@@ -165,3 +200,57 @@ class TestChunkDocument:
         ]
         chunks = chunk_document(pages, chunk_size=500, overlap=50)
         assert len(chunks) == 0
+
+    def test_offsets_stats_and_stable_ids_are_recorded(self):
+        """元数据应能把 chunk 精确映射回同页逻辑文本，并在重复运行时稳定。"""
+        pages = [
+            {
+                "text": "表格前正文。",
+                "page_number": 1,
+                "document_name": "report.docx",
+                "document_id": "doc-1",
+                "content_type": "paragraph",
+            },
+            {
+                "text": "| 技术 | 成熟度 |\n| --- | --- |\n| RAG | 成熟 |",
+                "page_number": 1,
+                "document_name": "report.docx",
+                "document_id": "doc-1",
+                "content_type": "table",
+            },
+        ]
+        token_counter = lambda value: len(value) + 2
+
+        first = chunk_document(
+            pages,
+            chunk_size=20,
+            overlap=4,
+            max_tokens=18,
+            token_counter=token_counter,
+        )
+        second = chunk_document(
+            pages,
+            chunk_size=20,
+            overlap=4,
+            max_tokens=18,
+            token_counter=token_counter,
+        )
+        logical_page = "\n\n".join(page["text"] for page in pages)
+
+        assert [chunk.metadata.chunk_id for chunk in first] == [
+            chunk.metadata.chunk_id for chunk in second
+        ]
+        assert len({chunk.metadata.chunk_id for chunk in first}) == len(first)
+        assert {chunk.metadata.block_index for chunk in first} == {0, 1}
+        for chunk in first:
+            metadata = chunk.metadata
+            assert logical_page[metadata.start_char:metadata.end_char] == chunk.content
+            assert metadata.char_count == len(chunk.content)
+            assert metadata.token_count == token_counter(chunk.content)
+            assert metadata.token_count <= 18
+
+    def test_invalid_chunk_parameters_fail_fast(self):
+        pages = [{"text": "测试", "page_number": 1, "document_name": "test.txt"}]
+
+        with pytest.raises(ValueError, match="overlap"):
+            chunk_document(pages, chunk_size=10, overlap=10)

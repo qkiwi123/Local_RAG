@@ -57,6 +57,9 @@ def prepare_documents(
     chunk_document: Callable[..., list[Any]],
     chunk_size: int,
     overlap: int,
+    strategy: str | None = None,
+    max_tokens: int | None = None,
+    token_counter: Callable[[str], int] | None = None,
     enforce_registered_counts: bool = True,
 ) -> list[tuple[dict[str, Any], list[Any]]]:
     """解析并切分全部源文件；块数不一致时在写向量前终止。"""
@@ -78,7 +81,14 @@ def prepare_documents(
             document_name=record["original_name"],
             document_id=record["document_id"],
         )
-        chunks = chunk_document(pages, chunk_size, overlap)
+        chunk_options = {}
+        if strategy is not None:
+            chunk_options["strategy"] = strategy
+        if max_tokens is not None:
+            chunk_options["max_tokens"] = max_tokens
+        if token_counter is not None:
+            chunk_options["token_counter"] = token_counter
+        chunks = chunk_document(pages, chunk_size, overlap, **chunk_options)
         expected = int(record["chunk_count"])
         actual = len(chunks)
         if enforce_registered_counts and actual != expected:
@@ -176,6 +186,16 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--chunk-size", type=int, help="默认读取 .env 或使用 500")
     parser.add_argument("--chunk-overlap", type=int, help="默认读取 .env 或使用 50")
     parser.add_argument(
+        "--chunk-strategy",
+        choices=("fixed", "recursive"),
+        help="默认读取 .env 或使用 fixed",
+    )
+    parser.add_argument(
+        "--chunk-max-tokens",
+        type=int,
+        help="默认读取 .env 或使用 480",
+    )
+    parser.add_argument(
         "--accept-chunk-count-change",
         action="store_true",
         help="接受 parser 变化产生的新 chunk 数，并在索引校验后同步 SQLite",
@@ -200,8 +220,24 @@ def main(argv: list[str] | None = None) -> int:
         args.upload_dir or os.getenv("UPLOAD_DIR", "data/uploads")
     )
     model = args.model or os.getenv("EMBEDDING_MODEL", "BAAI/bge-large-zh-v1.5")
-    chunk_size = args.chunk_size or int(os.getenv("CHUNK_SIZE", "500"))
-    overlap = args.chunk_overlap or int(os.getenv("CHUNK_OVERLAP", "50"))
+    chunk_size = (
+        args.chunk_size
+        if args.chunk_size is not None
+        else int(os.getenv("CHUNK_SIZE", "500"))
+    )
+    overlap = (
+        args.chunk_overlap
+        if args.chunk_overlap is not None
+        else int(os.getenv("CHUNK_OVERLAP", "50"))
+    )
+    strategy = (
+        args.chunk_strategy or os.getenv("CHUNK_STRATEGY", "fixed")
+    ).strip().lower()
+    max_tokens = (
+        args.chunk_max_tokens
+        if args.chunk_max_tokens is not None
+        else int(os.getenv("CHUNK_MAX_TOKENS", "480"))
+    )
 
     ensure_safe_target(source_index_dir, target_index_dir)
     records = load_ready_documents(metadata_db_path)
@@ -215,9 +251,12 @@ def main(argv: list[str] | None = None) -> int:
     os.environ["EMBEDDING_MODEL"] = model
     os.environ["CHUNK_SIZE"] = str(chunk_size)
     os.environ["CHUNK_OVERLAP"] = str(overlap)
+    os.environ["CHUNK_STRATEGY"] = strategy
+    os.environ["CHUNK_MAX_TOKENS"] = str(max_tokens)
 
     from backend.services import vector_store
     from backend.services.chunker import chunk_document
+    from backend.services.embedding import count_tokens
     from backend.services.parser import parse_document
 
     prepared = prepare_documents(
@@ -227,6 +266,9 @@ def main(argv: list[str] | None = None) -> int:
         chunk_document=chunk_document,
         chunk_size=chunk_size,
         overlap=overlap,
+        strategy=strategy,
+        max_tokens=max_tokens,
+        token_counter=count_tokens,
         enforce_registered_counts=not args.accept_chunk_count_change,
     )
     print(
@@ -267,6 +309,10 @@ def main(argv: list[str] | None = None) -> int:
     summary.update(
         {
             "model": model,
+            "chunk_strategy": strategy,
+            "chunk_size": chunk_size,
+            "chunk_overlap": overlap,
+            "chunk_max_tokens": max_tokens,
             "source_index_dir": str(source_index_dir),
             "target_index_dir": str(target_index_dir),
             "chunk_count_changes": changed_counts,

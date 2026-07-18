@@ -54,8 +54,11 @@ def add_chunks(chunks: List[DocumentChunk]) -> int:
 
     texts = [chunk.content for chunk in chunks]
     ids = [
-        f"{chunk.metadata.document_id or chunk.metadata.document_name}"
-        f"_p{chunk.metadata.page_number}_c{chunk.metadata.chunk_index}"
+        chunk.metadata.chunk_id
+        or (
+            f"{chunk.metadata.document_id or chunk.metadata.document_name}"
+            f"_p{chunk.metadata.page_number}_c{chunk.metadata.chunk_index}"
+        )
         for chunk in chunks
     ]
     metadatas = [
@@ -65,6 +68,11 @@ def add_chunks(chunks: List[DocumentChunk]) -> int:
             "page_number": chunk.metadata.page_number,
             "chunk_index": chunk.metadata.chunk_index,
             "content_type": chunk.metadata.content_type,
+            "block_index": chunk.metadata.block_index,
+            "start_char": chunk.metadata.start_char,
+            "end_char": chunk.metadata.end_char,
+            "char_count": chunk.metadata.char_count,
+            "token_count": chunk.metadata.token_count,
         }
         for chunk in chunks
     ]

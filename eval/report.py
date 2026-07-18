@@ -32,6 +32,11 @@ def _fmt(v):
     return str(v)
 
 
+def _blockquote(text: str) -> str:
+    """Render Markdown blockquotes without trailing spaces on blank lines."""
+    return "\n".join(f"> {line}" if line else ">" for line in text.split("\n"))
+
+
 def write_report_json(run_dir: Path, payload: dict):
     with open(run_dir / "report.json", "w", encoding="utf-8") as f:
         json.dump(payload, f, ensure_ascii=False, indent=2)
@@ -158,7 +163,7 @@ def write_review_md(run_dir: Path, payload: dict, questions: List[dict], answers
             "",
             "**系统回答：**",
             "",
-            "> " + a["answer"].replace("\n", "\n> "),
+            _blockquote(a["answer"]),
             "",
             f"**标准答案：** {q['reference_answer']}",
             "",
