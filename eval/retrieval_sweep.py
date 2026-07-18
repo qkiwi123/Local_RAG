@@ -69,7 +69,7 @@ def build_candidate_result(
             "category": question["category"],
             "answerable": question["answerable"],
             "result_count": len(retrieval),
-            "top1_distance": retrieval[0]["distance"] if retrieval else None,
+            "top1_distance": retrieval[0].get("distance") if retrieval else None,
             "top1_reranker_score": (
                 retrieval[0].get("reranker_score") if retrieval else None
             ),

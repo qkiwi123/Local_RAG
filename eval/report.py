@@ -37,6 +37,24 @@ def _blockquote(text: str) -> str:
     return "\n".join(f"> {line}" if line else ">" for line in text.split("\n"))
 
 
+def _format_retrieval_debug(row: dict) -> str:
+    """格式化允许缺少 Dense distance 的混合检索调试信息。"""
+    metadata = row["metadata"]
+    distance = row.get("distance")
+    scores = [f"dist={distance:.3f}" if distance is not None else "dist=—"]
+    for key, label in (
+        ("bm25_score", "bm25"),
+        ("rrf_score", "rrf"),
+        ("reranker_score", "reranker"),
+    ):
+        if row.get(key) is not None:
+            scores.append(f"{label}={row[key]:.3f}")
+    return (
+        f"《{metadata.get('document_name')}》第{metadata.get('page_number')}页"
+        f"({', '.join(scores)})"
+    )
+
+
 def write_report_json(run_dir: Path, payload: dict):
     with open(run_dir / "report.json", "w", encoding="utf-8") as f:
         json.dump(payload, f, ensure_ascii=False, indent=2)
@@ -102,11 +120,7 @@ def write_report_md(run_dir: Path, payload: dict, questions: List[dict], answers
     lines += ["", f"## 失败案例（{len(failures)} 题）", ""]
     for row, q in failures:
         a = answers[row["id"]]
-        retrieved = [
-            f"《{r['metadata'].get('document_name')}》第{r['metadata'].get('page_number')}页"
-            f"(dist={r['distance']:.3f})"
-            for r in a["retrieval"]
-        ]
+        retrieved = [_format_retrieval_debug(r) for r in a["retrieval"]]
         lines += [
             f"### {row['id']} [{row['category']}] {q['question']}",
             "",

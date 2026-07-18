@@ -91,3 +91,22 @@ def test_review_blockquotes_do_not_emit_trailing_spaces(tmp_path):
 
     assert ">\n" in review
     assert not any(line.endswith(" ") for line in review.splitlines())
+
+
+def test_format_retrieval_debug_handles_sparse_only_result():
+    from eval.report import _format_retrieval_debug
+
+    row = {
+        "chunk_id": "c1",
+        "content": "RBAC 访问控制",
+        "metadata": {"document_name": "doc.pdf", "page_number": 7},
+        "distance": None,
+        "bm25_score": 2.3,
+        "bm25_rank": 1,
+    }
+
+    text = _format_retrieval_debug(row)
+
+    assert "《doc.pdf》第7页" in text
+    assert "dist=—" in text
+    assert "bm25=2.300" in text
