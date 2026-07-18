@@ -1,5 +1,5 @@
 """
-语义检索器 — 将用户问题转为向量，在 Chroma 中检索最相关的文档片段。
+统一检索器 — 支持 Dense、BM25 与 RRF Hybrid 三种候选生成模式。
 
 与直接调用 vector_store.search() 相比，本模块增加了：
 1. 相似度阈值过滤：过滤掉 distance 过大的结果，避免基于不相关内容"编"答案
@@ -13,51 +13,68 @@
 
 from typing import List
 from backend.config import settings
+from backend.services.fusion import reciprocal_rank_fusion
 from backend.services.reranker import rerank
+from backend.services.sparse_retriever import search as bm25_search
 from backend.services.vector_store import search as vector_search
 
 
-def retrieve(question: str, top_k: int = None) -> List[dict]:
-    """
-    语义检索：将用户问题向量化后在 Chroma 中搜索。
+def _candidate_k(top_k: int) -> int:
+    """Reranker 开启时取实验候选数，否则保持历史 top_k * 2。"""
+    if settings.RERANKER_ENABLED:
+        return max(top_k, settings.RERANKER_CANDIDATE_K)
+    return top_k * 2
 
-    做了两个后处理：
-    1. 过滤掉 distance 过大的结果（阈值从 config 读取）
-    2. 同一文档最多保留 3 条结果（避免一个长文档垄断返回结果）
 
-    Args:
-        question: 用户自然语言问题
-        top_k: 返回数量上限（默认使用 config.RETRIEVAL_TOP_K）
-
-    Returns:
-        List[dict]，每个元素包含 content, metadata, distance
-    """
-    if top_k is None:
-        top_k = settings.RETRIEVAL_TOP_K
-
-    # 1. 从向量库检索。关闭 reranker 时保持 P1-4 的 top_k * 2 行为。
-    candidate_k = (
-        max(top_k, settings.RERANKER_CANDIDATE_K)
-        if settings.RERANKER_ENABLED
-        else top_k * 2
-    )
-    raw_results = vector_search(question, top_k=candidate_k)
-
-    if not raw_results:
-        return []
-
-    # 2. 相似度阈值过滤
-    # Chroma 用余弦距离，值在 [0, 2] 之间，越小越相似
-    filtered = [
+def _dense_candidates(question: str, candidate_k: int) -> List[dict]:
+    """生成通过距离阈值的 Dense 候选，并记录原始 Dense 名次。"""
+    return [
         {**row, "dense_rank": dense_rank}
-        for dense_rank, row in enumerate(raw_results, 1)
+        for dense_rank, row in enumerate(
+            vector_search(question, top_k=candidate_k), 1
+        )
         if row["distance"] <= settings.RETRIEVAL_DISTANCE_THRESHOLD
     ]
 
-    # 3. 先精排全部候选，避免在 Rerank 前按文档限额而提前删掉黄金证据。
-    ranked = rerank(question, filtered) if settings.RERANKER_ENABLED else filtered
 
-    # 4. 最终结果再限制每文档最多 3 条，兼顾证据质量与来源多样性。
+def _bm25_candidates(question: str, candidate_k: int) -> List[dict]:
+    """生成 BM25 候选；分支深度可独立配置，融合前截断到候选上限。"""
+    return bm25_search(
+        question,
+        top_k=max(candidate_k, settings.BM25_TOP_K),
+    )[:candidate_k]
+
+
+def _generate_candidates(question: str, candidate_k: int) -> List[dict]:
+    """按配置生成单路或 RRF 融合候选。"""
+    if settings.RETRIEVAL_MODE == "dense":
+        return _dense_candidates(question, candidate_k)
+    if settings.RETRIEVAL_MODE == "bm25":
+        return _bm25_candidates(question, candidate_k)
+
+    dense = _dense_candidates(question, candidate_k)
+    sparse = _bm25_candidates(question, candidate_k)
+    return reciprocal_rank_fusion(
+        dense,
+        sparse,
+        rrf_k=settings.RRF_K,
+        top_k=candidate_k,
+    )
+
+
+def retrieve(question: str, top_k: int = None) -> List[dict]:
+    """生成候选、可选精排，再限制每文档数量并返回 Top K。"""
+    if top_k is None:
+        top_k = settings.RETRIEVAL_TOP_K
+
+    candidates = _generate_candidates(question, _candidate_k(top_k))
+    ranked = (
+        rerank(question, candidates)
+        if settings.RERANKER_ENABLED
+        else candidates
+    )
+
+    # 最终结果再限制每文档最多 3 条，避免提前删除 Reranker 可能提升的证据。
     MAX_PER_DOC = 3
     doc_counts = {}
     deduped = []
