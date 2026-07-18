@@ -62,6 +62,12 @@ class Settings:
     RETRIEVAL_DISTANCE_THRESHOLD: float = float(
         os.getenv("RETRIEVAL_DISTANCE_THRESHOLD", "0.67")
     )
+    # P2-1 安全默认仍为 Dense；混合检索只有通过消融门槛后才切生产配置。
+    RETRIEVAL_MODE: str = os.getenv("RETRIEVAL_MODE", "dense").strip().lower()
+    BM25_TOP_K: int = int(os.getenv("BM25_TOP_K", "15"))
+    BM25_K1: float = float(os.getenv("BM25_K1", "1.5"))
+    BM25_B: float = float(os.getenv("BM25_B", "0.75"))
+    RRF_K: int = int(os.getenv("RRF_K", "60"))
 
     # ─── Reranker ────────────────────────────────────
     # 安全默认关闭，生产环境通过 .env 显式启用高质量模式。
@@ -107,6 +113,16 @@ class Settings:
             raise ValueError("CHUNK_MAX_TOKENS 必须大于 0")
         if not 0 <= self.RETRIEVAL_DISTANCE_THRESHOLD <= 2:
             raise ValueError("RETRIEVAL_DISTANCE_THRESHOLD 必须在 0 到 2 之间")
+        if self.RETRIEVAL_MODE not in {"dense", "bm25", "hybrid"}:
+            raise ValueError("RETRIEVAL_MODE 必须是 dense、bm25 或 hybrid")
+        if self.BM25_TOP_K <= 0:
+            raise ValueError("BM25_TOP_K 必须大于 0")
+        if self.BM25_K1 <= 0:
+            raise ValueError("BM25_K1 必须大于 0")
+        if not 0 <= self.BM25_B <= 1:
+            raise ValueError("BM25_B 必须在 0 到 1 之间")
+        if self.RRF_K <= 0:
+            raise ValueError("RRF_K 必须大于 0")
         if self.RERANKER_CANDIDATE_K < self.RETRIEVAL_TOP_K:
             raise ValueError("RERANKER_CANDIDATE_K 不能小于 RETRIEVAL_TOP_K")
         if self.RERANKER_BATCH_SIZE <= 0:
