@@ -104,6 +104,37 @@ def add_chunks(chunks: List[DocumentChunk]) -> int:
     return len(chunks)
 
 
+def search_by_embedding(
+    query_embedding: List[float], top_k: int = 5
+) -> List[dict]:
+    """使用预计算查询向量执行 Chroma 检索，供 Trace 拆分计时。"""
+    if top_k <= 0:
+        return []
+
+    results = _collection.query(
+        query_embeddings=[query_embedding],
+        n_results=top_k,
+        include=["documents", "metadatas", "distances"],
+    )
+
+    documents = results.get("documents", [[]])[0]
+    metadatas = results.get("metadatas", [[]])[0]
+    distances = results.get("distances", [[]])[0]
+    ids = results.get("ids", [[]])[0]
+
+    return [
+        {
+            "chunk_id": chunk_id,
+            "content": document,
+            "metadata": metadata,
+            "distance": distance,
+        }
+        for chunk_id, document, metadata, distance in zip(
+            ids, documents, metadatas, distances
+        )
+    ]
+
+
 def search(query: str, top_k: int = 5) -> List[dict]:
     """
     语义检索：在向量库中搜索与查询最相似的文本块。
@@ -129,31 +160,7 @@ def search(query: str, top_k: int = 5) -> List[dict]:
     if top_k <= 0:
         return []
 
-    query_embedding = embed_query(query)
-
-    #向量查询检索，默认按距离从远到近返回top_k个结果
-    results = _collection.query(
-        query_embeddings=[query_embedding],
-        n_results=top_k,
-        include=["documents", "metadatas", "distances"],
-    )
-
-    # Chroma 返回的是嵌套列表，取第一组（因为只查询了一个问题）
-    documents = results.get("documents", [[]])[0]
-    metadatas = results.get("metadatas", [[]])[0]
-    distances = results.get("distances", [[]])[0]
-    ids = results.get("ids", [[]])[0]
-
-    formatted = []
-    for chunk_id, doc, meta, dist in zip(ids, documents, metadatas, distances):
-        formatted.append({
-            "chunk_id": chunk_id,
-            "content": doc,
-            "metadata": meta,
-            "distance": dist,
-        })
-
-    return formatted
+    return search_by_embedding(embed_query(query), top_k=top_k)
 
 
 def delete_document(document_name: str) -> bool:
