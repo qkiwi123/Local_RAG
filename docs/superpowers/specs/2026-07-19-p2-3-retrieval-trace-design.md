@@ -67,6 +67,8 @@ HTTP 502 错误行为保持不变。
           "bm25_score": null,
           "rrf_score": null,
           "reranker_score": null,
+          "eligible": true,
+          "filtered_reason": null,
           "selected": true
         }
       ]
@@ -90,6 +92,10 @@ HTTP 502 错误行为保持不变。
   }
 }
 ```
+
+Dense 阶段记录阈值过滤前的原始 Top N；`eligible=false` 和
+`filtered_reason="distance_above_threshold"` 表示该候选没有进入后续链路。这样既能解释
+最终选中项，也能解释空检索和候选淘汰原因。
 
 阶段只包含本次实际执行的链路：
 
@@ -133,7 +139,7 @@ BM25-only 模式不执行 query embedding，对应耗时为 0。关闭 Reranker 
 1. 顶部摘要展示候选规模、最终上下文 chunk/字符/token 和检索/LLM/总耗时；
 2. 中部按实际执行链路动态生成 Dense、BM25、RRF、Reranker、最终上下文标签；
 3. 每个标签用 Streamlit 原生可选行 dataframe 展示排名、文档、页码、chunk ID、适用分数、
-   120 字摘要和是否最终选中；
+   过滤状态、120 字摘要和是否最终选中；
 4. 用户选择表格行后，在表格下方展示该 chunk 完整原文；
 5. 底部以阶段名称、毫秒值和相对长度进度条展示耗时瓶颈。
 
@@ -156,7 +162,8 @@ Trace 随助手消息写入 `st.session_state.messages`，历史消息重新渲�
 
 - 配置：默认关闭、合法布尔值解析、非法值报错；
 - 向量存储：预计算 query embedding 查询与现有 search 返回一致；
-- Retriever：三种模式的动态阶段、排名和分数映射、chunk 去重、最终选择、空检索；
+- Retriever：三种模式的动态阶段、排名和分数映射、距离阈值淘汰、chunk 去重、最终选择、
+  空检索；
 - API：关闭时 `trace=null`，开启时返回完整 chunk 字典，原 answer/citations 不变；
 - 前端：入口默认折叠、动态标签、单行选择显示完整 chunk、历史消息重渲染；
 - 回归：全量 pytest 与 CI 子集均通过。
