@@ -68,6 +68,10 @@ class Settings:
     BM25_K1: float = float(os.getenv("BM25_K1", "1.5"))
     BM25_B: float = float(os.getenv("BM25_B", "0.75"))
     RRF_K: int = int(os.getenv("RRF_K", "60"))
+    # P2-3 Trace 会返回未入选候选的完整原文，仅在可信调试环境显式开启。
+    RETRIEVAL_TRACE_ENABLED: bool = _env_bool(
+        "RETRIEVAL_TRACE_ENABLED", False
+    )
 
     # ─── Reranker ────────────────────────────────────
     # 安全默认关闭，生产环境通过 .env 显式启用高质量模式。

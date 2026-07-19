@@ -63,7 +63,76 @@ class Citation(BaseModel):
     excerpt: str = Field(..., description="引用的文本片段")
 
 
+class RetrievalTraceChunk(BaseModel):
+    """Trace 中按 chunk_id 去重保存的完整候选原文。"""
+    chunk_id: str
+    document_name: str
+    page_number: int
+    content: str
+
+
+class RetrievalTraceCandidate(BaseModel):
+    """某个检索阶段中的候选排名与诊断分数。"""
+    chunk_id: str
+    rank: int = Field(..., ge=1)
+    distance: Optional[float] = None
+    dense_rank: Optional[int] = None
+    bm25_rank: Optional[int] = None
+    bm25_score: Optional[float] = None
+    rrf_score: Optional[float] = None
+    reranker_score: Optional[float] = None
+    eligible: bool = True
+    filtered_reason: Optional[str] = None
+    selected: bool = False
+
+
+class RetrievalTraceStage(BaseModel):
+    """实际执行的一个检索阶段及其候选快照。"""
+    name: str
+    candidates: list[RetrievalTraceCandidate] = Field(default_factory=list)
+
+
+class RetrievalContextStats(BaseModel):
+    """最终送入 LLM 的上下文规模。"""
+    chunk_count: int = 0
+    char_count: int = 0
+    token_count: int = 0
+
+
+class RetrievalTraceTimings(BaseModel):
+    """检索和生成链路各阶段耗时，单位为毫秒。"""
+    query_embedding: float = 0.0
+    dense_retrieval: float = 0.0
+    sparse_retrieval: float = 0.0
+    rrf: float = 0.0
+    rerank: float = 0.0
+    context_formatting: float = 0.0
+    llm_generation: float = 0.0
+    total: float = 0.0
+
+
+class RetrievalTrace(BaseModel):
+    """一次问答实际执行的完整检索链路。"""
+    retrieval_mode: str
+    reranker_enabled: bool
+    chunks: dict[str, RetrievalTraceChunk] = Field(default_factory=dict)
+    stages: list[RetrievalTraceStage] = Field(default_factory=list)
+    selected_chunk_ids: list[str] = Field(default_factory=list)
+    context: RetrievalContextStats = Field(default_factory=RetrievalContextStats)
+    timings_ms: RetrievalTraceTimings = Field(default_factory=RetrievalTraceTimings)
+
+
+class RetrievalResponse(BaseModel):
+    """内部检索返回：业务结果与可选 Trace 分离。"""
+    results: list[dict] = Field(default_factory=list)
+    trace: Optional[RetrievalTrace] = None
+
+
 class ChatResponse(BaseModel):
     """POST /api/chat 的返回体。"""
     answer: str = Field(..., description="LLM 生成的回答文本")
     citations: list[Citation] = Field(default_factory=list, description="引用来源列表")
+    trace: Optional[RetrievalTrace] = Field(
+        default=None,
+        description="服务端允许时返回的检索调试链路",
+    )
