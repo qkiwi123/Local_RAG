@@ -179,6 +179,31 @@ Hybrid + Reranker 相对当前链路没有改善题或指标增量，且 q18 完
 Hybrid 能力保留为显式配置和后续扩大语料后的实验基线。完整指标口径、逐题结果与不部署
 原因保存在 `eval/results/p2-1-hybrid-retrieval/`。
 
+## P2-3 检索过程可视化
+
+P2-2 Milvus 迁移是以混合检索确有收益为前提的条件项；P2-1 未通过部署门槛，因此本轮按
+优化方案有意跳过 P2-2，继续保留 Chroma。P2-3 已在不改变原 `retrieve()` 契约的前提下，
+为聊天链路增加可选的检索 Trace：
+
+- 按实际执行链路动态展示 Dense、BM25、RRF、Reranker 和最终上下文阶段；
+- 每个阶段保留排名、原始分数、过滤原因、是否最终入选等诊断字段；
+- 完整 Chunk 在响应内按 `chunk_id` 去重，点击表格行后展示原文；
+- 前端“检索详情”按钮默认关闭，展开状态在表格选择触发的 Streamlit 重跑后仍会保留；
+- 分别记录查询向量化、Dense/Sparse、RRF、Reranker、上下文组装、LLM 和总耗时。
+
+该能力默认关闭。开启后 API 会返回未入选候选的完整 Chunk，可能暴露知识库内容，只应在
+可信的本地调试或受控测试环境使用：
+
+```dotenv
+RETRIEVAL_TRACE_ENABLED=true
+```
+
+真实生产索引验收问题“Chroma、Qdrant 和 Milvus 分别适合什么部署规模？”返回 1 条有效
+引用，Trace 为 `Dense → Reranker → 最终上下文`，15 条 Dense 候选中 10 条通过阈值、
+5 条被过滤，最终组装 5 chunks / 1187 tokens。预热 API 请求总耗时 `7860.0 ms`；重启后
+浏览器冷启动请求为 `17291.4 ms`，主要耗时来自首次加载查询 Embedding 与 Reranker。
+响应、截图和逐项验收记录保存在 `eval/results/p2-3-retrieval-trace/`。
+
 ## 环境准备
 
 当前环境已在 Windows、Python 3.14.0 上验证。
@@ -194,6 +219,8 @@ Copy-Item .env.example .env
 
 ```dotenv
 DEEPSEEK_API_KEY=your_key
+# 可选：仅在可信调试环境开启检索过程详情
+RETRIEVAL_TRACE_ENABLED=false
 ```
 
 Embedding 使用 `local_files_only=True`。运行前需确保
@@ -358,9 +385,8 @@ $env:TRANSFORMERS_OFFLINE='1'
 
 ## 下一阶段
 
-1. 检索过程可视化；
-2. 引用原文预览与高亮；
-3. 扩充真实业务语料与 harder lexical 数据后复测 Hybrid；
-4. 结合真实延迟数据评估 Reranker 的 GPU/量化部署。
+1. 引用原文预览与高亮；
+2. 扩充真实业务语料与 harder lexical 数据后复测 Hybrid；
+3. 结合真实延迟数据评估 Reranker 的 GPU/量化部署。
 
 所有简历指标都以实际 eval 报告为准，不预先填写目标值。

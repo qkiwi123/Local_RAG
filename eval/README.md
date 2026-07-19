@@ -78,6 +78,21 @@ Hybrid + Reranker、Dense + Reranker 五组对照。原始结果写入 `retrieva
 `hybrid-ablation.json` 和 `hybrid-ablation.md`。最后一组是当前生产链路的同数据集控制组，
 用于判断 Hybrid + Reranker 是否真的值得部署。
 
+## P2-3 检索 Trace 验收产物
+
+检索 Trace 是聊天接口的受控调试能力，不改变 `eval run`、`retrieval-sweep` 或
+`hybrid-ablation` 的输出。代码和 `.env.example` 默认设置
+`RETRIEVAL_TRACE_ENABLED=false`；开启后聊天响应会包含未入选候选的完整 Chunk，禁止在
+不可信环境中启用。
+
+真实生产索引的 P2-3 验收证据固定保存在 `eval/results/p2-3-retrieval-trace/`：
+
+| 文件 | 用途 |
+|---|---|
+| `trace-response.json` | 真实 `/api/chat` 响应，含完整 Trace、阶段候选与耗时 |
+| `streamlit-trace.png` | 前端默认关闭、展开、阶段切换和完整 Chunk 展示的验收截图 |
+| `validation.md` | 逐项断言、真实时延和安全结论 |
+
 ## 指标解读
 
 | 指标 | 指标含义 | baseline 参考值 |
@@ -108,7 +123,8 @@ Hybrid + Reranker、Dense + Reranker 五组对照。原始结果写入 `retrieva
    `METADATA_DB_PATH` 等环境
    变量（backend 的 Chroma/Embedding/LLM 客户端都是模块级单例，import 即初始化）。
    若 config.py 的 `load_dotenv` 被改为 `override=True`，隔离会失效——eval 启动时有断言兜底。
-4. **P0-2 迁移 Milvus 后 eval 自动适配**：adapters.py 的 `_get_store()` 优先 import
+4. **若未来实施 Milvus 迁移，eval 需同步适配**：当前 P2-2 因混合检索收益门槛未通过而
+   有意跳过，生产仍使用 Chroma。迁移时 `adapters.py` 的 `_get_store()` 应优先 import
    `backend.services.milvus_store`，不存在则回退 `vector_store`。迁移时的配套清单：
    - 新 store 保持 `add_chunks(List[DocumentChunk]) -> int` 签名；
    - `retrieve()` 返回契约不变：`[{"content", "metadata"{document_name, page_number}, "distance"}]`，

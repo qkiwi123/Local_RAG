@@ -92,6 +92,59 @@ def candidate_rows(trace: dict, stage_name: str) -> list[dict]:
     return rows
 
 
+def remember_candidate_selection(
+    message_key: str,
+    stage_name: str,
+    selected_rows: list[int],
+    session_state,
+) -> bool:
+    """记录真正发生变化的表格选择；返回是否需要额外重跑一次。"""
+    selected_rows = list(selected_rows or [])
+    snapshot_key = f"_trace_selection_{message_key}_{stage_name}"
+    active_key = f"_trace_active_selection_{message_key}"
+    previous_rows = session_state.get(snapshot_key, [])
+    session_state[snapshot_key] = selected_rows
+    if selected_rows == previous_rows:
+        return False
+
+    current = session_state.get(active_key)
+    if selected_rows:
+        selected = {
+            "stage_name": stage_name,
+            "row_index": selected_rows[0],
+        }
+        if current == selected:
+            return False
+        session_state[active_key] = selected
+        return True
+    if current and current.get("stage_name") == stage_name:
+        session_state.pop(active_key, None)
+        return True
+    return False
+
+
+def selected_candidate_from_state(
+    trace: dict,
+    message_key: str,
+    session_state,
+) -> dict | None:
+    """在创建详情面板前恢复所选候选，供表格重跑后继续展示。"""
+    stage_names = executed_stage_names(trace)
+    selected = session_state.get(
+        f"_trace_active_selection_{message_key}",
+    )
+    if not selected:
+        return None
+    active_stage = selected.get("stage_name")
+    if active_stage not in stage_names:
+        return None
+    rows = candidate_rows(trace, active_stage)
+    selected_index = selected.get("row_index", -1)
+    if selected_index < 0 or selected_index >= len(rows):
+        return None
+    return {"stage_name": active_stage, "row": rows[selected_index]}
+
+
 def _mode_label(trace: dict) -> str:
     mode = trace.get("retrieval_mode", "unknown").title()
     if trace.get("reranker_enabled"):
@@ -141,7 +194,25 @@ def render_retrieval_trace(trace: dict | None, message_key: str) -> None:
         f"{context.get('chunk_count', 0)} chunks · "
         f"{float(timings.get('total') or 0) / 1000:.2f}s"
     )
-    with st.expander(label, expanded=False):
+    selected_candidate = selected_candidate_from_state(
+        trace,
+        message_key,
+        st.session_state,
+    )
+    open_key = f"_trace_open_{message_key}"
+    is_open = bool(st.session_state.get(open_key, False))
+    action = "🔽 收起" if is_open else "▶️ 展开"
+    if st.button(
+        f"{action} · {label}",
+        key=f"trace_toggle_{message_key}",
+        use_container_width=True,
+    ):
+        st.session_state[open_key] = not is_open
+        st.rerun()
+    if not st.session_state.get(open_key, False):
+        return
+
+    with st.container(border=True):
         summary = st.columns(3)
         summary[0].metric("候选阶段", len(executed_stage_names(trace)))
         summary[1].metric(
@@ -153,6 +224,12 @@ def render_retrieval_trace(trace: dict | None, message_key: str) -> None:
             "总耗时",
             f"{float(timings.get('total') or 0):.1f} ms",
         )
+
+        if selected_candidate:
+            st.caption(
+                f"当前选择 · {STAGE_LABELS[selected_candidate['stage_name']]}"
+            )
+            _render_full_chunk(trace, selected_candidate["row"])
 
         stage_names = executed_stage_names(trace)
         if not stage_names:
@@ -176,8 +253,12 @@ def render_retrieval_trace(trace: dict | None, message_key: str) -> None:
                     selection_mode="single-row",
                     key=f"trace_table_{message_key}_{stage_name}",
                 )
-                selected_rows = event.selection.rows
-                if selected_rows:
-                    _render_full_chunk(trace, rows[selected_rows[0]])
+                if remember_candidate_selection(
+                    message_key,
+                    stage_name,
+                    event.selection.rows,
+                    st.session_state,
+                ):
+                    st.rerun()
 
         _render_timings(timings)

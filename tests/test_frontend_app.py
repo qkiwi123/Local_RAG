@@ -3,7 +3,12 @@
 import httpx
 from streamlit.testing.v1 import AppTest
 
-from frontend.trace_view import candidate_rows, executed_stage_names
+from frontend.trace_view import (
+    candidate_rows,
+    executed_stage_names,
+    remember_candidate_selection,
+    selected_candidate_from_state,
+)
 
 
 LONG_CHUNK = "这是用于检索过程可视化的完整候选原文。" * 12
@@ -156,6 +161,35 @@ def test_executed_stage_names_follow_backend_order():
     ]
 
 
+def test_selected_candidate_is_recovered_before_trace_panel_renders():
+    session_state = {}
+
+    changed = remember_candidate_selection(
+        "message-1",
+        "selected",
+        [0],
+        session_state,
+    )
+
+    selected = selected_candidate_from_state(
+        TRACE_PAYLOAD,
+        "message-1",
+        session_state,
+    )
+
+    assert selected == {
+        "stage_name": "selected",
+        "row": candidate_rows(TRACE_PAYLOAD, "selected")[0],
+    }
+    assert changed is True
+    assert remember_candidate_selection(
+        "message-1",
+        "selected",
+        [0],
+        session_state,
+    ) is False
+
+
 def test_successful_upload_clears_file_uploader(monkeypatch):
     FakeBackendClient.uploaded_names = []
     FakeBackendClient.documents = []
@@ -194,12 +228,17 @@ def test_trace_panel_is_present_and_collapsed_after_chat(monkeypatch):
 
     app.run()
 
-    trace_expanders = [
-        item for item in app.expander if "检索详情" in item.label
+    trace_buttons = [
+        item for item in app.button if "检索详情" in item.label
     ]
-    assert len(trace_expanders) == 1
-    assert trace_expanders[0].proto.expanded is False
-    assert [tab.label for tab in trace_expanders[0].tabs] == [
+    assert len(trace_buttons) == 1
+    assert "展开" in trace_buttons[0].label
+    assert not app.tabs
+
+    trace_buttons[0].click()
+    app.run()
+
+    assert [tab.label for tab in app.tabs] == [
         "Dense",
         "Reranker",
         "最终上下文",
