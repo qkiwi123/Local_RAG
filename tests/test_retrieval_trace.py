@@ -12,6 +12,7 @@ from backend.models.schemas import (
     RetrievalTraceStage,
     RetrievalTraceTimings,
 )
+from backend.services.retrieval_trace import TraceCollector, finalize_chat_trace
 
 
 def test_retrieval_trace_is_disabled_in_tests():
@@ -59,3 +60,84 @@ def test_retrieval_trace_contract_keeps_full_chunk_once():
 
     assert response.trace.chunks["c1"].content == "完整 chunk 原文"
     assert response.trace.stages[0].candidates[0].distance == 0.2
+
+
+def _row(chunk_id, content="完整正文", distance=0.2):
+    return {
+        "chunk_id": chunk_id,
+        "content": content,
+        "metadata": {"document_name": "doc.txt", "page_number": 1},
+        "distance": distance,
+        "dense_rank": 1,
+    }
+
+
+def test_collector_deduplicates_full_chunk_across_stages():
+    collector = TraceCollector(enabled=True, mode="dense", reranker_enabled=True)
+    collector.add_stage("dense", [_row("c1")])
+    collector.add_stage(
+        "reranker", [{**_row("c1"), "reranker_score": 2.5}]
+    )
+    collector.add_stage("selected", [_row("c1")])
+
+    trace = collector.finish([_row("c1")])
+
+    assert list(trace.chunks) == ["c1"]
+    assert [stage.name for stage in trace.stages] == [
+        "dense",
+        "reranker",
+        "selected",
+    ]
+    assert all(stage.candidates[0].selected for stage in trace.stages)
+
+
+def test_collector_records_dense_threshold_rejection_without_mutating_row():
+    row = _row("filtered", distance=0.8)
+    collector = TraceCollector(
+        enabled=True, mode="dense", reranker_enabled=False
+    )
+    collector.add_stage(
+        "dense",
+        [row],
+        eligibility={"filtered": (False, "distance_above_threshold")},
+    )
+
+    trace = collector.finish([])
+
+    candidate = trace.stages[0].candidates[0]
+    assert candidate.eligible is False
+    assert candidate.filtered_reason == "distance_above_threshold"
+    assert "eligible" not in row
+
+
+def test_disabled_collector_never_retains_chunk_content():
+    collector = TraceCollector(
+        enabled=False, mode="dense", reranker_enabled=False
+    )
+    collector.add_stage("dense", [_row("c1")])
+
+    assert collector.finish([_row("c1")]) is None
+    assert collector.chunks == {}
+
+
+def test_finalize_chat_trace_records_context_and_llm_timing(monkeypatch):
+    collector = TraceCollector(
+        enabled=True, mode="dense", reranker_enabled=False
+    )
+    trace = collector.finish([])
+    monkeypatch.setattr(
+        "backend.services.retrieval_trace.count_tokens", lambda text: 9
+    )
+
+    completed = finalize_chat_trace(
+        trace,
+        context="上下文",
+        context_formatting_ms=1.2,
+        llm_generation_ms=3.4,
+        total_ms=5.6,
+    )
+
+    assert completed.context.char_count == 3
+    assert completed.context.token_count == 9
+    assert completed.timings_ms.llm_generation == 3.4
+    assert completed.timings_ms.total == 5.6
