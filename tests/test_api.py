@@ -13,6 +13,7 @@ from fastapi.testclient import TestClient
 @pytest.fixture
 def client(monkeypatch, isolated_data_dir):
     from backend.config import settings
+    from backend.models.schemas import RetrievalResponse
     from backend.routers import chat as chat_router
     from backend.routers import upload as upload_router
     from backend.main import app
@@ -43,7 +44,12 @@ def client(monkeypatch, isolated_data_dir):
             "distance": 0.2,
         }
     ]
-    monkeypatch.setattr(chat_router, "retrieve", lambda question: retrieval)
+    monkeypatch.setattr(
+        chat_router,
+        "retrieve_with_trace",
+        lambda question: RetrievalResponse(results=retrieval, trace=None),
+        raising=False,
+    )
     monkeypatch.setattr(
         chat_router,
         "ask",
@@ -196,3 +202,83 @@ class TestChatAPI:
     def test_chat_empty_question_returns_422(self, client):
         response = client.post("/api/chat", json={"question": ""})
         assert response.status_code == 422
+
+    def test_chat_returns_trace_without_changing_answer_or_citations(
+        self, client, monkeypatch
+    ):
+        from backend.models.schemas import (
+            RetrievalResponse,
+            RetrievalTrace,
+            RetrievalTraceCandidate,
+            RetrievalTraceChunk,
+            RetrievalTraceStage,
+        )
+        from backend.routers import chat as chat_router
+
+        retrieval = [
+            {
+                "chunk_id": "c1",
+                "content": "Employees receive 5 days of annual leave.",
+                "metadata": {
+                    "document_name": "handbook.pdf",
+                    "page_number": 1,
+                },
+                "distance": 0.2,
+            }
+        ]
+        trace = RetrievalTrace(
+            retrieval_mode="dense",
+            reranker_enabled=False,
+            chunks={
+                "c1": RetrievalTraceChunk(
+                    chunk_id="c1",
+                    document_name="handbook.pdf",
+                    page_number=1,
+                    content=retrieval[0]["content"],
+                )
+            },
+            stages=[
+                RetrievalTraceStage(
+                    name="dense",
+                    candidates=[
+                        RetrievalTraceCandidate(
+                            chunk_id="c1",
+                            rank=1,
+                            distance=0.2,
+                            selected=True,
+                        )
+                    ],
+                )
+            ],
+            selected_chunk_ids=["c1"],
+        )
+        monkeypatch.setattr(
+            chat_router,
+            "retrieve_with_trace",
+            lambda question: RetrievalResponse(
+                results=retrieval,
+                trace=trace,
+            ),
+            raising=False,
+        )
+        monkeypatch.setattr(
+            "backend.services.retrieval_trace.count_tokens",
+            lambda context: 8,
+        )
+
+        response = client.post("/api/chat", json={"question": "annual leave?"})
+
+        assert response.status_code == 200
+        payload = response.json()
+        assert payload["trace"]["chunks"]["c1"]["content"] == retrieval[0][
+            "content"
+        ]
+        assert payload["trace"]["context"]["token_count"] == 8
+        assert payload["citations"][0]["chunk_id"] == "c1"
+
+    def test_chat_trace_is_null_when_retriever_does_not_capture_it(self, client):
+        payload = client.post(
+            "/api/chat", json={"question": "annual leave?"}
+        ).json()
+
+        assert payload["trace"] is None
