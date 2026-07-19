@@ -25,6 +25,7 @@ try:
         upload_attempts,
         upload_selection_complete,
     )
+    from frontend.trace_view import render_retrieval_trace
 except ModuleNotFoundError as error:
     if error.name != "frontend":
         raise
@@ -35,6 +36,7 @@ except ModuleNotFoundError as error:
         upload_attempts,
         upload_selection_complete,
     )
+    from trace_view import render_retrieval_trace
 
 # ─── 页面配置 ────────────────────────────────────────
 st.set_page_config(
@@ -327,7 +329,7 @@ if not st.session_state.messages:
     )
 
 # 渲染历史对话
-for msg in st.session_state.messages:
+for message_index, msg in enumerate(st.session_state.messages):
     with st.chat_message(msg["role"]):
         st.markdown(msg["content"])
         if msg.get("citations"):
@@ -340,6 +342,8 @@ for msg in st.session_state.messages:
                     )
                     if citation.get("excerpt"):
                         st.caption(f"> {citation['excerpt'][:150]}...")
+        if msg["role"] == "assistant":
+            render_retrieval_trace(msg.get("trace"), str(message_index))
 
 
 # 输入框
@@ -361,6 +365,7 @@ if question := st.chat_input("请输入您的问题..."):
 
         answer = result.get("answer", "")
         citations = result.get("citations", [])
+        trace = result.get("trace")
         st.markdown(answer)
 
         if citations:
@@ -374,8 +379,14 @@ if question := st.chat_input("请输入您的问题..."):
                     if citation.get("excerpt"):
                         st.caption(f"> {citation['excerpt'][:150]}...")
 
+        render_retrieval_trace(
+            trace,
+            str(len(st.session_state.messages)),
+        )
+
     st.session_state.messages.append({
         "role": "assistant",
         "content": answer,
         "citations": citations,
+        "trace": trace,
     })
