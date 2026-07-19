@@ -141,3 +141,105 @@ def test_finalize_chat_trace_records_context_and_llm_timing(monkeypatch):
     assert completed.context.token_count == 9
     assert completed.timings_ms.llm_generation == 3.4
     assert completed.timings_ms.total == 5.6
+
+
+def test_hybrid_trace_has_only_executed_stages_and_full_chunks(monkeypatch):
+    from backend.services import retriever
+
+    monkeypatch.setattr(settings, "RETRIEVAL_TRACE_ENABLED", True)
+    monkeypatch.setattr(settings, "RETRIEVAL_MODE", "hybrid")
+    monkeypatch.setattr(settings, "RERANKER_ENABLED", True)
+    monkeypatch.setattr(settings, "RERANKER_CANDIDATE_K", 2)
+    monkeypatch.setattr(settings, "BM25_TOP_K", 2)
+    monkeypatch.setattr(settings, "RETRIEVAL_TOP_K", 1)
+    monkeypatch.setattr(retriever, "embed_query", lambda question: [0.1])
+    monkeypatch.setattr(
+        retriever,
+        "vector_search_by_embedding",
+        lambda vector, top_k: [
+            _row("shared"),
+            _row("filtered", distance=0.8),
+        ],
+    )
+    monkeypatch.setattr(
+        retriever,
+        "bm25_search",
+        lambda question, top_k: [
+            {**_row("shared"), "bm25_rank": 1, "bm25_score": 5.0}
+        ],
+    )
+    monkeypatch.setattr(
+        retriever,
+        "reciprocal_rank_fusion",
+        lambda dense, sparse, rrf_k, top_k: [
+            {
+                **dense[0],
+                "bm25_rank": 1,
+                "bm25_score": 5.0,
+                "rrf_score": 0.03,
+            }
+        ],
+    )
+    monkeypatch.setattr(
+        retriever,
+        "rerank",
+        lambda question, rows: [
+            {**rows[0], "reranker_score": 2.0}
+        ],
+    )
+
+    response = retriever.retrieve_with_trace("问题", top_k=1)
+
+    assert [stage.name for stage in response.trace.stages] == [
+        "dense",
+        "bm25",
+        "rrf",
+        "reranker",
+        "selected",
+    ]
+    assert set(response.trace.chunks) == {"shared", "filtered"}
+    dense = response.trace.stages[0].candidates
+    assert dense[1].eligible is False
+    assert response.trace.selected_chunk_ids == ["shared"]
+
+
+def test_plain_retrieve_never_builds_trace_even_when_server_flag_is_on(
+    monkeypatch,
+):
+    from backend.services import retriever
+
+    monkeypatch.setattr(settings, "RETRIEVAL_TRACE_ENABLED", True)
+    monkeypatch.setattr(settings, "RETRIEVAL_MODE", "dense")
+    monkeypatch.setattr(settings, "RERANKER_ENABLED", False)
+    monkeypatch.setattr(
+        retriever,
+        "vector_search",
+        lambda question, top_k: [_row("c1")],
+    )
+
+    assert [
+        row["chunk_id"] for row in retriever.retrieve("问题", top_k=1)
+    ] == ["c1"]
+
+
+def test_bm25_trace_omits_dense_and_rrf_stages(monkeypatch):
+    from backend.services import retriever
+
+    monkeypatch.setattr(settings, "RETRIEVAL_TRACE_ENABLED", True)
+    monkeypatch.setattr(settings, "RETRIEVAL_MODE", "bm25")
+    monkeypatch.setattr(settings, "RERANKER_ENABLED", False)
+    monkeypatch.setattr(
+        retriever,
+        "bm25_search",
+        lambda question, top_k: [
+            {**_row("c1"), "bm25_rank": 1, "bm25_score": 2.0}
+        ],
+    )
+
+    response = retriever.retrieve_with_trace("问题", top_k=1)
+
+    assert [stage.name for stage in response.trace.stages] == [
+        "bm25",
+        "selected",
+    ]
+    assert response.trace.timings_ms.query_embedding == 0.0
