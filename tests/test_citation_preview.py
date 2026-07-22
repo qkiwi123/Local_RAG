@@ -109,3 +109,179 @@ class TestCitationPreviewModels:
                 highlight_end=10,
                 chunk_content="chunk",
             )
+
+
+class TestCitationPreviewService:
+    """P2-4 Task 7：引用预览服务层的强一致性校验。"""
+
+    def test_build_preview_success(self, temp_dir):
+        """ready 文档 + 精确 chunk + 同版本页 = 成功返回预览。"""
+        import os
+        from backend.services.page_store import replace_document_pages
+        from backend.services.document_store import create_document, mark_ready
+
+        db_path = os.path.join(temp_dir, "metadata.db")
+        create_document("doc-1", "test.pdf", "test.pdf", 1000, db_path=db_path)
+        mark_ready("doc-1", 1, db_path=db_path)
+        replace_document_pages("doc-1", "text-v1-pypdf2", [
+            {
+                "document_id": "doc-1",
+                "parser_version": "text-v1-pypdf2",
+                "page_number": 1,
+                "parsed_page_text": "ABCDEFGHIJKLMNOP",
+                "content_type": "paragraph",
+                "created_at": "2026-01-01T00:00:00Z",
+            },
+        ], db_path=db_path)
+
+        from backend.services.citation_preview import build_citation_preview
+
+        result = build_citation_preview(
+            document_id="doc-1",
+            chunk_id="doc-1_p1_b0_s4_e10",
+            db_path=db_path,
+            # 绕过 Chroma 读取：直接 mock get_chunk_by_id
+            _chunk={
+                "chunk_id": "doc-1_p1_b0_s4_e10",
+                "content": "EFGHIJ",
+                "metadata": {
+                    "document_id": "doc-1",
+                    "parser_version": "text-v1-pypdf2",
+                    "page_number": 1,
+                    "content_type": "paragraph",
+                    "start_char": 4,
+                    "end_char": 10,
+                    "document_name": "test.pdf",
+                },
+            },
+        )
+        assert result.document_id == "doc-1"
+        assert result.highlight_start == 4
+        assert result.highlight_end == 10
+        assert result.chunk_content == "EFGHIJ"
+        assert "ABCDEFGHIJKLMNOP" == result.parsed_page_text
+
+    def test_build_preview_document_not_ready(self, temp_dir):
+        """processing/failed 文档不可预览。"""
+        import os
+        from backend.services.document_store import create_document
+        from backend.services.citation_preview import build_citation_preview
+
+        db_path = os.path.join(temp_dir, "metadata.db")
+        create_document("doc-1", "test.pdf", "test.pdf", 1000, db_path=db_path)
+
+        with pytest.raises(ValueError, match="not ready|未就绪|找不到文档"):
+            build_citation_preview(
+                document_id="doc-1",
+                chunk_id="chunk-1",
+                db_path=db_path,
+                _chunk={"chunk_id": "chunk-1", "content": "", "metadata": {}},
+            )
+
+    def test_build_preview_document_id_mismatch(self, temp_dir):
+        """path 中的 document_id 与 chunk metadata 不一致。"""
+        import os
+        from backend.services.document_store import create_document, mark_ready
+
+        db_path = os.path.join(temp_dir, "metadata.db")
+        create_document("doc-1", "test.pdf", "test.pdf", 1000, db_path=db_path)
+        mark_ready("doc-1", 1, db_path=db_path)
+
+        from backend.services.citation_preview import build_citation_preview
+
+        with pytest.raises(ValueError, match="不一致|不属于"):
+            build_citation_preview(
+                document_id="doc-1",
+                chunk_id="chunk-1",
+                db_path=db_path,
+                _chunk={
+                    "chunk_id": "chunk-1",
+                    "content": "",
+                    "metadata": {"document_id": "doc-2"},
+                },
+            )
+
+    def test_build_preview_slice_mismatch_raises(self, temp_dir):
+        """切片内容 != chunk 内容时拒绝。"""
+        import os
+        from backend.services.page_store import replace_document_pages
+        from backend.services.document_store import create_document, mark_ready
+
+        db_path = os.path.join(temp_dir, "metadata.db")
+        create_document("doc-1", "test.pdf", "test.pdf", 1000, db_path=db_path)
+        mark_ready("doc-1", 1, db_path=db_path)
+        replace_document_pages("doc-1", "text-v1-pypdf2", [
+            {
+                "document_id": "doc-1",
+                "parser_version": "text-v1-pypdf2",
+                "page_number": 1,
+                "parsed_page_text": "ABCDEFGHIJ",
+                "content_type": "paragraph",
+                "created_at": "2026-01-01T00:00:00Z",
+            },
+        ], db_path=db_path)
+
+        from backend.services.citation_preview import build_citation_preview
+
+        with pytest.raises(ValueError, match="不一致|不等于|不匹配"):
+            build_citation_preview(
+                document_id="doc-1",
+                chunk_id="chunk-1",
+                db_path=db_path,
+                _chunk={
+                    "chunk_id": "chunk-1",
+                    "content": "WRONG",
+                    "metadata": {
+                        "document_id": "doc-1",
+                        "parser_version": "text-v1-pypdf2",
+                        "page_number": 1,
+                        "start_char": 0,
+                        "end_char": 5,
+                        "document_name": "test.pdf",
+                    },
+                },
+            )
+
+    def test_build_preview_page_too_large_rejected(self, temp_dir, monkeypatch):
+        """页超过 CITATION_PREVIEW_MAX_PAGE_CHARS 时拒绝。"""
+        import os
+        from backend.services.page_store import replace_document_pages
+        from backend.services.document_store import create_document, mark_ready
+        from backend.config import settings
+
+        monkeypatch.setattr(settings, "CITATION_PREVIEW_MAX_PAGE_CHARS", 50)
+
+        db_path = os.path.join(temp_dir, "metadata.db")
+        create_document("doc-1", "test.pdf", "test.pdf", 1000, db_path=db_path)
+        mark_ready("doc-1", 1, db_path=db_path)
+        replace_document_pages("doc-1", "text-v1-pypdf2", [
+            {
+                "document_id": "doc-1",
+                "parser_version": "text-v1-pypdf2",
+                "page_number": 1,
+                "parsed_page_text": "x" * 100,
+                "content_type": "paragraph",
+                "created_at": "2026-01-01T00:00:00Z",
+            },
+        ], db_path=db_path)
+
+        from backend.services.citation_preview import build_citation_preview
+
+        with pytest.raises(ValueError, match="过大|超过|上限"):
+            build_citation_preview(
+                document_id="doc-1",
+                chunk_id="chunk-1",
+                db_path=db_path,
+                _chunk={
+                    "chunk_id": "chunk-1",
+                    "content": "x" * 5,
+                    "metadata": {
+                        "document_id": "doc-1",
+                        "parser_version": "text-v1-pypdf2",
+                        "page_number": 1,
+                        "start_char": 0,
+                        "end_char": 5,
+                        "document_name": "test.pdf",
+                    },
+                },
+            )
