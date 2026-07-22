@@ -21,9 +21,18 @@ from backend.services.document_store import (
     list_documents as list_document_records,
     mark_failed,
     mark_ready,
+    _now,
 )
 from backend.services.embedding import count_tokens
-from backend.services.parser import parse_document
+from backend.services.page_store import (
+    delete_document_pages,
+    replace_document_pages,
+)
+from backend.services.parser import PARSER_VERSION, parse_document
+from backend.services.source_page import (
+    assemble_source_pages,
+    validate_chunks_against_pages,
+)
 from backend.services.vector_store import (
     add_chunks,
     delete_document as delete_legacy_vectors,
@@ -69,6 +78,7 @@ def _cleanup_failed_ingest(
     record_created: bool,
 ) -> None:
     delete_document_by_id(document_id)
+    delete_document_pages(document_id)
     for path in paths:
         _safe_unlink(path, upload_dir)
     if record_created:
@@ -124,6 +134,10 @@ async def upload_document(file: UploadFile = File(...)):
         if not pages:
             raise ValueError("文档解析失败：未能提取到任何文本内容")
 
+        parsed_pages = assemble_source_pages(pages)
+        if not parsed_pages:
+            raise ValueError("文档解析失败：未能组装任何页面文本")
+
         chunks = chunk_document(
             pages,
             chunk_size=settings.CHUNK_SIZE,
@@ -135,7 +149,14 @@ async def upload_document(file: UploadFile = File(...)):
         if not chunks:
             raise ValueError("文档切分失败：未能生成任何文本块")
 
+        validate_chunks_against_pages(chunks, parsed_pages)
+
         chunk_count = add_chunks(chunks)
+        now_iso = _now()
+        replace_document_pages(document_id, PARSER_VERSION, [
+            {**page.model_dump(), "created_at": now_iso}
+            for page in parsed_pages
+        ])
         os.replace(temp_path, final_path)
         mark_ready(document_id, chunk_count)
 
@@ -206,6 +227,7 @@ def _delete_registered_document(document_id: str) -> dict:
     if not delete_document_by_id(document_id):
         raise HTTPException(status_code=500, detail="删除向量数据失败")
 
+    delete_document_pages(document_id)
     upload_dir = Path(settings.UPLOAD_DIR)
     _safe_unlink(upload_dir / record["stored_name"], upload_dir)
     delete_record(document_id)

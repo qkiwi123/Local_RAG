@@ -288,3 +288,65 @@ class TestChatAPI:
         ).json()
 
         assert payload["trace"] is None
+
+
+class TestUploadPageSnapshots:
+    """P2-4 Task 5：页快照在上传链路中的集成行为。"""
+
+    def test_successful_upload_persists_page_snapshots(self, client):
+        """上传成功后，每个页面快照都能从 SQLite 读取并切片验证。"""
+        from backend.services.page_store import get_document_page
+        from backend.services.parser import PARSER_VERSION
+
+        uploaded = _upload_fixture(client).json()
+        assert uploaded["status"] == "success"
+        document_id = uploaded["document_id"]
+
+        # 每种格式至少有一页快照写入
+        page1 = get_document_page(document_id, PARSER_VERSION, 1)
+        assert page1 is not None
+        assert page1["document_id"] == document_id
+        assert page1["parser_version"] == PARSER_VERSION
+        assert len(page1["parsed_page_text"]) > 0
+
+    def test_failed_ingest_cleans_page_snapshots(self, client, monkeypatch):
+        """入库失败后页快照不残留。"""
+        from backend.config import settings
+        from backend.routers import upload as upload_router
+        from backend.services.page_store import get_document_page
+        from backend.services.parser import PARSER_VERSION
+
+        monkeypatch.setattr(
+            upload_router,
+            "add_chunks",
+            lambda chunks: (_ for _ in ()).throw(RuntimeError("向量写入失败")),
+        )
+
+        response = _upload_fixture(client)
+        assert response.status_code == 500
+        doc_id = response.json()["detail"]["document_id"] if "document_id" in response.json().get("detail", {}) else None
+        # 确认没有页快照残留（从 clean db 状态验证）
+        # 因为上传失败，文档应处于 failed 状态，页快照不应存在
+        from backend.services.document_store import list_documents
+        records = list_documents(status=None)
+        if records:
+            for r in records:
+                page = get_document_page(r["document_id"], PARSER_VERSION, 1)
+                assert page is None, f"孤立页快照残留: {r['document_id']}"
+
+    def test_delete_by_id_cleans_page_snapshots(self, client):
+        """按 ID 删除文档后页快照也一并清除。"""
+        from backend.services.page_store import get_document_page
+        from backend.services.parser import PARSER_VERSION
+
+        uploaded = _upload_fixture(client).json()
+        document_id = uploaded["document_id"]
+
+        # 删除前确认页快照存在
+        assert get_document_page(document_id, PARSER_VERSION, 1) is not None
+
+        response = client.delete(f"/api/documents/id/{document_id}")
+        assert response.status_code == 200
+
+        # 删除后页快照不存在
+        assert get_document_page(document_id, PARSER_VERSION, 1) is None
