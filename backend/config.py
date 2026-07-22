@@ -72,6 +72,13 @@ class Settings:
     RETRIEVAL_TRACE_ENABLED: bool = _env_bool(
         "RETRIEVAL_TRACE_ENABLED", False
     )
+    # P2-4 引用原文预览；开启后 API 会返回完整解析页文本，仅在可信环境使用。
+    CITATION_PREVIEW_ENABLED: bool = _env_bool(
+        "CITATION_PREVIEW_ENABLED", False
+    )
+    CITATION_PREVIEW_MAX_PAGE_CHARS: int = int(
+        os.getenv("CITATION_PREVIEW_MAX_PAGE_CHARS", "200000")
+    )
 
     # ─── Reranker ────────────────────────────────────
     # 安全默认关闭，生产环境通过 .env 显式启用高质量模式。
@@ -133,6 +140,8 @@ class Settings:
             raise ValueError("RERANKER_BATCH_SIZE 必须大于 0")
         if self.RERANKER_MAX_LENGTH <= 0:
             raise ValueError("RERANKER_MAX_LENGTH 必须大于 0")
+        if self.CITATION_PREVIEW_MAX_PAGE_CHARS <= 0:
+            raise ValueError("CITATION_PREVIEW_MAX_PAGE_CHARS 必须大于 0")
         # 确保持久化目录存在
         Path(self.UPLOAD_DIR).mkdir(parents=True, exist_ok=True)
         Path(self.CHROMA_PERSIST_DIR).mkdir(parents=True, exist_ok=True)

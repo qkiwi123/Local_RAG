@@ -196,6 +196,12 @@ class TestChatAPI:
                 "document_name": "handbook.pdf",
                 "page_number": 1,
                 "excerpt": "Employees receive 5 days of annual leave.",
+                "document_id": None,
+                "parser_version": None,
+                "content_type": None,
+                "start_char": None,
+                "end_char": None,
+                "preview_available": False,
             }
         ]
 

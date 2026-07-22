@@ -7,7 +7,7 @@ Pydantic 数据模型定义。
 
 from typing import Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 
 # ─── 文本块相关 ──────────────────────────────────────
@@ -28,6 +28,10 @@ class ChunkMetadata(BaseModel):
     end_char: int = Field(default=0, description="chunk 在解析后逻辑页文本中的结束偏移")
     char_count: int = Field(default=0, description="chunk 字符数")
     token_count: int = Field(default=0, description="embedding tokenizer 的实际 token 数")
+    parser_version: str = Field(
+        default="",
+        description="解析器版本，用于区分不同解析产出下的 offset 语义",
+    )
 
 
 class DocumentChunk(BaseModel):
@@ -61,6 +65,37 @@ class Citation(BaseModel):
     document_name: str = Field(..., description="引用的文档文件名")
     page_number: int = Field(..., description="引用的页码")
     excerpt: str = Field(..., description="引用的文本片段")
+    document_id: Optional[str] = Field(default=None, description="稳定文档 ID")
+    parser_version: Optional[str] = Field(default=None, description="解析器版本")
+    content_type: Optional[str] = Field(default=None, description="解析内容类型")
+    start_char: Optional[int] = Field(default=None, description="chunk 在页文本中的起始偏移")
+    end_char: Optional[int] = Field(default=None, description="chunk 在页文本中的结束偏移")
+    preview_available: bool = Field(
+        default=False,
+        description="服务端预览开启且引用元数据具备预览资格",
+    )
+
+
+class CitationPreview(BaseModel):
+    """按需加载的引用原文预览，含完整解析页和精确高亮定位。"""
+    document_id: str = Field(..., description="稳定文档 ID")
+    chunk_id: str = Field(..., description="向量库文本块 ID")
+    document_name: str = Field(..., description="文档文件名")
+    parser_version: str = Field(..., description="解析器版本")
+    page_number: int = Field(..., ge=1, description="逻辑页码")
+    content_type: str = Field(..., description="解析内容类型")
+    parsed_page_text: str = Field(..., description="完整规范页文本")
+    highlight_start: int = Field(..., ge=0, description="高亮起始偏移")
+    highlight_end: int = Field(..., ge=0, description="高亮结束偏移")
+    chunk_content: str = Field(..., description="被引用的完整 chunk 原文")
+
+    @model_validator(mode="after")
+    def _check_offsets(self) -> "CitationPreview":
+        if self.highlight_end <= self.highlight_start:
+            raise ValueError("highlight_end 必须大于 highlight_start")
+        if self.highlight_start < 0:
+            raise ValueError("highlight_start 不能为负数")
+        return self
 
 
 class RetrievalTraceChunk(BaseModel):

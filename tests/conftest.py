@@ -25,6 +25,7 @@ os.environ["RETRIEVAL_MODE"] = "dense"
 os.environ["RETRIEVAL_TRACE_ENABLED"] = "false"
 # 单元测试默认不加载约 2.2 GB 的 Reranker；专项测试会显式开启。
 os.environ["RERANKER_ENABLED"] = "false"
+os.environ["CITATION_PREVIEW_ENABLED"] = "false"
 
 
 def pytest_addoption(parser):
