@@ -1,4 +1,4 @@
-"""从 SQLite 登记的 ready 文档安全重建独立 Chroma 索引。"""
+"""从 SQLite 登记的 ready 文档安全重建独立 Chroma 索引，并补齐页快照。"""
 
 from __future__ import annotations
 
@@ -6,12 +6,21 @@ import argparse
 import json
 import os
 import sqlite3
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Iterable
 
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
+
+
+@dataclass
+class PreparedDocument:
+    """单个文档重建的全部产出：登记记录、chunks 和解析出的规范页。"""
+    record: dict[str, Any]
+    chunks: list[Any]
+    parsed_pages: list[Any]
 
 
 def _resolve_project_path(value: str | Path) -> Path:
@@ -61,8 +70,14 @@ def prepare_documents(
     max_tokens: int | None = None,
     token_counter: Callable[[str], int] | None = None,
     enforce_registered_counts: bool = True,
-) -> list[tuple[dict[str, Any], list[Any]]]:
-    """解析并切分全部源文件；块数不一致时在写向量前终止。"""
+) -> list[PreparedDocument]:
+    """解析并切分全部源文件；产出 PreparedDocument（含 chunks 和规范页）。
+
+    每个文档在切分后立即验证全部 chunk/page 切片强不变量，
+    验证失败即终止，不等待写入 Chroma。
+    """
+    from backend.services.source_page import assemble_source_pages, validate_chunks_against_pages
+
     records = list(records)
     upload_dir = Path(upload_dir)
     missing = [
@@ -96,7 +111,16 @@ def prepare_documents(
                 f"文档 {record['document_id']} 在 SQLite 登记为 {expected} chunks，"
                 f"实际生成 {actual} chunks；为避免登记与索引不一致，已终止重建"
             )
-        prepared.append((record, chunks))
+
+        # 组装规范页并在写入 Chroma 前校验 chunk/page 切片强不变量
+        parsed_pages = assemble_source_pages(pages)
+        validate_chunks_against_pages(chunks, parsed_pages)
+
+        prepared.append(PreparedDocument(
+            record=record,
+            chunks=chunks,
+            parsed_pages=parsed_pages,
+        ))
     return prepared
 
 
@@ -127,6 +151,68 @@ def update_document_chunk_counts(
         raise
     finally:
         connection.close()
+
+
+def _checked_write_page_snapshots(
+    prepared: list[PreparedDocument],
+    metadata_db_path: str | Path,
+    *,
+    expected_counts: dict[str, int],
+    expected_dimension: int,
+    _fake_collection_count: int | None = None,
+    _fake_collection_metadatas: list[dict] | None = None,
+    _fake_collection_embeddings: list[list[float]] | None = None,
+) -> None:
+    """在目标 Chroma 通过全量校验后，事务写入当前 parser 版本的页快照。
+
+    校验失败时页表完全不变。仅替换当前 parser 版本，不删除旧版本。
+    _fake_collection_* 参数仅用于测试，绕过 Chroma 依赖。
+    """
+    from backend.services.page_store import replace_document_pages
+    from backend.services.parser import PARSER_VERSION
+
+    # 二次校验目标 Chroma
+    class _Wrapper:
+        def __init__(self, count, metadatas, embeddings):
+            self._count = count
+            self._metadatas = metadatas
+            self._embeddings = embeddings
+
+        def count(self):
+            return self._count
+
+        def get(self, include):
+            return {
+                "embeddings": self._embeddings,
+                "metadatas": self._metadatas,
+            }
+
+    verify_collection(
+        _Wrapper(
+            _fake_collection_count if _fake_collection_count is not None else sum(
+                len(pd.chunks) for pd in prepared),
+            _fake_collection_metadatas if _fake_collection_metadatas is not None else [],
+            _fake_collection_embeddings if _fake_collection_embeddings is not None else [],
+        ),
+        expected_counts=expected_counts,
+        expected_dimension=expected_dimension,
+    )
+
+    now_iso = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    db_path = str(metadata_db_path)
+    for pd in prepared:
+        document_id = pd.record["document_id"]
+        page_dicts = []
+        for page in pd.parsed_pages:
+            page_dicts.append({
+                "document_id": page.document_id,
+                "parser_version": page.parser_version,
+                "page_number": page.page_number,
+                "parsed_page_text": page.parsed_page_text,
+                "content_type": page.content_type,
+                "created_at": now_iso,
+            })
+        replace_document_pages(document_id, PARSER_VERSION, page_dicts, db_path=db_path)
 
 
 def verify_collection(
@@ -273,29 +359,42 @@ def main(argv: list[str] | None = None) -> int:
     )
     print(
         f"准备重建 {len(prepared)} 份文档、"
-        f"{sum(len(chunks) for _, chunks in prepared)} 个 chunks，模型 {model}"
+        f"{sum(len(pd.chunks) for pd in prepared)} 个 chunks，模型 {model}"
     )
-    for record, chunks in prepared:
-        added = vector_store.add_chunks(chunks)
-        if added != len(chunks):
+    for pd in prepared:
+        added = vector_store.add_chunks(pd.chunks)
+        if added != len(pd.chunks):
             raise RuntimeError(
-                f"文档 {record['document_id']} 写入数量异常：{added}/{len(chunks)}"
+                f"文档 {pd.record['document_id']} 写入数量异常：{added}/{len(pd.chunks)}"
             )
-        print(f"已写入 {record['original_name']}: {added} chunks")
+        print(f"已写入 {pd.record['original_name']}: {added} chunks")
 
     registered_counts = {
         record["document_id"]: int(record["chunk_count"])
         for record in records
     }
     actual_counts = {
-        record["document_id"]: len(chunks)
-        for record, chunks in prepared
+        pd.record["document_id"]: len(pd.chunks)
+        for pd in prepared
     }
     summary = verify_collection(
         vector_store._collection,
         expected_counts=actual_counts,
         expected_dimension=args.expected_dimension,
     )
+
+    # Chroma 全量校验通过后，事务写入页快照
+    from backend.services.parser import PARSER_VERSION
+    _checked_write_page_snapshots(
+        prepared,
+        metadata_db_path,
+        expected_counts=actual_counts,
+        expected_dimension=args.expected_dimension,
+    )
+    page_count = sum(len(pd.parsed_pages) for pd in prepared)
+    summary["parser_version"] = PARSER_VERSION
+    summary["page_count"] = page_count
+
     changed_counts = {
         document_id: {
             "before": registered_counts[document_id],
