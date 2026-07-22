@@ -37,6 +37,7 @@ def _connect(db_path: Optional[str] = None) -> sqlite3.Connection:
     path.parent.mkdir(parents=True, exist_ok=True)
     connection = sqlite3.connect(path, timeout=10)
     connection.row_factory = sqlite3.Row
+    connection.execute("PRAGMA foreign_keys = ON")
     connection.execute(_SCHEMA)
     connection.commit()
     return connection
