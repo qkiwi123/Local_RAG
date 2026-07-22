@@ -166,37 +166,37 @@ def _checked_write_page_snapshots(
     """在目标 Chroma 通过全量校验后，事务写入当前 parser 版本的页快照。
 
     校验失败时页表完全不变。仅替换当前 parser 版本，不删除旧版本。
-    _fake_collection_* 参数仅用于测试，绕过 Chroma 依赖。
+    _fake_collection_* 参数仅用于测试；生产环境由 main() 在调用前完成 verify_collection。
     """
     from backend.services.page_store import replace_document_pages
     from backend.services.parser import PARSER_VERSION
 
-    # 二次校验目标 Chroma
-    class _Wrapper:
-        def __init__(self, count, metadatas, embeddings):
-            self._count = count
-            self._metadatas = metadatas
-            self._embeddings = embeddings
+    # 仅通过 _fake_collection_* 参数显式注入时才执行二次校验（测试路径）
+    if _fake_collection_count is not None or _fake_collection_metadatas is not None:
+        class _Wrapper:
+            def __init__(self, count, metadatas, embeddings):
+                self._count = count
+                self._metadatas = metadatas
+                self._embeddings = embeddings
 
-        def count(self):
-            return self._count
+            def count(self):
+                return self._count
 
-        def get(self, include):
-            return {
-                "embeddings": self._embeddings,
-                "metadatas": self._metadatas,
-            }
+            def get(self, include):
+                return {
+                    "embeddings": self._embeddings,
+                    "metadatas": self._metadatas,
+                }
 
-    verify_collection(
-        _Wrapper(
-            _fake_collection_count if _fake_collection_count is not None else sum(
-                len(pd.chunks) for pd in prepared),
-            _fake_collection_metadatas if _fake_collection_metadatas is not None else [],
-            _fake_collection_embeddings if _fake_collection_embeddings is not None else [],
-        ),
-        expected_counts=expected_counts,
-        expected_dimension=expected_dimension,
-    )
+        verify_collection(
+            _Wrapper(
+                _fake_collection_count or sum(len(pd.chunks) for pd in prepared),
+                _fake_collection_metadatas if _fake_collection_metadatas is not None else [],
+                _fake_collection_embeddings if _fake_collection_embeddings is not None else [],
+            ),
+            expected_counts=expected_counts,
+            expected_dimension=expected_dimension,
+        )
 
     now_iso = datetime.now(timezone.utc).isoformat(timespec="seconds")
     db_path = str(metadata_db_path)
