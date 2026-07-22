@@ -133,6 +133,25 @@ class TestParseDocument:
         assert "| 合并说明 |  |" in table_text
         assert "|  |  |" not in table_text
 
+    def test_parser_version_is_injected_into_every_block(self):
+        """每种格式的每个 parser block 都必须携带固定的 PARSER_VERSION。"""
+        from backend.services.parser import PARSER_VERSION
+
+        fixtures = [
+            "tests/fixtures/sample.pdf",
+            "tests/fixtures/sample.txt",
+            "tests/fixtures/sample.docx",
+        ]
+        for fixture_path in fixtures:
+            pages = parse_document(fixture_path)
+            assert len(pages) > 0, f"{fixture_path} returned no pages"
+            for page in pages:
+                assert page.get("parser_version") == PARSER_VERSION, (
+                    f"{fixture_path} page {page['page_number']} "
+                    f"expected parser_version={PARSER_VERSION}, "
+                    f"got {page.get('parser_version')}"
+                )
+
     def test_docx_table_keeps_virtual_page_number(self, tmp_path):
         source = tmp_path / "page-number.docx"
         document = Document()

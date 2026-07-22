@@ -86,6 +86,7 @@ def add_chunks(chunks: List[DocumentChunk]) -> int:
             "end_char": chunk.metadata.end_char,
             "char_count": chunk.metadata.char_count,
             "token_count": chunk.metadata.token_count,
+            "parser_version": chunk.metadata.parser_version,
         }
         for chunk in chunks
     ]
@@ -236,3 +237,25 @@ def get_all_chunks() -> List[dict]:
             results.get("metadatas", []),
         )
     ]
+
+
+def get_chunk_by_id(chunk_id: str) -> Optional[dict]:
+    """按精确 chunk ID 从 Chroma 读取单条 chunk 的 content 和 metadata。
+
+    Returns:
+        dict with keys chunk_id, content, metadata；若不存在返回 None。
+    """
+    result = _collection.get(
+        ids=[chunk_id],
+        include=["documents", "metadatas"],
+    )
+    ids = result.get("ids", [])
+    if not ids:
+        return None
+    documents = result.get("documents", [])
+    metadatas = result.get("metadatas", [])
+    return {
+        "chunk_id": ids[0],
+        "content": documents[0] if documents else "",
+        "metadata": metadatas[0] if metadatas else {},
+    }

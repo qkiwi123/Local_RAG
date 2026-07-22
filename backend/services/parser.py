@@ -11,6 +11,9 @@ from pathlib import Path
 from typing import List
 
 
+PARSER_VERSION = "text-v1-pypdf2"
+
+
 _FULLWIDTH_ALNUM_TRANSLATION = str.maketrans({
     codepoint: codepoint - 0xFEE0
     for start, end in (
@@ -232,10 +235,11 @@ def parse_document(
     parse_func = _PARSER_MAP[suffix]
     pages = parse_func(file_path)
 
-    # 将文档名注入每一页的结果中，方便后续 chunker 使用
+    # 将文档名、parser 版本等元信息注入每一页的结果中
     for page in pages:
         page["document_name"] = document_name
         page["document_id"] = document_id
         page.setdefault("content_type", "paragraph")
+        page["parser_version"] = PARSER_VERSION
 
     return pages

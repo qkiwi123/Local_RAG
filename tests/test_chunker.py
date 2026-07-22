@@ -254,3 +254,32 @@ class TestChunkDocument:
 
         with pytest.raises(ValueError, match="overlap"):
             chunk_document(pages, chunk_size=10, overlap=10)
+
+    def test_parser_version_propagated_to_metadata(self):
+        """parser_version 从 page block 传播到每个 chunk 的 metadata。"""
+        pages = [
+            {
+                "text": "Hello World",
+                "page_number": 1,
+                "document_name": "test.pdf",
+                "document_id": "doc-1",
+                "parser_version": "text-v1-pypdf2",
+            },
+        ]
+        chunks = chunk_document(pages, chunk_size=500, overlap=50)
+        assert len(chunks) == 1
+        assert chunks[0].metadata.parser_version == "text-v1-pypdf2"
+
+    def test_parser_version_empty_for_legacy_blocks(self):
+        """旧数据 block 没有 parser_version 时 chunk metadata 默认空字符串。"""
+        pages = [
+            {
+                "text": "Hello World",
+                "page_number": 1,
+                "document_name": "test.pdf",
+                "document_id": "doc-1",
+            },
+        ]
+        chunks = chunk_document(pages, chunk_size=500, overlap=50)
+        assert len(chunks) == 1
+        assert chunks[0].metadata.parser_version == ""

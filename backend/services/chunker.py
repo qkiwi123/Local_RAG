@@ -273,6 +273,7 @@ def chunk_document(
                         end_char=end_char,
                         char_count=len(chunk_text),
                         token_count=counter(chunk_text),
+                        parser_version=page.get("parser_version", ""),
                     ),
                 )
             )

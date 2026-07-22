@@ -27,6 +27,7 @@ def seeded_vector_store():
                 document_name="test_handbook.pdf",
                 page_number=1,
                 chunk_index=0,
+                parser_version="text-v1-pypdf2",
             ),
         ),
         DocumentChunk(
@@ -36,6 +37,7 @@ def seeded_vector_store():
                 document_name="test_handbook.pdf",
                 page_number=2,
                 chunk_index=0,
+                parser_version="text-v1-pypdf2",
             ),
         ),
     ]
@@ -202,6 +204,7 @@ class TestVectorStore:
             "end_char": 14,
             "char_count": 4,
             "token_count": 6,
+            "parser_version": "",
         }]
 
     def test_get_all_chunks_returns_sparse_index_contract(self, monkeypatch):
@@ -256,3 +259,21 @@ class TestVectorStore:
         assert vector_store.get_index_revision() == 101
         assert vector_store.delete_document_by_id("doc-1") is True
         assert vector_store.get_index_revision() == 102
+
+
+class TestGetChunkById:
+    """按 chunk ID 精确读取向量存储中的 chunk。"""
+
+    def test_get_existing_chunk_by_id(self):
+        from backend.services.vector_store import get_chunk_by_id
+        result = get_chunk_by_id("test-handbook_p1_c0")
+        assert result is not None
+        assert result["chunk_id"] == "test-handbook_p1_c0"
+        assert "annual leave" in result["content"].lower()
+        assert result["metadata"]["document_name"] == "test_handbook.pdf"
+        assert result["metadata"]["parser_version"] == "text-v1-pypdf2"
+
+    def test_get_nonexistent_chunk_returns_none(self):
+        from backend.services.vector_store import get_chunk_by_id
+        result = get_chunk_by_id("nonexistent-chunk-id")
+        assert result is None
