@@ -17,14 +17,32 @@ def _result(
     page_number: int,
     content: str,
     chunk_id: str,
+    *,
+    document_id: str | None = None,
+    parser_version: str | None = None,
+    content_type: str | None = None,
+    start_char: int | None = None,
+    end_char: int | None = None,
 ) -> dict:
+    meta = {
+        "document_name": document_name,
+        "page_number": page_number,
+    }
+    if document_id is not None:
+        meta["document_id"] = document_id
+    if parser_version is not None:
+        meta["parser_version"] = parser_version
+    if content_type is not None:
+        meta["content_type"] = content_type
+    if start_char is not None:
+        meta["start_char"] = start_char
+    if end_char is not None:
+        meta["end_char"] = end_char
+
     return {
         "chunk_id": chunk_id,
         "content": content,
-        "metadata": {
-            "document_name": document_name,
-            "page_number": page_number,
-        },
+        "metadata": meta,
         "distance": 0.2,
     }
 
@@ -106,6 +124,104 @@ class TestExtractCitations:
 
     def test_empty_answer(self):
         assert extract_citations("", []) == []
+
+    def test_preview_available_when_metadata_complete_and_enabled(self):
+        """metadata 完整 + 开关开启 = preview_available=True。"""
+        answer = "【来源1】"
+        retrieval_results = [
+            _result(
+                "doc.pdf", 1, "chunk content", "chunk-1",
+                document_id="doc-1",
+                parser_version="text-v1-pypdf2",
+                content_type="paragraph",
+                start_char=0,
+                end_char=12,
+            ),
+        ]
+        citations = extract_citations(answer, retrieval_results, preview_enabled=True)
+        assert len(citations) == 1
+        assert citations[0].preview_available is True
+        assert citations[0].document_id == "doc-1"
+        assert citations[0].parser_version == "text-v1-pypdf2"
+        assert citations[0].content_type == "paragraph"
+        assert citations[0].start_char == 0
+        assert citations[0].end_char == 12
+
+    def test_preview_not_available_when_disabled(self):
+        """开关关闭时 preview_available=False 无论 metadata 多完整。"""
+        answer = "【来源1】"
+        retrieval_results = [
+            _result(
+                "doc.pdf", 1, "chunk content", "chunk-1",
+                document_id="doc-1",
+                parser_version="text-v1-pypdf2",
+                start_char=0,
+                end_char=12,
+            ),
+        ]
+        citations = extract_citations(answer, retrieval_results, preview_enabled=False)
+        assert len(citations) == 1
+        assert citations[0].preview_available is False
+
+    def test_preview_not_available_for_legacy_metadata(self):
+        """旧 metadata 缺少必要字段时 preview_available=False。"""
+        answer = "【来源1】"
+        retrieval_results = [_result("doc.pdf", 1, "chunk content", "chunk-1")]
+        citations = extract_citations(answer, retrieval_results, preview_enabled=True)
+        assert len(citations) == 1
+        assert citations[0].preview_available is False
+
+    def test_preview_not_available_with_zero_start_char(self):
+        """start_char=0 是合法值，不应被 truthy 判断误判。"""
+        answer = "【来源1】"
+        retrieval_results = [
+            _result(
+                "doc.pdf", 1, "chunk content", "chunk-1",
+                document_id="doc-1",
+                parser_version="text-v1-pypdf2",
+                start_char=0,
+                end_char=12,
+            ),
+        ]
+        citations = extract_citations(answer, retrieval_results, preview_enabled=True)
+        assert len(citations) == 1
+        assert citations[0].preview_available is True
+        assert citations[0].start_char == 0
+
+    def test_excerpt_remains_truncated(self):
+        """excerpt 最多 200 字，不包含完整页文本。"""
+        long_content = "x" * 300
+        answer = "【来源1】"
+        retrieval_results = [
+            _result(
+                "doc.pdf", 1, long_content, "chunk-1",
+                document_id="doc-1",
+                parser_version="text-v1-pypdf2",
+                start_char=10,
+                end_char=80,
+            ),
+        ]
+        citations = extract_citations(answer, retrieval_results, preview_enabled=True)
+        assert len(citations) == 1
+        assert len(citations[0].excerpt) == 200
+
+    def test_old_format_citation_still_works(self):
+        """旧格式检索 metadata 仍能生成文档名、页码和 excerpt。"""
+        answer = "【来源1】"
+        retrieval_results = [
+            {
+                "chunk_id": "old-chunk",
+                "content": "旧格式内容. " * 10,
+                "metadata": {"document_name": "old.pdf", "page_number": 5},
+                "distance": 0.3,
+            },
+        ]
+        citations = extract_citations(answer, retrieval_results)
+        assert len(citations) == 1
+        assert citations[0].document_name == "old.pdf"
+        assert citations[0].page_number == 5
+        assert citations[0].excerpt
+        assert citations[0].preview_available is False
 
 
 class TestFormatAnswerWithCitations:

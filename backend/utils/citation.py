@@ -17,7 +17,9 @@ _SOURCE_PATTERN = re.compile(r"【来源\s*(\d+)】")
 
 def extract_citations(
     answer: str,
-    retrieval_results: List[dict]
+    retrieval_results: List[dict],
+    *,
+    preview_enabled: bool = False,
 ) -> List[Citation]:
     """
     从 LLM 回答中提取 【来源N】，按 N 映射回本次检索结果。
@@ -31,6 +33,7 @@ def extract_citations(
     Args:
         answer: LLM 生成的完整回答文本
         retrieval_results: retrieve() 返回的检索结果列表
+        preview_enabled: 全局预览开关状态，决定 preview_available
 
     Returns:
         Citation 列表（去重）
@@ -56,12 +59,38 @@ def extract_citations(
         if not doc_name or not isinstance(page_num, int):
             continue
 
+        document_id = meta.get("document_id")
+        parser_version = meta.get("parser_version")
+        content_type = meta.get("content_type")
+        start_char = meta.get("start_char")
+        end_char = meta.get("end_char")
+        chunk_id = result.get("chunk_id")
+
+        preview_available = (
+            preview_enabled
+            and document_id is not None
+            and parser_version is not None
+            and chunk_id is not None
+            and start_char is not None
+            and end_char is not None
+            and isinstance(start_char, int)
+            and isinstance(end_char, int)
+            and start_char >= 0
+            and end_char > start_char
+        )
+
         citations.append(Citation(
             source_id=source_id,
-            chunk_id=result.get("chunk_id"),
+            chunk_id=chunk_id,
             document_name=doc_name,
             page_number=page_num,
             excerpt=result.get("content", "")[:200],
+            document_id=document_id,
+            parser_version=parser_version,
+            content_type=content_type,
+            start_char=start_char,
+            end_char=end_char,
+            preview_available=preview_available,
         ))
 
     return citations

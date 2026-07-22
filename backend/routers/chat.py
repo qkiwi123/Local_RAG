@@ -11,6 +11,7 @@ from time import perf_counter
 
 from fastapi import APIRouter, HTTPException
 from backend.models.schemas import ChatRequest, ChatResponse
+from backend.config import settings
 from backend.services.retriever import (
     retrieve_with_trace,
     format_retrieval_context,
@@ -76,7 +77,10 @@ async def chat(request: ChatRequest):
     llm_ms = (perf_counter() - llm_started) * 1000
 
     # 4. 提取引用来源
-    citations = extract_citations(answer, retrieval_results)
+    citations = extract_citations(
+        answer, retrieval_results,
+        preview_enabled=settings.CITATION_PREVIEW_ENABLED,
+    )
     trace = finalize_chat_trace(
         retrieval.trace,
         context=context,
