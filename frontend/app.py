@@ -26,6 +26,7 @@ try:
         upload_selection_complete,
     )
     from frontend.trace_view import render_retrieval_trace
+    from frontend.citation_view import render_citations
 except ModuleNotFoundError as error:
     if error.name != "frontend":
         raise
@@ -37,6 +38,7 @@ except ModuleNotFoundError as error:
         upload_selection_complete,
     )
     from trace_view import render_retrieval_trace
+    from citation_view import render_citations
 
 # ─── 页面配置 ────────────────────────────────────────
 st.set_page_config(
@@ -333,15 +335,11 @@ for message_index, msg in enumerate(st.session_state.messages):
     with st.chat_message(msg["role"]):
         st.markdown(msg["content"])
         if msg.get("citations"):
-            with st.expander("📎 参考来源", expanded=False):
-                for i, citation in enumerate(msg["citations"], 1):
-                    source_id = citation.get("source_id", i)
-                    st.markdown(
-                        f"**【来源{source_id}】《{citation['document_name']}》"
-                        f"第{citation['page_number']}页**"
-                    )
-                    if citation.get("excerpt"):
-                        st.caption(f"> {citation['excerpt'][:150]}...")
+            render_citations(
+                msg["citations"],
+                f"history_{message_index}",
+                BACKEND_URL,
+            )
         if msg["role"] == "assistant":
             render_retrieval_trace(msg.get("trace"), str(message_index))
 
@@ -369,15 +367,11 @@ if question := st.chat_input("请输入您的问题..."):
         st.markdown(answer)
 
         if citations:
-            with st.expander("📎 参考来源", expanded=False):
-                for i, citation in enumerate(citations, 1):
-                    source_id = citation.get("source_id", i)
-                    st.markdown(
-                        f"**【来源{source_id}】《{citation['document_name']}》"
-                        f"第{citation['page_number']}页**"
-                    )
-                    if citation.get("excerpt"):
-                        st.caption(f"> {citation['excerpt'][:150]}...")
+            render_citations(
+                citations,
+                f"new_{len(st.session_state.messages)}",
+                BACKEND_URL,
+            )
 
         render_retrieval_trace(
             trace,
