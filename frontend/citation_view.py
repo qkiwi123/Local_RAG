@@ -13,16 +13,7 @@ import streamlit as st
 
 
 def build_highlight_html(text: str, start: int, end: int) -> str:
-    """将 text 中 [start, end) 区间用 <mark> 包裹，其余全部 HTML 转义。
-
-    Args:
-        text: 完整页文本（原始）
-        start: 高亮起始偏移（含）
-        end: 高亮结束偏移（不含）
-
-    Returns:
-        HTML 安全字符串，用 white-space: pre-wrap 包裹。
-    """
+    """将 text 中 [start, end) 区间用 <mark> 包裹，其余全部 HTML 转义。"""
     if not text:
         raise ValueError("text 不能为空")
     if start < 0:
@@ -49,15 +40,14 @@ def fetch_citation_preview(
 ) -> dict[str, Any] | None:
     """从后端按需获取引用原文预览。
 
-    Returns:
-        预览数据 dict 或 None（网络错误/404/409 等）。
+    返回成功预览数据；失败时返回包含错误信息的结构，便于 UI 区分提示。
     """
     import httpx
 
     document_id = citation.get("document_id")
     chunk_id = citation.get("chunk_id")
     if not document_id or not chunk_id:
-        return None
+        return {"ok": False, "message": "引用缺少文档或 chunk 信息"}
 
     url = f"{backend_url}/api/citations/{document_id}/chunks/{chunk_id}/preview"
     try:
@@ -65,21 +55,26 @@ def fetch_citation_preview(
             resp = client.get(url)
         if resp.status_code == 200:
             return resp.json()
-        return None
-    except Exception:
-        return None
+        try:
+            detail = resp.json().get("detail", "未知错误")
+        except Exception:
+            detail = "未知错误"
+        return {
+            "ok": False,
+            "status_code": resp.status_code,
+            "message": detail,
+        }
+    except Exception as error:
+        return {"ok": False, "message": f"无法连接后端: {error}"}
 
+
+# 以下渲染逻辑保持不变
 
 def render_citations(
     citations: list[dict[str, Any]],
     message_key: str,
     backend_url: str,
 ) -> None:
-    """在 expander 内渲染引用列表 + 预览按钮 + dialog。
-
-    preview_available=False 时不显示预览按钮。
-    多条引用共享同一个 expander，但每条引用使用独立 dialog 和 key。
-    """
     if not citations:
         return
 
@@ -88,23 +83,14 @@ def render_citations(
             source_id = citation.get("source_id", i)
             document_name = citation.get("document_name", "未知文档")
             page_number = citation.get("page_number", "?")
-
-            st.markdown(
-                f"**【来源{source_id}】《{document_name}》第{page_number}页**"
-            )
+            st.markdown(f"**【来源{source_id}】《{document_name}》第{page_number}页**")
             excerpt = citation.get("excerpt", "")
             if excerpt:
                 st.caption(f"> {excerpt[:150]}...")
-
             if citation.get("preview_available"):
                 key = f"preview_btn_{message_key}_{source_id}_{citation.get('chunk_id', i)}"
                 if st.button("🔍 查看原文", key=key):
-                    _show_preview_dialog(
-                        backend_url,
-                        citation,
-                        message_key,
-                        source_id,
-                    )
+                    _show_preview_dialog(backend_url, citation, message_key, source_id)
 
 
 @st.dialog("引用原文预览", width="large")
@@ -114,12 +100,12 @@ def _show_preview_dialog(
     message_key: str,
     source_id: int,
 ) -> None:
-    """预览对话框：从后端获取数据并展示安全高亮页文本。"""
     with st.spinner("正在加载原文..."):
         preview = fetch_citation_preview(backend_url, citation)
 
-    if preview is None:
-        st.error("该引用暂无可用原文预览。")
+    if not preview or preview.get("ok") is False:
+        message = preview.get("message", "该引用暂无可用原文预览。") if preview else "该引用暂无可用原文预览。"
+        st.error(message)
         return
 
     st.markdown(
@@ -129,13 +115,11 @@ def _show_preview_dialog(
         f"**Chunk ID**：`{preview.get('chunk_id', '')}`"
     )
 
-    parsed_page_text = preview.get("parsed_page_text", "")
-    highlight_start = preview.get("highlight_start", 0)
-    highlight_end = preview.get("highlight_end", 0)
-
     try:
         highlighted_html = build_highlight_html(
-            parsed_page_text, highlight_start, highlight_end,
+            preview.get("parsed_page_text", ""),
+            preview.get("highlight_start", 0),
+            preview.get("highlight_end", 0),
         )
         st.markdown("**📄 完整解析页（被引用部分已高亮）**")
         st.markdown(highlighted_html, unsafe_allow_html=True)
