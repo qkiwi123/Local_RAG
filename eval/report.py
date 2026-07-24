@@ -37,6 +37,20 @@ def _blockquote(text: str) -> str:
     return "\n".join(f"> {line}" if line else ">" for line in text.split("\n"))
 
 
+def _format_location(metadata: dict) -> str:
+    """Format current page metadata and future structured source locators."""
+    location_label = metadata.get("location_label")
+    if location_label:
+        return str(location_label)
+    slide_number = metadata.get("slide_number")
+    if slide_number is not None:
+        return f"第 {slide_number} 张幻灯片"
+    page_number = metadata.get("page_number")
+    if page_number is not None:
+        return f"第{page_number}页"
+    return "位置未知"
+
+
 def _format_retrieval_debug(row: dict) -> str:
     """格式化允许缺少 Dense distance 的混合检索调试信息。"""
     metadata = row["metadata"]
@@ -50,7 +64,7 @@ def _format_retrieval_debug(row: dict) -> str:
         if row.get(key) is not None:
             scores.append(f"{label}={row[key]:.3f}")
     return (
-        f"《{metadata.get('document_name')}》第{metadata.get('page_number')}页"
+        f"《{metadata.get('document_name')}》{_format_location(metadata)}"
         f"({', '.join(scores)})"
     )
 
@@ -71,8 +85,8 @@ def write_report_md(run_dir: Path, payload: dict, questions: List[dict], answers
         f"- 入库：{payload['ingest']['total_chunks']} chunks，"
         f"耗时 {payload['ingest']['ingest_s']}s",
         "",
-        "> 注：LLM temperature=0.3 非零，回答类指标（关键点/严格准确率/引用）单次 run 波动 <5% 视为噪声；"
-        "检索类指标（hit_rate/recall/MRR）是确定性的。",
+        "> 注：LLM 回答类指标可能存在非确定性；在取得重复运行证据前不预设固定噪声阈值，"
+        "实际波动需通过重复运行测量。检索类指标在模型、语料和配置完全固定时应保持确定。",
         "",
         "## 汇总指标",
         "",

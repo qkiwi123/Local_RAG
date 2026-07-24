@@ -111,8 +111,8 @@ Hybrid + Reranker、Dense + Reranker 五组对照。原始结果写入 `retrieva
 | false_refusal_rate | 可回答题中被判定为拒答的题目占比，越低越好 | 41.2% |
 | unanswerable_citation_fp | 不可回答题中出现引用标记的题目数量，越低越好 | 0 |
 
-**噪声界**：LLM temperature=0.3，回答类指标（keypoint/strict/citation）单次波动 <5% 视为噪声；
-检索类指标（hit_rate/recall/mrr）完全确定，任何变化都真实。
+**运行波动**：LLM 回答类指标可能存在非确定性；在取得重复运行证据前不预设固定噪声阈值，
+实际波动需通过重复运行测量。检索类指标在模型、语料和配置完全固定时应保持确定。
 
 ## 已知设计要点（改动相关代码前必读）
 

@@ -110,3 +110,53 @@ def test_format_retrieval_debug_handles_sparse_only_result():
     assert "《doc.pdf》第7页" in text
     assert "dist=—" in text
     assert "bm25=2.300" in text
+
+
+def test_format_retrieval_debug_prefers_explicit_location_label():
+    from eval.report import _format_retrieval_debug
+
+    row = {
+        "content": "标题",
+        "metadata": {
+            "document_name": "slides.pptx",
+            "location_label": "第 8 张幻灯片 · RAG 评测",
+            "slide_number": 8,
+            "page_number": 99,
+        },
+        "distance": 0.2,
+    }
+
+    assert "《slides.pptx》第 8 张幻灯片 · RAG 评测" in _format_retrieval_debug(
+        row
+    )
+
+
+def test_format_retrieval_debug_uses_slide_fallback():
+    from eval.report import _format_retrieval_debug
+
+    row = {
+        "content": "标题",
+        "metadata": {"document_name": "slides.pptx", "slide_number": 8},
+        "distance": 0.2,
+    }
+
+    assert "《slides.pptx》第 8 张幻灯片" in _format_retrieval_debug(row)
+
+
+def test_generated_report_does_not_claim_unmeasured_five_percent_noise(tmp_path):
+    payload = _payload()
+
+    write_report_md(tmp_path, payload, [], {})
+
+    report = (tmp_path / "report.md").read_text(encoding="utf-8")
+    assert "波动 <5%" not in report
+    assert "实际波动需通过重复运行测量" in report
+
+
+def test_readme_does_not_claim_unmeasured_five_percent_noise():
+    readme = (
+        Path(__file__).parents[1] / "eval" / "README.md"
+    ).read_text(encoding="utf-8")
+
+    assert "波动 <5%" not in readme
+    assert "实际波动需通过重复运行测量" in readme
