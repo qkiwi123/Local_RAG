@@ -34,6 +34,7 @@ from pathlib import Path
 
 EVAL_DIR = Path(__file__).resolve().parent
 REPO_ROOT = EVAL_DIR.parent
+DEFAULT_DATASET = EVAL_DIR / "dataset" / "questions_v2.json"
 
 
 def _setup_env(args) -> Path:
@@ -468,7 +469,7 @@ def main():
 
     p_run = sub.add_parser("run", help="运行一次完整评估")
     p_run.add_argument("--label", required=True, help="运行标签，如 baseline / p0-1-bge")
-    p_run.add_argument("--dataset", default=str(EVAL_DIR / "dataset" / "questions.json"))
+    p_run.add_argument("--dataset", default=str(DEFAULT_DATASET))
     p_run.add_argument("--corpus", default=str(EVAL_DIR / "corpus"))
     p_run.add_argument("--limit", type=int, help="只跑前 N 题（冒烟测试）")
     p_run.add_argument("--overwrite", action="store_true", help="覆盖同名 label 的已有报告")
@@ -540,7 +541,7 @@ def main():
     p_threshold.add_argument("--label", required=True, help="阈值扫描标签")
     p_threshold.add_argument(
         "--dataset",
-        default=str(EVAL_DIR / "dataset" / "questions.json"),
+        default=str(DEFAULT_DATASET),
     )
     p_threshold.add_argument(
         "--thresholds",
@@ -558,7 +559,7 @@ def main():
     )
     p_retrieval.add_argument("--label", required=True, help="实验标签")
     p_retrieval.add_argument(
-        "--dataset", default=str(EVAL_DIR / "dataset" / "questions.json")
+        "--dataset", default=str(DEFAULT_DATASET)
     )
     p_retrieval.add_argument("--corpus", default=str(EVAL_DIR / "corpus"))
     p_retrieval.add_argument(
@@ -591,7 +592,7 @@ def main():
     p_hybrid.add_argument("--label", required=True, help="实验标签")
     p_hybrid.add_argument(
         "--dataset",
-        default=str(EVAL_DIR / "dataset" / "questions_v2.json"),
+        default=str(DEFAULT_DATASET),
     )
     p_hybrid.add_argument("--corpus", default=str(EVAL_DIR / "corpus"))
     p_hybrid.add_argument("--overwrite", action="store_true")

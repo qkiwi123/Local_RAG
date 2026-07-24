@@ -8,7 +8,7 @@
 **必须**：在仓库根目录 `D:\ProgramFiles\RAG` 下、用项目 venv 的 Python 运行。
 
 ```bash
-# 完整评估（21 题，最多 21 次 DeepSeek 调用；空检索会短路）
+# 完整评估（默认 v2 的 27 题，最多 27 次 DeepSeek 调用；空检索会短路）
 PYTHONIOENCODING=utf-8 ./.venv/Scripts/python.exe -m eval.eval run --label <标签名>
 
 # 对比两次运行（差值表 + 回归题清单，不消耗 API）
@@ -34,6 +34,8 @@ HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1 PYTHONIOENCODING=utf-8 \
 ```
 
 可选参数：
+- `--dataset <路径>`：覆盖数据集；`run`、`threshold-sweep`、`retrieval-sweep` 和
+  `hybrid-ablation` 默认均使用 `questions_v2.json`
 - `--overwrite`：同名 label 已有报告时必须加，否则拒绝运行（防覆盖历史数据）
 - `--embedding-model <名>`：临时换 embedding 模型（模型必须已在 HuggingFace 本地缓存，
   embedding.py 是 `local_files_only=True`——这是刻意的，本机到 HF 网络不稳定，勿去掉；
@@ -73,7 +75,7 @@ HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1 PYTHONIOENCODING=utf-8 \
 `retrieval-k<N>.jsonl`，并汇总为 `retrieval-sweep.json` 和 `retrieval-sweep.md`；它不会
 调用 DeepSeek，适合先确定候选数，再用正式 `run --reranker` 验证回答与引用指标。
 
-`hybrid-ablation` 默认使用 `questions_v2.json`，一次入库后固定执行 Dense、BM25、Hybrid、
+四个评测命令默认均使用 `questions_v2.json`。`hybrid-ablation` 一次入库后固定执行 Dense、BM25、Hybrid、
 Hybrid + Reranker、Dense + Reranker 五组对照。原始结果写入 `retrieval-<模式>.jsonl`，汇总为
 `hybrid-ablation.json` 和 `hybrid-ablation.md`。最后一组是当前生产链路的同数据集控制组，
 用于判断 Hybrid + Reranker 是否真的值得部署。
@@ -155,8 +157,8 @@ PYTHONIOENCODING=utf-8 ./.venv/Scripts/python.exe -m eval.eval compare \
 
 - 语料：`eval/corpus/` 4 篇中文文档（docx×2、pdf、txt），已随 git 固化，勿随意改动
   （改动会使历史 run 不可比）。
-- 数据集：`eval/dataset/questions.json` 21 题——fact 6、numeric 4、table 2、multi_doc 3、
-  procedural 2、unanswerable 4（2 域外 + 2 域内相邻陷阱题 q20/q21）。
-- P2-1 数据集：`eval/dataset/questions_v2.json` 保留上述 21 题并追加 6 道 lexical/精确术语题，
-  用于观测 BM25 与 Hybrid 的增量；跨版本报告不能直接计算回归。
+- 历史 v1 数据集：`eval/dataset/questions.json` 21 题——fact 6、numeric 4、table 2、
+  multi_doc 3、procedural 2、unanswerable 4（2 域外 + 2 域内相邻陷阱题 q20/q21）。
+- 默认 legacy regression：`eval/dataset/questions_v2.json` 保留上述 21 题并追加 6 道
+  lexical/精确术语题，用于观测 BM25 与 Hybrid 的增量；跨版本报告不能直接计算回归。
 - 若增删题目：bump `version` 字段，并注意历史 report 的 `dataset_version` 不同则不可直接对比。

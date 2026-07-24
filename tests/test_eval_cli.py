@@ -1,4 +1,9 @@
+import sys
+from pathlib import Path
+
 import pytest
+
+import eval.eval as eval_cli
 
 
 @pytest.mark.parametrize(
@@ -17,3 +22,51 @@ def test_progress_status_is_safe_for_windows_gbk_console(question, row, expected
 
     assert status == expected
     status.encode("gbk")
+
+
+@pytest.mark.parametrize(
+    ("argv", "handler_name"),
+    [
+        (["eval", "run", "--label", "test"], "cmd_run"),
+        (
+            [
+                "eval",
+                "threshold-sweep",
+                "raw.jsonl",
+                "--label",
+                "test",
+                "--thresholds",
+                "0.67",
+                "--output-dir",
+                "out",
+            ],
+            "cmd_threshold_sweep",
+        ),
+        (
+            [
+                "eval",
+                "retrieval-sweep",
+                "--label",
+                "test",
+                "--candidate-ks",
+                "15",
+            ],
+            "cmd_retrieval_sweep",
+        ),
+        (["eval", "hybrid-ablation", "--label", "test"], "cmd_hybrid_ablation"),
+    ],
+)
+def test_all_evaluation_commands_default_to_questions_v2(
+    monkeypatch, argv, handler_name
+):
+    captured = {}
+
+    def capture(args):
+        captured["dataset"] = args.dataset
+
+    monkeypatch.setattr(eval_cli, handler_name, capture)
+    monkeypatch.setattr(sys, "argv", argv)
+
+    eval_cli.main()
+
+    assert Path(captured["dataset"]).name == "questions_v2.json"
