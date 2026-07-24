@@ -37,6 +37,12 @@ class TestNormDocName:
     def test_extension_case_insensitive(self):
         assert norm_doc_name("报告.PDF") == norm_doc_name("报告")
 
+    def test_strips_markdown_extension(self):
+        assert norm_doc_name("《课程大纲.md》") == norm_doc_name("课程大纲")
+
+    def test_strips_powerpoint_extension(self):
+        assert norm_doc_name("课件.PPTX") == norm_doc_name("课件")
+
 
 # ─── 引用解析 ────────────────────────────────────────────
 

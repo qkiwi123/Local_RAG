@@ -45,7 +45,7 @@ def norm(s: str) -> str:
 def norm_doc_name(name: str) -> str:
     """文档名归一化：去《》书名号、去扩展名（LLM 引用时常省略 .docx/.pdf）。"""
     name = name.strip().strip("《》")
-    for ext in (".pdf", ".docx", ".txt", ".doc"):
+    for ext in (".pdf", ".docx", ".txt", ".doc", ".md", ".pptx"):
         if name.lower().endswith(ext):
             name = name[: -len(ext)]
             break
