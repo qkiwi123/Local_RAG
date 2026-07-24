@@ -35,7 +35,7 @@
 **Files:**
 - Create: `docs/superpowers/baselines/2026-07-24-phase-0-baseline.md`
 
-- [ ] **Step 1: Record the immutable Git and test baseline**
+- [x] **Step 1: Record the immutable Git and test baseline**
 
 Add the branch-point commit `5d2a2a35112f803bb6fcdc1604ebee47e0eb17ee`, the command:
 
@@ -51,7 +51,7 @@ and the observed result:
 
 Classify the warning count as a known log-signal problem, not a Phase 0 failure and not evidence that the warnings are harmless.
 
-- [ ] **Step 2: Record dataset and corpus hashes**
+- [x] **Step 2: Record dataset and corpus hashes**
 
 Use the already measured SHA-256 values:
 
@@ -74,7 +74,7 @@ LLM应用指南_RAG测试文档.pdf
 
 Also record that `eval/results/` contains 46 checked-in historical evidence files.
 
-- [ ] **Step 3: Record production paths and the deferred cleanup list**
+- [x] **Step 3: Record production paths and the deferred cleanup list**
 
 Document the resolved current production paths:
 
@@ -102,7 +102,7 @@ D:\ProgramFiles\RAG\data\metadata.db.bak-20260722-165150
 
 The preservation list must include `eval/corpus/`, `eval/dataset/`, `eval/results/`, the repository source, and the real `.env`.
 
-- [ ] **Step 4: Lock the retained behavior contract**
+- [x] **Step 4: Lock the retained behavior contract**
 
 Reference these existing executable tests as the minimum contract:
 
@@ -126,7 +126,7 @@ Do not rename test classes speculatively; verify the collected node IDs with:
 & 'D:\ProgramFiles\RAG\.venv\Scripts\python.exe' -m pytest --collect-only -q tests/test_api.py tests/test_retriever.py tests/test_citation.py tests/test_citation_preview.py
 ```
 
-- [ ] **Step 5: Commit the baseline record**
+- [x] **Step 5: Commit the baseline record**
 
 ```powershell
 git add docs/superpowers/baselines/2026-07-24-phase-0-baseline.md
@@ -140,7 +140,7 @@ git commit -m "docs: capture phase 0 RAG baseline"
 - Modify: `eval/eval.py`
 - Modify: `eval/README.md`
 
-- [ ] **Step 1: Write failing CLI-default tests**
+- [x] **Step 1: Write failing CLI-default tests**
 
 Append:
 
@@ -199,7 +199,7 @@ def test_all_evaluation_commands_default_to_questions_v2(
     assert Path(captured["dataset"]).name == "questions_v2.json"
 ```
 
-- [ ] **Step 2: Run the tests and verify RED**
+- [x] **Step 2: Run the tests and verify RED**
 
 Run:
 
@@ -209,7 +209,7 @@ Run:
 
 Expected: three parameter cases fail because they resolve to `questions.json`; `hybrid-ablation` already passes.
 
-- [ ] **Step 3: Add and use one default constant**
+- [x] **Step 3: Add and use one default constant**
 
 Near `EVAL_DIR` in `eval/eval.py`, add:
 
@@ -225,7 +225,7 @@ default=str(DEFAULT_DATASET)
 
 Update `eval/README.md` so `run`, `threshold-sweep`, `retrieval-sweep`, and `hybrid-ablation` are documented as using the 27-question v2 legacy regression set unless `--dataset` is supplied. Keep `questions.json` documented as historical v1, not the default.
 
-- [ ] **Step 4: Run the focused tests and verify GREEN**
+- [x] **Step 4: Run the focused tests and verify GREEN**
 
 ```powershell
 & 'D:\ProgramFiles\RAG\.venv\Scripts\python.exe' -m pytest tests/test_eval_cli.py -q
@@ -233,7 +233,7 @@ Update `eval/README.md` so `run`, `threshold-sweep`, `retrieval-sweep`, and `hyb
 
 Expected: all tests pass.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```powershell
 git add eval/eval.py eval/README.md tests/test_eval_cli.py
@@ -246,7 +246,7 @@ git commit -m "fix: default evaluation commands to dataset v2"
 - Modify: `tests/test_eval_metrics.py`
 - Modify: `eval/metrics.py`
 
-- [ ] **Step 1: Write failing normalization tests**
+- [x] **Step 1: Write failing normalization tests**
 
 Add to `TestNormDocName`:
 
@@ -258,7 +258,7 @@ Add to `TestNormDocName`:
         assert norm_doc_name("课件.PPTX") == norm_doc_name("课件")
 ```
 
-- [ ] **Step 2: Run the tests and verify RED**
+- [x] **Step 2: Run the tests and verify RED**
 
 ```powershell
 & 'D:\ProgramFiles\RAG\.venv\Scripts\python.exe' -m pytest tests/test_eval_metrics.py::TestNormDocName::test_strips_markdown_extension tests/test_eval_metrics.py::TestNormDocName::test_strips_powerpoint_extension -q
@@ -266,7 +266,7 @@ Add to `TestNormDocName`:
 
 Expected: both comparisons fail because `.md` and `.pptx` remain in the normalized names.
 
-- [ ] **Step 3: Implement the minimal extension change**
+- [x] **Step 3: Implement the minimal extension change**
 
 Change the extension tuple in `norm_doc_name()` to:
 
@@ -274,7 +274,7 @@ Change the extension tuple in `norm_doc_name()` to:
 for ext in (".pdf", ".docx", ".txt", ".doc", ".md", ".pptx"):
 ```
 
-- [ ] **Step 4: Run focused tests and verify GREEN**
+- [x] **Step 4: Run focused tests and verify GREEN**
 
 ```powershell
 & 'D:\ProgramFiles\RAG\.venv\Scripts\python.exe' -m pytest tests/test_eval_metrics.py -q
@@ -282,7 +282,7 @@ for ext in (".pdf", ".docx", ".txt", ".doc", ".md", ".pptx"):
 
 Expected: all tests pass.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```powershell
 git add eval/metrics.py tests/test_eval_metrics.py
@@ -296,7 +296,7 @@ git commit -m "fix: normalize markdown and powerpoint document names"
 - Modify: `eval/report.py`
 - Modify: `eval/README.md`
 
-- [ ] **Step 1: Write failing location-format tests**
+- [x] **Step 1: Write failing location-format tests**
 
 Append:
 
@@ -332,7 +332,7 @@ def test_format_retrieval_debug_uses_slide_fallback():
 
 The existing sparse-only page test continues to lock the legacy `第7页` fallback.
 
-- [ ] **Step 2: Write failing uncertainty-wording tests**
+- [x] **Step 2: Write failing uncertainty-wording tests**
 
 Add:
 
@@ -356,7 +356,7 @@ def test_readme_does_not_claim_unmeasured_five_percent_noise():
     assert "实际波动需通过重复运行测量" in readme
 ```
 
-- [ ] **Step 3: Run the tests and verify RED**
+- [x] **Step 3: Run the tests and verify RED**
 
 ```powershell
 & 'D:\ProgramFiles\RAG\.venv\Scripts\python.exe' -m pytest tests/test_eval_report.py -q
@@ -364,7 +364,7 @@ def test_readme_does_not_claim_unmeasured_five_percent_noise():
 
 Expected: the new slide/location tests fail and the unsupported `<5%` wording tests fail.
 
-- [ ] **Step 4: Implement generic location formatting**
+- [x] **Step 4: Implement generic location formatting**
 
 Add:
 
@@ -391,7 +391,7 @@ return (
 )
 ```
 
-- [ ] **Step 5: Replace the unsupported wording**
+- [x] **Step 5: Replace the unsupported wording**
 
 In generated reports and `eval/README.md`, replace the fixed noise threshold with:
 
@@ -399,7 +399,7 @@ In generated reports and `eval/README.md`, replace the fixed noise threshold wit
 LLM 回答类指标可能存在非确定性；在取得重复运行证据前不预设固定噪声阈值，实际波动需通过重复运行测量。检索类指标在模型、语料和配置完全固定时应保持确定。
 ```
 
-- [ ] **Step 6: Run focused tests and verify GREEN**
+- [x] **Step 6: Run focused tests and verify GREEN**
 
 ```powershell
 & 'D:\ProgramFiles\RAG\.venv\Scripts\python.exe' -m pytest tests/test_eval_report.py -q
@@ -407,7 +407,7 @@ LLM 回答类指标可能存在非确定性；在取得重复运行证据前不�
 
 Expected: all tests pass.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```powershell
 git add eval/report.py eval/README.md tests/test_eval_report.py
@@ -421,7 +421,7 @@ git commit -m "fix: generalize evaluation source locations"
 - Runtime only, ignored: `eval/runs/phase0-prechange-retrieval-v2/`
 - Runtime only, ignored: `eval/runs/phase0-prechange-llm-v2/`
 
-- [ ] **Step 1: Run a no-LLM retrieval baseline**
+- [x] **Step 1: Run a no-LLM retrieval baseline**
 
 Load non-secret configuration values from `D:\ProgramFiles\RAG\.env` into the process, set `DEEPSEEK_API_KEY=offline-placeholder` only because this command never calls the LLM, and run:
 
@@ -434,7 +434,7 @@ Load non-secret configuration values from `D:\ProgramFiles\RAG\.env` into the pr
 
 Expected: isolated Chroma, SQLite, and uploads are created only under `eval/runs/phase0-prechange-retrieval-v2/`; a retrieval report and raw retrieval JSONL files are produced.
 
-- [ ] **Step 2: Verify isolation**
+- [x] **Step 2: Verify isolation**
 
 Run:
 
@@ -445,7 +445,7 @@ git status --short
 
 Expected: runtime outputs are ignored; no file under `D:\ProgramFiles\RAG\data` has been modified by the evaluation.
 
-- [ ] **Step 3: Check for a real LLM credential**
+- [x] **Step 3: Check for a real LLM credential**
 
 Check presence without printing the value:
 
@@ -473,7 +473,7 @@ Expected: 27 questions complete and `raw_answers.jsonl`, `report.json`, `report.
 
 Append the exact retrieval and LLM aggregate metrics, run configuration, report paths, and timestamps to the baseline document. State whether the full baseline is complete; never infer a quality improvement from a single run.
 
-- [ ] **Step 6: Run the complete regression suite**
+- [x] **Step 6: Run the complete regression suite**
 
 ```powershell
 & 'D:\ProgramFiles\RAG\.venv\Scripts\python.exe' -m pytest -q
@@ -481,7 +481,7 @@ Append the exact retrieval and LLM aggregate metrics, run configuration, report 
 
 Expected: at least the branch-point result of `251 passed, 3 skipped`, plus the newly added tests; zero failures.
 
-- [ ] **Step 7: Run a clean-status and diff review**
+- [x] **Step 7: Run a clean-status and diff review**
 
 ```powershell
 git status --short
@@ -491,7 +491,7 @@ git diff master...HEAD --stat
 
 Expected: only planned source, test, and documentation files are tracked; no `.env`, `data/`, or `eval/runs/` content appears.
 
-- [ ] **Step 8: Commit the final evidence update**
+- [x] **Step 8: Commit the final evidence update**
 
 ```powershell
 git add docs/superpowers/baselines/2026-07-24-phase-0-baseline.md

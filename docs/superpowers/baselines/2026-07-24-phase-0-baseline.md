@@ -27,6 +27,14 @@
 
 警告主要来自 Python 3.14 下 `pytest-asyncio` 的弃用提示，另有 FastAPI `on_event`、PyPDF2、Starlette TestClient 等弃用提示。大量警告会淹没新增告警，属于已确认的日志信噪比问题；它们不作为阶段 0 的失败条件，也不能据此推断这些警告可以长期忽略。后续应单独升级依赖或收敛已知警告，不能全局屏蔽未知 warning。
 
+阶段 0 工程修复后的全量结果：
+
+```text
+261 passed, 3 skipped, 20083 warnings in 12.75s
+```
+
+新增 10 个测试覆盖：四个评测命令默认使用 v2、MD/PPTX 文档名归一化、显式位置标签与幻灯片位置、报告与 README 不再使用未经测量的固定噪声阈值。测试总数增加导致 `pytest-asyncio` 按测试收集产生的弃用警告数量同步增加，不代表新增 521 个独立缺陷。
+
 ## 2. 固定评测资产
 
 ### 2.1 数据集
@@ -130,7 +138,51 @@ tests/test_citation_preview.py::TestCitationPreviewService::test_build_preview_s
 
 ## 6. 隔离评测状态
 
-- `questions_v2` 无 LLM 检索基线：待运行。
+- `questions_v2` 无 LLM 检索基线：已完成。
 - `questions_v2` 真实 27 题 LLM 基线：等待有效 `DEEPSEEK_API_KEY`。
 
 当前进程和根项目 `.env` 均未检测到有效 `DEEPSEEK_API_KEY`。这只说明本机当前配置不足，不能推断外部服务不可用。正式基线不得使用 mock、空答案、AI 生成答案或占位密钥替代真实系统回答。
+
+### 6.1 无 LLM 检索基线
+
+- label：`phase0-prechange-retrieval-v2`
+- 完成时间：`2026-07-24T16:25:06`
+- 数据集：v2，27 题
+- 入库：68 chunks，40.01 秒
+- 扫描：Reranker candidate k = 15、20、30
+- 推荐：`k=15`
+- 产物：`eval/runs/phase0-prechange-retrieval-v2/`
+
+配置：
+
+```text
+embedding_model=BAAI/bge-large-zh-v1.5
+chunk_size=400
+chunk_overlap=80
+chunk_strategy=recursive
+chunk_max_tokens=480
+top_k=5
+retrieval_mode=dense
+retrieval_distance_threshold=0.67
+reranker_model=BAAI/bge-reranker-v2-m3
+reranker_device=cpu
+dataset_version=2
+```
+
+结果：
+
+| candidate k | 题数 | Hit Rate | Recall | MRR | 不可回答题进入 LLM 比例 | mean | p50 | p95 |
+|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| 15 | 27 | 1.0000 | 0.9545 | 0.9545 | 0.8000 | 6.878s | 7.843s | 8.214s |
+| 20 | 27 | 1.0000 | 0.9545 | 0.9545 | 0.8000 | 8.035s | 9.120s | 9.859s |
+| 30 | 27 | 1.0000 | 0.9545 | 0.9545 | 0.8000 | 10.106s | 12.022s | 12.971s |
+
+三个候选规模的检索质量指标相同，均无 answerable 检索失败；`k=15` 延迟最低，因此本次扫描推荐 15。这是当前 4 文档、27 题固定集上的结果，不能外推为更大新测试集上的最佳值。
+
+运行命令完成后对 `D:\ProgramFiles\RAG\data` 下全部文件的长度与 UTC 修改时间进行了前后比较，结果为：
+
+```text
+PRODUCTION_DATA_UNCHANGED
+```
+
+首次尝试因执行工具的 120 秒上限在 `k=15` 第 10/27 题后被终止，该半成品未计入结果；随后从空隔离 Chroma 重新完整运行，耗时 718.3 秒并以退出码 0 结束。
