@@ -1,0 +1,136 @@
+# RAG 下一阶段：阶段 0 基线记录
+
+状态：工程基线已确认；真实 27 题 LLM 基线等待有效 `DEEPSEEK_API_KEY`。
+
+本文只记录改造前证据、保留行为和未来清理边界。阶段 0 不删除数据库、索引、上传文件或历史评测产物，也不宣称任何检索或回答质量提升。
+
+## 1. Git 与工程测试基线
+
+- 基线提交：`5d2a2a35112f803bb6fcdc1604ebee47e0eb17ee`
+- 基线分支：`master`
+- 实施分支：`feature/rag-next-stage`
+- 隔离工作区：`D:\ProgramFiles\RAG\.worktrees\rag-next-stage`
+- Python：`3.14.0`
+- pytest：`8.3.0`
+
+执行命令：
+
+```powershell
+& 'D:\ProgramFiles\RAG\.venv\Scripts\python.exe' -m pytest -q
+```
+
+改造前结果：
+
+```text
+251 passed, 3 skipped, 19562 warnings in 14.88s
+```
+
+警告主要来自 Python 3.14 下 `pytest-asyncio` 的弃用提示，另有 FastAPI `on_event`、PyPDF2、Starlette TestClient 等弃用提示。大量警告会淹没新增告警，属于已确认的日志信噪比问题；它们不作为阶段 0 的失败条件，也不能据此推断这些警告可以长期忽略。后续应单独升级依赖或收敛已知警告，不能全局屏蔽未知 warning。
+
+## 2. 固定评测资产
+
+### 2.1 数据集
+
+| 文件 | 版本 | 题数 | 可回答 | 不可回答 | 字节数 | SHA-256 |
+|---|---:|---:|---:|---:|---:|---|
+| `eval/dataset/questions.json` | 1 | 21 | 17 | 4 | 14458 | `d1320daee4af5b2b0dec6bb605fbabb587a1715e05269c457efec68f2f25c9a7` |
+| `eval/dataset/questions_v2.json` | 2 | 27 | 22 | 5 | 18042 | `794817463e5a80b759b829ab469893d5e3d143b93e8f11306c44d636de7cbb73` |
+
+`questions_v2.json` 是当前 legacy regression 的最新固定集。`questions.json` 作为历史 v1 保留，但不再作为默认入口。
+
+### 2.2 语料
+
+| 文件 | 字节数 | SHA-256 |
+|---|---:|---|
+| `eval/corpus/2024技术发展报告_RAG测试文档.docx` | 13988 | `c377cbe9548947f5cb74b81bbc6d7c54b0b813b83813dd6e26a479cb4694bcdc` |
+| `eval/corpus/AI Agent文献综述_v3.docx` | 33069 | `16b8abbf6b1e03233685bc8e7c41615c8fbcea2ecc843559c2883d8b8883f279` |
+| `eval/corpus/AI技术概述_RAG测试文档.txt` | 10838 | `c17130f2bcc846a88b8280a33af450c6c1e9254b925a6f9cb33e81cabc2a1cfd` |
+| `eval/corpus/LLM应用指南_RAG测试文档.pdf` | 435427 | `8c40a27b61526e05fb1656cf2de6118dd8ab7dcc068c382eea3391d023b8b3a0` |
+
+### 2.3 已提交历史证据
+
+`eval/results/` 当前包含 46 个已提交文件：
+
+| 目录 | 文件数 |
+|---|---:|
+| `p1-1-bge/inst` | 3 |
+| `p1-1-bge/noinst` | 3 |
+| `p1-2-docx-table` | 3 |
+| `p1-3-recursive-chunking` | 7 |
+| `p1-4-threshold-calibration` | 8 |
+| `p1-5-reranker` | 11 |
+| `p2-1-hybrid-retrieval` | 8 |
+| `p2-3-retrieval-trace` | 3 |
+
+## 3. 当前生产路径快照
+
+根项目 `D:\ProgramFiles\RAG\.env` 在 2026-07-24 的路径配置解析结果：
+
+```text
+UPLOAD_DIR=D:\ProgramFiles\RAG\data\uploads
+CHROMA_PERSIST_DIR=D:\ProgramFiles\RAG\data\chroma_p2_4a
+METADATA_DB_PATH=D:\ProgramFiles\RAG\data\metadata.db
+```
+
+其中 `.env` 明确配置了相对 `UPLOAD_DIR=./data/uploads` 和
+`CHROMA_PERSIST_DIR=./data/chroma_p2_4a`；没有配置 `METADATA_DB_PATH`，
+因此后者使用 `backend/config.py` 以项目根目录解析出的默认路径。
+
+## 4. 一次性清理边界
+
+以下均为旧派生数据候选。只有阶段 2 的结构化解析、存储、检索和预览在隔离目录全部通过后，才能按绝对路径逐项清理：
+
+```text
+D:\ProgramFiles\RAG\data\backups
+D:\ProgramFiles\RAG\data\chroma_bge_large_zh_v1_5
+D:\ProgramFiles\RAG\data\chroma_db
+D:\ProgramFiles\RAG\data\chroma_p1_2_docx_table
+D:\ProgramFiles\RAG\data\chroma_p1_3_recursive_400_80
+D:\ProgramFiles\RAG\data\chroma_p2_4a
+D:\ProgramFiles\RAG\data\uploads
+D:\ProgramFiles\RAG\data\metadata.db
+D:\ProgramFiles\RAG\data\metadata.db.bak-20260722-165150
+```
+
+清理时必须再次解析并核对每个绝对路径都位于
+`D:\ProgramFiles\RAG\data` 内。禁止使用未解析的通配符、递归删除仓库根目录或把 PowerShell 枚举结果交给另一种 shell 删除。
+
+必须保留：
+
+- `eval/corpus/`
+- `eval/dataset/`
+- `eval/results/`
+- 全部项目源代码、测试、设计与实施文档
+- 根项目真实 `.env`
+
+`eval/runs/<label>/` 是每次评测自己的隔离 Chroma、SQLite、uploads 和报告目录，不属于生产数据。是否保留某次 run 由证据价值决定，不能与生产清理混为一谈。
+
+## 5. 必须保持的行为契约
+
+以下现有测试是后续阶段的最低回归契约，测试类名与 node ID 已通过
+`pytest --collect-only` 核对：
+
+```text
+tests/test_api.py::TestUploadAPI::test_upload_returns_stable_document_id
+tests/test_api.py::TestUploadAPI::test_same_name_creates_independent_versions
+tests/test_api.py::TestUploadAPI::test_failed_ingest_cleans_files_and_marks_record
+tests/test_api.py::TestChatAPI::test_chat_uses_mocked_llm_and_returns_grounded_citation
+tests/test_api.py::TestChatAPI::test_chat_returns_trace_without_changing_answer_or_citations
+tests/test_api.py::TestUploadPageSnapshots::test_successful_upload_persists_page_snapshots
+tests/test_retriever.py::TestRetrieve::test_results_contain_required_fields
+tests/test_retriever.py::TestRetrieve::test_top_k_respected
+tests/test_citation.py::TestExtractCitations::test_maps_source_id_to_retrieval_result
+tests/test_citation.py::TestExtractCitations::test_no_marker_has_no_fallback
+tests/test_citation_preview.py::TestCitationPreviewService::test_build_preview_success
+```
+
+它们分别锁定：稳定文档 ID、同名文档多版本、失败补偿、基于检索证据的回答与引用、Trace 不改变回答契约、解析页快照、检索结果字段与 top-k、可信来源编号映射、无标记时不伪造引用、引用原文预览。
+
+后续可以用 `document_units` 和结构化预览替代旧页快照实现，但不能在没有等价新测试的情况下删除这些用户可见行为。
+
+## 6. 隔离评测状态
+
+- `questions_v2` 无 LLM 检索基线：待运行。
+- `questions_v2` 真实 27 题 LLM 基线：等待有效 `DEEPSEEK_API_KEY`。
+
+当前进程和根项目 `.env` 均未检测到有效 `DEEPSEEK_API_KEY`。这只说明本机当前配置不足，不能推断外部服务不可用。正式基线不得使用 mock、空答案、AI 生成答案或占位密钥替代真实系统回答。
