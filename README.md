@@ -383,10 +383,104 @@ $env:TRANSFORMERS_OFFLINE='1'
 
 每次只改变一个主要变量，label 与优化步骤对应。详细规则见 `eval/README.md`。
 
-## 下一阶段
+## 当前优化目标、实施方案与进度
 
-1. 引用原文预览与高亮；
-2. 扩充真实业务语料与 harder lexical 数据后复测 Hybrid；
-3. 结合真实延迟数据评估 Reranker 的 GPU/量化部署。
+### 优化目标
+
+当前优化以“尽可能复用现有检索、评估和前端链路”为原则，重点解决以下问题：
+
+1. **统一文档输入结构**：让不同格式都输出相同的数据模型，并保留标题、段落、列表、表格和来源位置等结构信息；
+2. **扩大文档格式与测试集覆盖**：在现有 PDF、DOCX、TXT 基础上增加 Markdown、PPTX、Excel，并用更多真实文档和题型冻结 Dataset v3；
+3. **升级来源原文展示**：从无格式纯文本升级为可恢复标题、段落、列表和表格结构的来源预览，并准确区分真实页与逻辑页；
+4. **支持多轮对话**：在不污染独立问题检索的前提下，引入会话历史、问题改写和上下文窗口管理；
+5. **维持可评估性**：每次迁移都通过固定数据集、单元测试和回归报告验证，不用主观体验代替指标。
+
+### 具体优化方案
+
+#### 1. 统一结构模型
+
+使用 `ParsedBlock`、`ParsedUnit` 和 `SourceLocator` 作为所有文档格式的统一契约：
+
+```text
+文件
+  → 格式 Adapter
+  → BlockDraft
+  → 公共 Assembler
+  → ParsedUnit
+```
+
+公共 Assembler 统一负责稳定 `unit_id/block_id`、连续 `sequence`、`canonical_text` 和字符 offset，避免每种格式重复实现并产生不一致。
+
+来源定位支持：
+
+- `page`：PDF 真实页；
+- `virtual_page`：DOCX/TXT 系统划分的逻辑页；
+- `slide`：PPTX 幻灯片；
+- `section`：Markdown 章节；
+- `sheet`：Excel 工作表及单元格范围。
+
+前端后续必须使用 `location_label` 展示来源，不能把所有数字都称为“页码”。
+
+#### 2. 旧格式 Adapter 迁移
+
+先把 PDF、DOCX、TXT 迁移到统一模型，再修改生产链路。DOCX 额外保留标题层级、`heading_path`、列表层级和二维表格；TXT 使用固定行数生成逻辑页；PDF 保留真实页定位。
+
+#### 3. 全链路数据模型迁移
+
+按以下顺序把 `ParsedUnit` 接入现有 RAG 链路：
+
+```text
+parser registry / upload
+  → chunker
+  → Chroma metadata 与 SQLite document_units
+  → citation
+  → source preview
+  → eval
+```
+
+迁移完成后不再保留旧 page-dict 作为最终兼容格式，数据库读取的结构 JSON 也必须重新经过 Pydantic 校验。
+
+#### 4. 新格式支持
+
+在全链路稳定后依次增加：
+
+1. Markdown：标题路径、段落、列表、引用、代码块；
+2. PPTX：幻灯片标题、文本框、列表、表格和 slide 定位；
+3. Excel：sheet、有效数据区域、表头和 cell range；
+4. 扫描 PDF：作为可选增强项，单独评估 OCR 复杂度、准确率和运行成本后再决定是否纳入主链路。
+
+#### 5. 来源预览与多轮对话
+
+来源预览根据 block 类型恢复基础结构，并基于 chunk offset 高亮命中内容。多轮对话采用“历史消息存储 + 当前问题改写 + 独立检索 + 有界上下文”的方式，避免直接把全部历史拼进检索查询。
+
+#### 6. Dataset v3
+
+等统一模型、全链路和新增格式稳定后再冻结 Dataset v3。数据集需覆盖事实题、语义题、跨段落题、表格题、精确术语题、多轮追问题和不可回答题，并保留文档名、定位信息、证据 block 和参考答案。
+
+### 当前做到哪一步
+
+当前开发分支为 `phase1/unified-structure-model`。**已经完成统一结构模型和 PDF、DOCX、TXT 三种旧格式的 Adapter 层迁移，但尚未接入现有生产上传、chunker、Chroma/SQLite、引用和来源预览链路。**
+
+| 工作项 | 当前状态 |
+|---|---|
+| `ParsedBlock`、`ParsedUnit`、`SourceLocator` 统一模型 | 已完成 |
+| 稳定 ID、sequence、canonical text、offset 校验 | 已完成 |
+| 公共 `BlockDraft → Assembler → ParsedUnit` 组装层 | 已完成 |
+| PDF Adapter | 已完成代码迁移 |
+| DOCX Adapter（标题、列表、表格、heading path、逻辑页） | 已完成代码迁移 |
+| TXT Adapter（逻辑页、段落拆分） | 已完成代码迁移 |
+| Adapter registry | 已建立，但尚未接入旧上传入口 |
+| 模型测试与 PDF Adapter 测试 | 已编写；当前分支尚无 CI 结果证明全量通过 |
+| DOCX/TXT Adapter 专项测试 | 尚待补齐 |
+| chunker 改为接收 `ParsedUnit` | 尚未开始 |
+| SQLite `document_units` 与 Chroma metadata 迁移 | 尚未开始 |
+| 结构化引用与来源预览 | 尚未开始 |
+| Markdown、PPTX、Excel | 尚未开始 |
+| Dataset v3 冻结 | 尚未开始 |
+| 多轮对话 | 尚未开始 |
+
+因此，当前最准确的阶段结论是：
+
+> **输入解析层的统一结构基础已经落地，下一施工点是补齐 Adapter 测试并将 `ParsedUnit` 接入 chunker；项目当前运行时仍使用原有 `backend/services/parser.py` 和 page-dict 链路。**
 
 所有简历指标都以实际 eval 报告为准，不预先填写目标值。
