@@ -1,7 +1,7 @@
 """统一文档结构模型。
 
-阶段 1 契约：各格式 parser adapter 输出 ParsedBlock，
-assembler 生成 ParsedUnit，后续 chunker 只依赖规范文本和定位信息。
+阶段 1 契约：各格式 parser adapter 生成结构化 block，assembler 生成
+ParsedUnit；后续 chunker 只依赖规范文本和统一来源定位。
 """
 
 from __future__ import annotations
@@ -26,18 +26,18 @@ class ParsedBlock(BaseModel):
     table_rows: list[list[str]] | None = None
     attributes: dict[str, str | int | bool] = Field(default_factory=dict)
 
-    @field_validator("text")
+    @field_validator("block_id", "text")
     @classmethod
-    def validate_text(cls, value: str) -> str:
+    def validate_non_empty_text_fields(cls, value: str) -> str:
         if not value or not value.strip():
-            raise ValueError("text 不能为空")
+            raise ValueError("字段不能为空")
         return value
 
     @field_validator("sequence")
     @classmethod
     def validate_sequence(cls, value: int) -> int:
         if value < 0:
-            raise ValueError("sequence 必须从 0 开始")
+            raise ValueError("sequence 必须大于等于 0")
         return value
 
     @field_validator("heading_level")
@@ -108,14 +108,19 @@ class SourceLocator(BaseModel):
             raise ValueError("location_label 不能为空")
         return value
 
+    @field_validator("heading_path")
+    @classmethod
+    def validate_heading_path(cls, value: list[str]) -> list[str]:
+        if any(not item or not item.strip() for item in value):
+            raise ValueError("heading_path 不能包含空标题")
+        return value
+
     @model_validator(mode="after")
     def validate_kind_fields(self):
         if self.kind in {"page", "virtual_page"}:
             if self.page_number is None or self.page_number < 1:
                 raise ValueError("page_number 必须提供且大于等于 1")
         elif self.page_number is not None:
-            if self.kind == "slide":
-                raise ValueError("slide 不能设置 page_number")
             raise ValueError("只有 page 和 virtual_page 可以设置 page_number")
 
         if self.kind == "slide":
@@ -123,6 +128,12 @@ class SourceLocator(BaseModel):
                 raise ValueError("slide_number 必须提供且大于等于 1")
         elif self.slide_number is not None:
             raise ValueError("只有 slide 可以设置 slide_number")
+
+        if self.kind == "sheet":
+            if not self.sheet_name:
+                raise ValueError("sheet 必须提供 sheet_name")
+        elif self.sheet_name is not None or self.cell_range is not None:
+            raise ValueError("sheet_name/cell_range 仅 sheet 可以设置")
         return self
 
 
@@ -135,10 +146,25 @@ class ParsedUnit(BaseModel):
     blocks: list[LocatedBlock]
     canonical_text: str
 
+    @field_validator("unit_id", "document_id", "document_name", "parser_version")
+    @classmethod
+    def validate_identity_fields(cls, value: str) -> str:
+        if not value or not value.strip():
+            raise ValueError("标识字段不能为空")
+        return value
+
     @model_validator(mode="after")
     def validate_structure(self):
         if not self.blocks:
             raise ValueError("ParsedUnit 必须至少包含一个 block")
+
+        expected_unit_id = make_unit_id(
+            self.document_id,
+            self.parser_version,
+            self.locator,
+        )
+        if self.unit_id != expected_unit_id:
+            raise ValueError("unit_id 不符合确定性规则")
 
         sequences = [block.sequence for block in self.blocks]
         if sequences != list(range(len(self.blocks))):
@@ -152,6 +178,15 @@ class ParsedUnit(BaseModel):
 
         cursor = 0
         for index, block in enumerate(self.blocks):
+            expected_block_id = make_block_id(
+                self.document_id,
+                self.parser_version,
+                self.locator,
+                block.sequence,
+            )
+            if block.block_id != expected_block_id:
+                raise ValueError("block_id 不符合确定性规则")
+
             if index:
                 cursor += 2
             expected_start = cursor
