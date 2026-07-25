@@ -67,6 +67,45 @@ def test_pptx_preserves_title_positioned_text_lists_and_table(tmp_path):
     ]
 
 
+def test_pptx_extracts_text_from_nested_group_shapes(tmp_path):
+    source = tmp_path / "grouped.pptx"
+    presentation = Presentation()
+    slide = presentation.slides.add_slide(presentation.slide_layouts[5])
+    slide.shapes.title.text = "组合形状"
+
+    outer = slide.shapes.add_group_shape()
+    lower = outer.shapes.add_textbox(
+        Inches(1),
+        Inches(2),
+        Inches(4),
+        Inches(1),
+    )
+    lower.text = "组合内下方正文"
+    nested = outer.shapes.add_group_shape()
+    upper = nested.shapes.add_textbox(
+        Inches(1),
+        Inches(1),
+        Inches(4),
+        Inches(1),
+    )
+    upper.text = "嵌套组合正文"
+    presentation.save(source)
+
+    result = parse_pptx_document(str(source), document_id="doc-grouped")
+
+    assert result.warnings == []
+    unit = result.units[0]
+    assert [block.text for block in unit.blocks] == [
+        "组合形状",
+        "嵌套组合正文",
+        "组合内下方正文",
+    ]
+    assert unit.blocks[1].attributes["group_path"] == (
+        f"{outer.name} / {nested.name}"
+    )
+    assert unit.blocks[2].attributes["group_path"] == outer.name
+
+
 def test_pptx_image_only_slide_emits_warning_without_fabricated_unit(tmp_path):
     source = tmp_path / "image-only.pptx"
     presentation = Presentation()

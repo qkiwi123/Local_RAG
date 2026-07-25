@@ -37,6 +37,14 @@ def test_questions_v2_preserves_v1_and_adds_frozen_p2_cases():
 
 def test_questions_v2_snippets_are_unique_in_parsed_corpus():
     dataset = _load("questions_v2.json")
-    corpus = Path(__file__).parents[1] / "eval" / "corpus"
+    corpus = Path(__file__).parents[1] / "eval" / "corpus_legacy"
 
     _validate_dataset(dataset, adapters.parse_corpus(corpus))
+
+
+def test_legacy_v2_parser_ignores_v3_only_formats(tmp_path):
+    (tmp_path / "legacy.txt").write_text("旧评测语料", encoding="utf-8")
+    (tmp_path / "new.pptx").write_bytes(b"not-a-real-pptx")
+    (tmp_path / "new.md").write_text("# 新语料", encoding="utf-8")
+
+    assert adapters.parse_corpus(tmp_path) == {"legacy.txt": "旧评测语料"}

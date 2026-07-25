@@ -35,6 +35,7 @@ from pathlib import Path
 EVAL_DIR = Path(__file__).resolve().parent
 REPO_ROOT = EVAL_DIR.parent
 DEFAULT_DATASET = EVAL_DIR / "dataset" / "questions_v2.json"
+LEGACY_CORPUS_DIR = EVAL_DIR / "corpus_legacy"
 
 
 def _setup_env(args) -> Path:
@@ -470,7 +471,7 @@ def main():
     p_run = sub.add_parser("run", help="运行一次完整评估")
     p_run.add_argument("--label", required=True, help="运行标签，如 baseline / p0-1-bge")
     p_run.add_argument("--dataset", default=str(DEFAULT_DATASET))
-    p_run.add_argument("--corpus", default=str(EVAL_DIR / "corpus"))
+    p_run.add_argument("--corpus", default=str(LEGACY_CORPUS_DIR))
     p_run.add_argument("--limit", type=int, help="只跑前 N 题（冒烟测试）")
     p_run.add_argument("--overwrite", action="store_true", help="覆盖同名 label 的已有报告")
     p_run.add_argument("--embedding-model", help="覆盖 EMBEDDING_MODEL（需模型已在本地缓存）")
@@ -561,7 +562,7 @@ def main():
     p_retrieval.add_argument(
         "--dataset", default=str(DEFAULT_DATASET)
     )
-    p_retrieval.add_argument("--corpus", default=str(EVAL_DIR / "corpus"))
+    p_retrieval.add_argument("--corpus", default=str(LEGACY_CORPUS_DIR))
     p_retrieval.add_argument(
         "--candidate-ks",
         nargs="+",
@@ -594,7 +595,7 @@ def main():
         "--dataset",
         default=str(DEFAULT_DATASET),
     )
-    p_hybrid.add_argument("--corpus", default=str(EVAL_DIR / "corpus"))
+    p_hybrid.add_argument("--corpus", default=str(LEGACY_CORPUS_DIR))
     p_hybrid.add_argument("--overwrite", action="store_true")
     p_hybrid.add_argument("--embedding-model")
     p_hybrid.add_argument("--query-instruction")

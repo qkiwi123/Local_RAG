@@ -18,6 +18,7 @@ from typing import List
 
 # 与 backend/routers/chat.py 中检索为空时的回复保持逐字一致
 REFUSAL_CANNED = "未找到与您问题相关的文档内容。请确认已上传相关文档，或尝试换个问法。"
+_LEGACY_PARSER_SUFFIXES = {".pdf", ".docx", ".txt"}
 
 
 def _get_store():
@@ -89,9 +90,10 @@ def parse_corpus(corpus_dir: Path) -> dict:
 
     texts = {}
     for f in sorted(corpus_dir.iterdir()):
-        if f.is_file():
-            pages = parse_document(str(f))
-            texts[f.name] = "".join(p["text"] for p in pages)
+        if not f.is_file() or f.suffix.lower() not in _LEGACY_PARSER_SUFFIXES:
+            continue
+        pages = parse_document(str(f))
+        texts[f.name] = "".join(p["text"] for p in pages)
     return texts
 
 
@@ -111,7 +113,7 @@ def ingest_corpus(corpus_dir: Path) -> dict:
     t0 = time.perf_counter()
     doc_chunks = {}
     for f in sorted(corpus_dir.iterdir()):
-        if not f.is_file():
+        if not f.is_file() or f.suffix.lower() not in _LEGACY_PARSER_SUFFIXES:
             continue
         pages = parse_document(str(f))
         chunks = chunk_document(

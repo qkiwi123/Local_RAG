@@ -5,7 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from pptx import Presentation
-from pptx.enum.shapes import PP_PLACEHOLDER
+from pptx.enum.shapes import MSO_SHAPE_TYPE, PP_PLACEHOLDER
 
 from backend.models.document_structure import (
     ParsedDocument,
@@ -65,6 +65,65 @@ def _table_rows(table) -> list[list[str]]:
     return [row for row in rows if any(row)]
 
 
+def _append_shape_drafts(
+    shape,
+    drafts: list[BlockDraft],
+    *,
+    group_path: tuple[str, ...] = (),
+) -> None:
+    """递归提取 shape；PPTX 的关键正文经常位于组合形状中。"""
+    if shape.shape_type == MSO_SHAPE_TYPE.GROUP:
+        child_path = (*group_path, shape.name)
+        positioned_children = sorted(
+            enumerate(shape.shapes),
+            key=lambda item: _shape_position(item[1], item[0]),
+        )
+        for _index, child in positioned_children:
+            _append_shape_drafts(child, drafts, group_path=child_path)
+        return
+
+    attributes: dict[str, str | int | bool] = {"shape_name": shape.name}
+    if group_path:
+        attributes["group_path"] = " / ".join(group_path)
+
+    if getattr(shape, "has_table", False):
+        rows = _table_rows(shape.table)
+        if rows:
+            drafts.append(
+                BlockDraft(
+                    block_type="table",
+                    text=render_table_markdown(rows),
+                    table_rows=rows,
+                    attributes=attributes,
+                )
+            )
+        return
+
+    if not getattr(shape, "has_text_frame", False):
+        return
+    for paragraph in shape.text_frame.paragraphs:
+        text = normalize_text(paragraph.text)
+        if not text:
+            continue
+        if _is_list_paragraph(shape, paragraph):
+            drafts.append(
+                BlockDraft(
+                    block_type="list_item",
+                    text=text,
+                    list_level=paragraph.level,
+                    attributes=attributes,
+                )
+            )
+        else:
+            drafts.append(
+                BlockDraft(
+                    block_type="paragraph",
+                    text=text,
+                    attributes=attributes,
+                )
+            )
+
+
 def parse_pptx_document(
     file_path: str,
     *,
@@ -109,42 +168,7 @@ def parse_pptx_document(
             key=lambda item: _shape_position(item[0], item[1]),
         )
         for shape, _original_index in positioned_shapes:
-            if getattr(shape, "has_table", False):
-                rows = _table_rows(shape.table)
-                if rows:
-                    drafts.append(
-                        BlockDraft(
-                            block_type="table",
-                            text=render_table_markdown(rows),
-                            table_rows=rows,
-                            attributes={"shape_name": shape.name},
-                        )
-                    )
-                continue
-
-            if not getattr(shape, "has_text_frame", False):
-                continue
-            for paragraph in shape.text_frame.paragraphs:
-                text = normalize_text(paragraph.text)
-                if not text:
-                    continue
-                if _is_list_paragraph(shape, paragraph):
-                    drafts.append(
-                        BlockDraft(
-                            block_type="list_item",
-                            text=text,
-                            list_level=paragraph.level,
-                            attributes={"shape_name": shape.name},
-                        )
-                    )
-                else:
-                    drafts.append(
-                        BlockDraft(
-                            block_type="paragraph",
-                            text=text,
-                            attributes={"shape_name": shape.name},
-                        )
-                    )
+            _append_shape_drafts(shape, drafts)
 
         if not drafts:
             warnings.append(

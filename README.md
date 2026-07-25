@@ -456,11 +456,32 @@ Excel、旧 PowerPoint/Excel、OCR、图表理解、SmartArt 和演讲者备注�
 
 #### 6. Dataset v3
 
-等统一模型、全链路和新增格式稳定后再冻结 Dataset v3。数据集需覆盖事实题、语义题、跨段落题、表格题、精确术语题、多轮追问题和不可回答题，并保留文档名、定位信息、证据 block 和参考答案。
+Dataset v3 固定为单一顶层 JSON。模型生成的候选题只提供文档名和证据片段，项目内
+`prepare` 工具再根据确定性解析结果补齐 parser 版本、稳定 eval unit ID、字符 offset、
+snippet hash 和完整 locator；零命中或多位置命中必须通过显式 evidence override 处理，
+工具不会自动把人工审核状态改为 `verified`。
+
+当前候选集已完成 prepare，但尚未冻结：冻结前仍需人工核对问题、标准答案、证据和全部
+不可回答题的 whole-corpus 检查。数据集覆盖事实题、语义题、跨段落题、表格题、精确术语
+题、多轮追问题和不可回答题。
+
+```powershell
+.\.venv\Scripts\python.exe -m eval.dataset_v3 validate `
+  --dataset eval/dataset/questions_v3.json `
+  --corpus eval/corpus `
+  --manifest eval/dataset/corpus_v3_manifest.json
+
+# 只在人工审核字段全部完成后才应通过
+.\.venv\Scripts\python.exe -m eval.dataset_v3 validate `
+  --dataset eval/dataset/questions_v3.json `
+  --corpus eval/corpus `
+  --manifest eval/dataset/corpus_v3_manifest.json `
+  --strict
+```
 
 ### 当前做到哪一步
 
-当前开发分支为 `phase1/unified-structure-model`。**五种范围内格式的统一结构解析、结构化 chunk、版本化 SQLite schema、`document_units` 和 Chroma 轻量定位 metadata 已在隔离测试链路贯通；当前生产上传、引用 API 和前端仍使用旧 page-dict / `document_pages` 链路，尚未切换，也未清理现有生产数据。**
+当前开发分支为 `phase1/unified-structure-model`。**五种范围内格式的统一结构解析、结构化 chunk、版本化 SQLite schema、`document_units` 和 Chroma 轻量定位 metadata 已在隔离测试链路贯通；23 份真实语料已全部完成确定性解析，PPTX 组合形状中的原生文字也已纳入。当前生产上传、引用 API 和前端仍使用旧 page-dict / `document_pages` 链路，尚未切换，也未清理现有生产数据。**
 
 | 工作项 | 当前状态 |
 |---|---|
@@ -476,16 +497,17 @@ Excel、旧 PowerPoint/Excel、OCR、图表理解、SmartArt 和演讲者备注�
 | `ParsedUnit` 原生 chunker | 已完成隔离链路；旧生产入口仍调用 legacy `chunk_document` |
 | 新 SQLite schema 与 `document_units` | 已完成 bootstrap、版本拒绝、事务替换、读取重校验和级联测试；尚未启用生产库 |
 | Chroma 结构化 metadata | 已完成标量编码和隔离写入测试；尚未写入生产 collection |
-| Markdown Adapter | 已完成确定性 fixture 测试；尚待真实文件验收 |
-| PPTX Adapter | 已完成标题、文本框顺序、列表、表格和无文本 warning 测试；尚待真实文件验收 |
+| Markdown Adapter | 已完成 fixture 与 3 份真实 Markdown 验收 |
+| PPTX Adapter | 已完成标题、文本框、嵌套组合形状、列表、表格和无文本 warning 测试，并通过 17 份真实 PPTX 验收 |
 | DOCX/PPTX ZIP 资源边界 | 已完成 entry 数、单项 XML 和总解压大小校验 |
 | 结构化引用预览服务与安全 renderer | 已完成隔离实现和测试；尚未接入旧 API/UI |
 | 生产上传/API/UI 切换与旧数据清理 | 尚未开始；必须在真实格式与预览验收后单独执行 |
-| Dataset v3 冻结 | 尚未开始 |
+| Dataset v3 prepare | 已把 6 个候选批次合并为单一 JSON；30 道单题、6 组对话（17 轮）、78 条 evidence 均已定位，manifest 已生成 |
+| Dataset v3 人工审核与冻结 | 尚未完成；当前全部 review 保持 `draft`，strict validate 会按设计失败 |
 | 多轮对话 | 尚未开始 |
 
 因此，当前最准确的阶段结论是：
 
-> **阶段 1 的确定性 fixture 与隔离入库链路已经贯通。下一验收点是用至少 1 份真实 Markdown 和 1 份真实 PPTX 检查解析结果，再把结构化 preview API/renderer 接入应用。当前运行时仍使用原有 `backend/services/parser.py`、`document_pages` 和 page-dict 链路；在阶段 2 验收和明确的数据清理确认前，不切换生产库。**
+> **阶段 1 的统一结构、真实格式解析、结构化 preview/renderer 和 Dataset v3 prepare 已贯通。下一步先人工审核并冻结 v3，再用它验收生产上传/API/UI 的结构化切换。当前运行时仍使用原有 `backend/services/parser.py`、`document_pages` 和 page-dict 链路；在阶段 2 验收和明确的数据清理确认前，不切换生产库。**
 
 所有简历指标都以实际 eval 报告为准，不预先填写目标值。
