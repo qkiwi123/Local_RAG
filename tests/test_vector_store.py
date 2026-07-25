@@ -207,6 +207,61 @@ class TestVectorStore:
             "parser_version": "",
         }]
 
+    def test_add_chunks_serializes_structured_locator_as_chroma_scalars(
+        self,
+        monkeypatch,
+    ):
+        from backend.models.document_structure import SourceLocator
+        from backend.services import vector_store
+        from backend.services.chunker import chunk_units
+        from backend.services.parsers.assembler import (
+            BlockDraft,
+            assemble_unit_from_drafts,
+        )
+
+        captured = {}
+
+        class FakeCollection:
+            def add(self, **kwargs):
+                captured.update(kwargs)
+
+        monkeypatch.setattr(vector_store, "_collection", FakeCollection())
+        monkeypatch.setattr(vector_store, "embed_texts", lambda texts: [[0.0]])
+        unit = assemble_unit_from_drafts(
+            document_id="doc-slides",
+            document_name="课件.pptx",
+            locator=SourceLocator(
+                kind="slide",
+                unit_index=2,
+                location_label="第 3 张幻灯片",
+                slide_number=3,
+                heading_path=["检索评测"],
+            ),
+            drafts=[
+                BlockDraft(
+                    block_type="heading",
+                    text="检索评测",
+                    heading_level=1,
+                )
+            ],
+        )
+        chunk = chunk_units([unit], chunk_size=100, overlap=0)[0]
+
+        assert vector_store.add_chunks([chunk]) == 1
+        metadata = captured["metadatas"][0]
+        assert captured["ids"] == [chunk.metadata.chunk_id]
+        assert metadata["unit_id"] == unit.unit_id
+        assert metadata["unit_index"] == 2
+        assert metadata["locator_kind"] == "slide"
+        assert metadata["location_label"] == "第 3 张幻灯片"
+        assert metadata["slide_number"] == 3
+        assert metadata["heading_path"] == '["检索评测"]'
+        assert "page_number" not in metadata
+        assert all(
+            isinstance(value, (str, int, float, bool))
+            for value in metadata.values()
+        )
+
     def test_get_all_chunks_returns_sparse_index_contract(self, monkeypatch):
         from backend.services import vector_store
 

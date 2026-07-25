@@ -11,6 +11,7 @@ from typing import Any
 
 import streamlit as st
 
+from backend.models.document_structure import LocatedBlock, render_table_text
 
 def build_highlight_html(text: str, start: int, end: int) -> str:
     """将 text 中 [start, end) 区间用 <mark> 包裹，其余全部 HTML 转义。"""
@@ -32,6 +33,128 @@ def build_highlight_html(text: str, start: int, end: int) -> str:
         f"{before}<mark>{highlighted}</mark>{after}"
         f"</pre>"
     )
+
+
+def _escaped_with_highlight(
+    text: str,
+    absolute_start: int,
+    highlight_start: int,
+    highlight_end: int,
+) -> str:
+    output: list[str] = []
+    for index, character in enumerate(text):
+        position = absolute_start + index
+        escaped = "<br>" if character == "\n" else html.escape(character)
+        if highlight_start <= position < highlight_end:
+            output.append(f"<mark>{escaped}</mark>")
+        else:
+            output.append(escaped)
+    return "".join(output)
+
+
+def _table_html(
+    block: LocatedBlock,
+    highlight_start: int,
+    highlight_end: int,
+) -> str:
+    rows = block.table_rows or []
+    if render_table_text(rows) != block.text:
+        raise ValueError("table_rows 与规范表格文本不一致")
+    width = max(len(row) for row in rows)
+    padded = [row + [""] * (width - len(row)) for row in rows]
+
+    line_starts = [0]
+    for line in block.text.split("\n")[:-1]:
+        line_starts.append(line_starts[-1] + len(line) + 1)
+    displayed_line_indexes = [0, *range(2, len(padded) + 1)]
+
+    output = ["<table>"]
+    for row_index, row in enumerate(padded):
+        tag = "th" if row_index == 0 else "td"
+        output.append("<tr>")
+        line_start = line_starts[displayed_line_indexes[row_index]]
+        cell_start = line_start + 2
+        for cell in row:
+            rendered_cell = cell.replace("|", r"\|").replace("\n", "<br>")
+            # 显示字符和 canonical 表示并非总是一对一；逐字符推进映射。
+            cell_html: list[str] = []
+            canonical_cursor = block.start_char + cell_start
+            for character in cell:
+                canonical_piece = (
+                    r"\|" if character == "|"
+                    else "<br>" if character == "\n"
+                    else character
+                )
+                escaped = "<br>" if character == "\n" else html.escape(character)
+                piece_end = canonical_cursor + len(canonical_piece)
+                if (
+                    canonical_cursor < highlight_end
+                    and piece_end > highlight_start
+                ):
+                    cell_html.append(f"<mark>{escaped}</mark>")
+                else:
+                    cell_html.append(escaped)
+                canonical_cursor = piece_end
+            output.append(f"<{tag}>{''.join(cell_html)}</{tag}>")
+            cell_start += len(rendered_cell) + 3
+        output.append("</tr>")
+    output.append("</table>")
+    return "".join(output)
+
+
+def build_structured_preview_html(
+    canonical_text: str,
+    blocks: list[dict[str, Any]] | list[LocatedBlock],
+    highlight_start: int,
+    highlight_end: int,
+) -> str:
+    """按 block 类型安全渲染 structured-v1 来源并精确标记相交字符。"""
+    if highlight_start < 0 or highlight_end <= highlight_start:
+        raise ValueError("高亮范围非法")
+    if highlight_end > len(canonical_text):
+        raise ValueError("高亮范围超出 canonical_text")
+
+    validated = [
+        block if isinstance(block, LocatedBlock)
+        else LocatedBlock.model_validate(block)
+        for block in blocks
+    ]
+    expected = "\n\n".join(block.text for block in validated)
+    if expected != canonical_text:
+        raise ValueError("blocks 与 canonical_text 不一致")
+    for block in validated:
+        if canonical_text[block.start_char:block.end_char] != block.text:
+            raise ValueError("block offset 与 canonical_text 不一致")
+
+    output: list[str] = []
+    for block in validated:
+        if block.block_type == "table":
+            output.append(_table_html(block, highlight_start, highlight_end))
+            continue
+        content = _escaped_with_highlight(
+            block.text,
+            block.start_char,
+            highlight_start,
+            highlight_end,
+        )
+        if block.block_type == "heading":
+            level = block.heading_level or 1
+            output.append(f"<h{level}>{content}</h{level}>")
+        elif block.block_type == "paragraph":
+            output.append(f"<p>{content}</p>")
+        elif block.block_type == "quote":
+            output.append(f"<blockquote>{content}</blockquote>")
+        elif block.block_type == "code":
+            output.append(f"<pre><code>{content}</code></pre>")
+        elif block.block_type == "list_item":
+            margin = (block.list_level or 0) * 1.5
+            output.append(
+                f'<div class="list-item" style="margin-left:{margin}em">'
+                f"• {content}</div>"
+            )
+        else:
+            raise ValueError(f"不支持的 block type: {block.block_type}")
+    return "".join(output)
 
 
 def fetch_citation_preview(

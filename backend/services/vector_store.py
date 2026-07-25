@@ -11,6 +11,7 @@ Chroma 提供：
 - metadata 过滤语法: where={"key": "value"}，仅支持精确匹配
 """
 
+import json
 from typing import List, Optional
 import chromadb
 from chromadb import PersistentClient
@@ -69,16 +70,22 @@ def add_chunks(chunks: List[DocumentChunk]) -> int:
     ids = [
         chunk.metadata.chunk_id
         or (
-            f"{chunk.metadata.document_id or chunk.metadata.document_name}"
-            f"_p{chunk.metadata.page_number}_c{chunk.metadata.chunk_index}"
+            (
+                f"{chunk.metadata.unit_id}_c{chunk.metadata.chunk_index}"
+                if chunk.metadata.unit_id
+                else (
+                    f"{chunk.metadata.document_id or chunk.metadata.document_name}"
+                    f"_p{chunk.metadata.page_number}_c{chunk.metadata.chunk_index}"
+                )
+            )
         )
         for chunk in chunks
     ]
-    metadatas = [
-        {
+    metadatas = []
+    for chunk in chunks:
+        metadata = {
             "document_id": chunk.metadata.document_id or chunk.metadata.document_name,
             "document_name": chunk.metadata.document_name,
-            "page_number": chunk.metadata.page_number,
             "chunk_index": chunk.metadata.chunk_index,
             "content_type": chunk.metadata.content_type,
             "block_index": chunk.metadata.block_index,
@@ -88,8 +95,23 @@ def add_chunks(chunks: List[DocumentChunk]) -> int:
             "token_count": chunk.metadata.token_count,
             "parser_version": chunk.metadata.parser_version,
         }
-        for chunk in chunks
-    ]
+        if chunk.metadata.page_number is not None:
+            metadata["page_number"] = chunk.metadata.page_number
+        if chunk.metadata.unit_id:
+            metadata.update({
+                "unit_id": chunk.metadata.unit_id,
+                "unit_index": chunk.metadata.unit_index,
+                "locator_kind": chunk.metadata.locator_kind,
+                "location_label": chunk.metadata.location_label,
+                "heading_path": json.dumps(
+                    chunk.metadata.heading_path,
+                    ensure_ascii=False,
+                    separators=(",", ":"),
+                ),
+            })
+        if chunk.metadata.slide_number is not None:
+            metadata["slide_number"] = chunk.metadata.slide_number
+        metadatas.append(metadata)
 
     # 批量生成向量
     embeddings = embed_texts(texts)

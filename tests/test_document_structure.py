@@ -188,6 +188,15 @@ def test_block_type_specific_fields_are_validated():
             heading_level=1,
         )
 
+    with pytest.raises(ValidationError, match="确定性表示"):
+        ParsedBlock(
+            block_id="b5",
+            block_type="table",
+            text="被篡改的表格文本",
+            sequence=0,
+            table_rows=[["字段", "值"]],
+        )
+
 
 def test_heading_and_list_levels_reject_out_of_range_values():
     with pytest.raises(ValidationError, match="heading_level"):

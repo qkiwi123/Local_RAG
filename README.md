@@ -390,7 +390,7 @@ $env:TRANSFORMERS_OFFLINE='1'
 当前优化以“尽可能复用现有检索、评估和前端链路”为原则，重点解决以下问题：
 
 1. **统一文档输入结构**：让不同格式都输出相同的数据模型，并保留标题、段落、列表、表格和来源位置等结构信息；
-2. **扩大文档格式与测试集覆盖**：在现有 PDF、DOCX、TXT 基础上增加 Markdown、PPTX、Excel，并用更多真实文档和题型冻结 Dataset v3；
+2. **扩大文档格式与测试集覆盖**：在现有 PDF、DOCX、TXT 基础上增加 Markdown、PPTX，并用更多真实文档和题型冻结 Dataset v3；
 3. **升级来源原文展示**：从无格式纯文本升级为可恢复标题、段落、列表和表格结构的来源预览，并准确区分真实页与逻辑页；
 4. **支持多轮对话**：在不污染独立问题检索的前提下，引入会话历史、问题改写和上下文窗口管理；
 5. **维持可评估性**：每次迁移都通过固定数据集、单元测试和回归报告验证，不用主观体验代替指标。
@@ -417,7 +417,7 @@ $env:TRANSFORMERS_OFFLINE='1'
 - `virtual_page`：DOCX/TXT 系统划分的逻辑页；
 - `slide`：PPTX 幻灯片；
 - `section`：Markdown 章节；
-- `sheet`：Excel 工作表及单元格范围。
+- `sheet`：为未来 Excel 支持预留的工作表及单元格范围；本轮不实现 Excel。
 
 前端后续必须使用 `location_label` 展示来源，不能把所有数字都称为“页码”。
 
@@ -442,12 +442,13 @@ parser registry / upload
 
 #### 4. 新格式支持
 
-在全链路稳定后依次增加：
+在全链路稳定后增加：
 
 1. Markdown：标题路径、段落、列表、引用、代码块；
 2. PPTX：幻灯片标题、文本框、列表、表格和 slide 定位；
-3. Excel：sheet、有效数据区域、表头和 cell range；
-4. 扫描 PDF：作为可选增强项，单独评估 OCR 复杂度、准确率和运行成本后再决定是否纳入主链路。
+3. 扫描 PDF：作为可选增强项，单独评估 OCR 复杂度、准确率和运行成本后再决定是否纳入主链路。
+
+Excel、旧 PowerPoint/Excel、OCR、图表理解、SmartArt 和演讲者备注不在本轮范围内；其中 Excel 只保留 locator 扩展位，不设置实现或验收项。
 
 #### 5. 来源预览与多轮对话
 
@@ -459,7 +460,7 @@ parser registry / upload
 
 ### 当前做到哪一步
 
-当前开发分支为 `phase1/unified-structure-model`。**已经完成统一结构模型和 PDF、DOCX、TXT 三种旧格式的 Adapter 层迁移，但尚未接入现有生产上传、chunker、Chroma/SQLite、引用和来源预览链路。**
+当前开发分支为 `phase1/unified-structure-model`。**五种范围内格式的统一结构解析、结构化 chunk、版本化 SQLite schema、`document_units` 和 Chroma 轻量定位 metadata 已在隔离测试链路贯通；当前生产上传、引用 API 和前端仍使用旧 page-dict / `document_pages` 链路，尚未切换，也未清理现有生产数据。**
 
 | 工作项 | 当前状态 |
 |---|---|
@@ -469,18 +470,22 @@ parser registry / upload
 | PDF Adapter | 已完成代码迁移 |
 | DOCX Adapter（标题、列表、表格、heading path、逻辑页） | 已完成代码迁移 |
 | TXT Adapter（逻辑页、段落拆分） | 已完成代码迁移 |
-| Adapter registry | 已建立，但尚未接入旧上传入口 |
-| 模型测试与 PDF Adapter 测试 | 已编写；当前分支尚无 CI 结果证明全量通过 |
-| DOCX/TXT Adapter 专项测试 | 尚待补齐 |
-| chunker 改为接收 `ParsedUnit` | 尚未开始 |
-| SQLite `document_units` 与 Chroma metadata 迁移 | 尚未开始 |
-| 结构化引用与来源预览 | 尚未开始 |
-| Markdown、PPTX、Excel | 尚未开始 |
+| Adapter registry | 已支持五种格式及解析 warning；尚未接入旧生产上传入口 |
+| 模型与五种 Adapter 专项测试 | 已完成，本地全量 pytest 已通过；仍需 CI 结果 |
+| DOCX/TXT Adapter 专项测试 | 已完成 |
+| `ParsedUnit` 原生 chunker | 已完成隔离链路；旧生产入口仍调用 legacy `chunk_document` |
+| 新 SQLite schema 与 `document_units` | 已完成 bootstrap、版本拒绝、事务替换、读取重校验和级联测试；尚未启用生产库 |
+| Chroma 结构化 metadata | 已完成标量编码和隔离写入测试；尚未写入生产 collection |
+| Markdown Adapter | 已完成确定性 fixture 测试；尚待真实文件验收 |
+| PPTX Adapter | 已完成标题、文本框顺序、列表、表格和无文本 warning 测试；尚待真实文件验收 |
+| DOCX/PPTX ZIP 资源边界 | 已完成 entry 数、单项 XML 和总解压大小校验 |
+| 结构化引用预览服务与安全 renderer | 已完成隔离实现和测试；尚未接入旧 API/UI |
+| 生产上传/API/UI 切换与旧数据清理 | 尚未开始；必须在真实格式与预览验收后单独执行 |
 | Dataset v3 冻结 | 尚未开始 |
 | 多轮对话 | 尚未开始 |
 
 因此，当前最准确的阶段结论是：
 
-> **输入解析层的统一结构基础已经落地，下一施工点是补齐 Adapter 测试并将 `ParsedUnit` 接入 chunker；项目当前运行时仍使用原有 `backend/services/parser.py` 和 page-dict 链路。**
+> **阶段 1 的确定性 fixture 与隔离入库链路已经贯通。下一验收点是用至少 1 份真实 Markdown 和 1 份真实 PPTX 检查解析结果，再把结构化 preview API/renderer 接入应用。当前运行时仍使用原有 `backend/services/parser.py`、`document_pages` 和 page-dict 链路；在阶段 2 验收和明确的数据清理确认前，不切换生产库。**
 
 所有简历指标都以实际 eval 报告为准，不预先填写目标值。

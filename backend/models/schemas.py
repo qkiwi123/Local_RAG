@@ -9,6 +9,7 @@ from typing import Optional
 
 from pydantic import BaseModel, Field, model_validator
 
+from backend.models.document_structure import LocatedBlock, SourceLocator
 
 # ─── 文本块相关 ──────────────────────────────────────
 
@@ -16,16 +17,31 @@ class ChunkMetadata(BaseModel):
     """文本块的元信息，描述该块来自哪份文档的哪个位置。"""
     document_id: str = Field(default="", description="文档稳定 ID；旧数据可为空")
     document_name: str = Field(..., description="文档文件名")
-    page_number: int = Field(..., description="页码（从 1 开始）")
-    chunk_index: int = Field(..., description="该块在当前文档中的序号（从 0 开始）")
+    unit_id: str = Field(default="", description="结构化来源单元的稳定 ID")
+    unit_index: int = Field(default=0, description="来源单元在文档内的序号")
+    locator_kind: str = Field(default="", description="page / virtual_page / slide / section")
+    location_label: str = Field(default="", description="面向用户的来源位置标签")
+    page_number: Optional[int] = Field(
+        default=None,
+        description="PDF 或逻辑页页码；非页来源为空",
+    )
+    slide_number: Optional[int] = Field(
+        default=None,
+        description="PPTX 幻灯片编号；非幻灯片来源为空",
+    )
+    heading_path: list[str] = Field(default_factory=list, description="来源标题路径")
+    chunk_index: int = Field(..., description="该块在当前来源单元中的序号（从 0 开始）")
     content_type: str = Field(
         default="paragraph",
         description="解析内容类型：paragraph 或 table",
     )
     chunk_id: str = Field(default="", description="由来源位置确定的稳定 chunk ID")
-    block_index: int = Field(default=0, description="同一逻辑页内的 parser 块序号")
-    start_char: int = Field(default=0, description="chunk 在解析后逻辑页文本中的起始偏移")
-    end_char: int = Field(default=0, description="chunk 在解析后逻辑页文本中的结束偏移")
+    block_index: int = Field(
+        default=0,
+        description="兼容旧链路的 parser 块序号；结构化 chunk 取首个相交 block",
+    )
+    start_char: int = Field(default=0, description="chunk 在来源单元规范文本中的起始偏移")
+    end_char: int = Field(default=0, description="chunk 在来源单元规范文本中的结束偏移")
     char_count: int = Field(default=0, description="chunk 字符数")
     token_count: int = Field(default=0, description="embedding tokenizer 的实际 token 数")
     parser_version: str = Field(
@@ -95,6 +111,36 @@ class CitationPreview(BaseModel):
             raise ValueError("highlight_end 必须大于 highlight_start")
         if self.highlight_start < 0:
             raise ValueError("highlight_start 不能为负数")
+        return self
+
+
+class StructuredCitationPreview(BaseModel):
+    """structured-v1 来源预览，不包含旧 parsed_page_text 回退。"""
+    document_id: str
+    chunk_id: str
+    document_name: str
+    parser_version: str
+    location: SourceLocator
+    canonical_text: str
+    blocks: list[LocatedBlock]
+    highlight_start: int = Field(..., ge=0)
+    highlight_end: int = Field(..., ge=0)
+    chunk_content: str
+
+    @model_validator(mode="after")
+    def validate_preview(self):
+        if self.highlight_end <= self.highlight_start:
+            raise ValueError("highlight_end 必须大于 highlight_start")
+        if self.highlight_end > len(self.canonical_text):
+            raise ValueError("highlight offset 超出 canonical_text")
+        if (
+            self.canonical_text[self.highlight_start:self.highlight_end]
+            != self.chunk_content
+        ):
+            raise ValueError("chunk_content 与 canonical_text 切片不一致")
+        expected_text = "\n\n".join(block.text for block in self.blocks)
+        if expected_text != self.canonical_text:
+            raise ValueError("blocks 与 canonical_text 不一致")
         return self
 
 

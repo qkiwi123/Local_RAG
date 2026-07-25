@@ -15,6 +15,8 @@ from docx.text.paragraph import Paragraph
 
 from backend.models.document_structure import ParsedUnit, SourceLocator
 from backend.services.parsers.assembler import BlockDraft, assemble_unit_from_drafts
+from backend.services.parsers.office_zip import validate_office_package
+from backend.services.parsers.tables import render_table_markdown
 from backend.services.parsers.text import normalize_text
 
 
@@ -93,21 +95,6 @@ def _table_rows(table: Table) -> list[list[str]]:
     return [row + [""] * (width - len(row)) for row in rows]
 
 
-def _table_markdown(rows: list[list[str]]) -> str:
-    """生成确定性检索文本；结构化二维单元格仍单独保留。"""
-
-    def render(values: list[str]) -> str:
-        escaped = [
-            value.replace("|", r"\|").replace("\n", "<br>")
-            for value in values
-        ]
-        return "| " + " | ".join(escaped) + " |"
-
-    output = [render(rows[0]), render(["---"] * len(rows[0]))]
-    output.extend(render(row) for row in rows[1:])
-    return "\n".join(output)
-
-
 def parse_docx_units(
     file_path: str,
     *,
@@ -116,6 +103,7 @@ def parse_docx_units(
 ) -> list[ParsedUnit]:
     """按 XML 阅读顺序解析 DOCX，输出统一的 ParsedUnit。"""
     name = document_name or Path(file_path).name
+    validate_office_package(file_path)
     document = Document(file_path)
     units: list[ParsedUnit] = []
 
@@ -213,7 +201,7 @@ def parse_docx_units(
                 append_draft(
                     BlockDraft(
                         block_type="table",
-                        text=_table_markdown(rows),
+                        text=render_table_markdown(rows),
                         table_rows=rows,
                     ),
                     counts_as_paragraph=False,

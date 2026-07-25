@@ -12,6 +12,7 @@ from bisect import bisect_left, bisect_right
 from collections.abc import Callable
 from typing import List
 
+from backend.models.document_structure import ParsedUnit
 from backend.models.schemas import ChunkMetadata, DocumentChunk
 
 
@@ -282,5 +283,93 @@ def chunk_document(
         page_chunk_offsets[page_key] = chunk_index
         page_char_offsets[page_key] = page_start + len(text) + 2
         page_block_offsets[page_key] = block_index + 1
+
+    return all_chunks
+
+
+def _span_block_info(
+    unit: ParsedUnit,
+    start_char: int,
+    end_char: int,
+) -> tuple[int, str]:
+    """返回 chunk 首个相交 block 及汇总类型，供兼容 metadata 使用。"""
+    intersecting = [
+        block
+        for block in unit.blocks
+        if block.start_char < end_char and block.end_char > start_char
+    ]
+    if not intersecting:
+        return 0, "mixed"
+
+    block_types = {block.block_type for block in intersecting}
+    content_type = next(iter(block_types)) if len(block_types) == 1 else "mixed"
+    return intersecting[0].sequence, content_type
+
+
+def chunk_units(
+    units: list[ParsedUnit],
+    chunk_size: int,
+    overlap: int,
+    *,
+    max_tokens: int | None = None,
+    token_counter: TokenCounter | None = None,
+    strategy: str = "recursive",
+) -> list[DocumentChunk]:
+    """直接切分 ``ParsedUnit.canonical_text`` 并保留统一来源定位。
+
+    offset 始终相对于所属 unit 的 canonical_text，chunk 可以跨越相邻
+    heading/paragraph/list/table block，但绝不跨 unit。
+    """
+    _validate_parameters(chunk_size, overlap, max_tokens)
+    counter = token_counter or len
+    all_chunks: list[DocumentChunk] = []
+
+    for unit in units:
+        spans = _split_text_with_offsets(
+            unit.canonical_text,
+            chunk_size,
+            overlap,
+            max_tokens=max_tokens,
+            token_counter=counter,
+            strategy=strategy,
+        )
+        chunk_index = 0
+        for start_char, end_char in spans:
+            chunk_text = unit.canonical_text[start_char:end_char]
+            if not chunk_text.strip():
+                continue
+
+            block_index, content_type = _span_block_info(
+                unit,
+                start_char,
+                end_char,
+            )
+            chunk_id = f"{unit.unit_id}_s{start_char}_e{end_char}"
+            all_chunks.append(
+                DocumentChunk(
+                    content=chunk_text,
+                    metadata=ChunkMetadata(
+                        document_id=unit.document_id,
+                        document_name=unit.document_name,
+                        unit_id=unit.unit_id,
+                        unit_index=unit.locator.unit_index,
+                        locator_kind=unit.locator.kind,
+                        location_label=unit.locator.location_label,
+                        page_number=unit.locator.page_number,
+                        slide_number=unit.locator.slide_number,
+                        heading_path=unit.locator.heading_path,
+                        chunk_index=chunk_index,
+                        content_type=content_type,
+                        chunk_id=chunk_id,
+                        block_index=block_index,
+                        start_char=start_char,
+                        end_char=end_char,
+                        char_count=len(chunk_text),
+                        token_count=counter(chunk_text),
+                        parser_version=unit.parser_version,
+                    ),
+                )
+            )
+            chunk_index += 1
 
     return all_chunks

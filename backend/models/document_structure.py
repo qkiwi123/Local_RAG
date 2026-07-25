@@ -16,6 +16,27 @@ BlockType = Literal["heading", "paragraph", "list_item", "table", "code", "quote
 LocatorKind = Literal["page", "virtual_page", "slide", "section", "sheet"]
 
 
+def render_table_text(rows: list[list[str]]) -> str:
+    """统一表格的确定性检索文本表示。"""
+    if not rows:
+        raise ValueError("table rows 不能为空")
+    width = max(len(row) for row in rows)
+    if width < 1:
+        raise ValueError("table 至少需要一个单元格")
+    padded = [row + [""] * (width - len(row)) for row in rows]
+
+    def render(values: list[str]) -> str:
+        escaped = [
+            value.replace("|", r"\|").replace("\n", "<br>")
+            for value in values
+        ]
+        return "| " + " | ".join(escaped) + " |"
+
+    output = [render(padded[0]), render(["---"] * width)]
+    output.extend(render(row) for row in padded[1:])
+    return "\n".join(output)
+
+
 class ParsedBlock(BaseModel):
     block_id: str
     block_type: BlockType
@@ -62,6 +83,12 @@ class ParsedBlock(BaseModel):
             raise ValueError("list_item 必须提供 list_level")
         if self.block_type == "table" and not self.table_rows:
             raise ValueError("table 必须提供非空 table_rows")
+        if (
+            self.block_type == "table"
+            and self.table_rows
+            and self.text != render_table_text(self.table_rows)
+        ):
+            raise ValueError("table text 与 table_rows 的确定性表示不一致")
         if self.block_type != "heading" and self.heading_level is not None:
             raise ValueError("heading_level 仅 heading 可设置")
         if self.block_type != "list_item" and self.list_level is not None:
@@ -80,7 +107,7 @@ class LocatedBlock(ParsedBlock):
         if self.start_char < 0 or self.end_char <= self.start_char:
             raise ValueError("block 字符范围非法")
         if self.end_char - self.start_char != len(self.text):
-            raise ValueError("block 字符范围长度与 text 不一致")
+            raise ValueError("block 切片长度与 text 不一致")
         return self
 
 
@@ -121,7 +148,7 @@ class SourceLocator(BaseModel):
             if self.page_number is None or self.page_number < 1:
                 raise ValueError("page_number 必须提供且大于等于 1")
         elif self.page_number is not None:
-            raise ValueError("只有 page 和 virtual_page 可以设置 page_number")
+            raise ValueError("不能设置 page_number；仅 page 和 virtual_page 支持该字段")
 
         if self.kind == "slide":
             if self.slide_number is None or self.slide_number < 1:
@@ -196,6 +223,39 @@ class ParsedUnit(BaseModel):
             if self.canonical_text[block.start_char:block.end_char] != block.text:
                 raise ValueError("canonical_text 与 block offset 切片不一致")
             cursor = expected_end
+        return self
+
+
+class ParseWarning(BaseModel):
+    code: str
+    message: str
+    locator: SourceLocator
+
+    @field_validator("code", "message")
+    @classmethod
+    def validate_warning_text(cls, value: str) -> str:
+        if not value or not value.strip():
+            raise ValueError("warning 字段不能为空")
+        return value
+
+
+class ParsedDocument(BaseModel):
+    units: list[ParsedUnit] = Field(default_factory=list)
+    warnings: list[ParseWarning] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def validate_units(self):
+        if not self.units:
+            return self
+        identities = {
+            (unit.document_id, unit.document_name, unit.parser_version)
+            for unit in self.units
+        }
+        if len(identities) != 1:
+            raise ValueError("同一 ParsedDocument 的 unit 身份必须一致")
+        indexes = [unit.locator.unit_index for unit in self.units]
+        if len(indexes) != len(set(indexes)):
+            raise ValueError("ParsedDocument 的 unit_index 不能重复")
         return self
 
 

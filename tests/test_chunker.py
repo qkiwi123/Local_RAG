@@ -8,7 +8,9 @@
 """
 
 import pytest
-from backend.services.chunker import _split_text, chunk_document
+from backend.models.document_structure import SourceLocator
+from backend.services.chunker import _split_text, chunk_document, chunk_units
+from backend.services.parsers.assembler import BlockDraft, assemble_unit_from_drafts
 
 
 class TestSplitText:
@@ -283,3 +285,111 @@ class TestChunkDocument:
         chunks = chunk_document(pages, chunk_size=500, overlap=50)
         assert len(chunks) == 1
         assert chunks[0].metadata.parser_version == ""
+
+
+class TestChunkUnits:
+    def test_exactly_slices_canonical_text_and_propagates_locator(self):
+        locator = SourceLocator(
+            kind="virtual_page",
+            unit_index=1,
+            location_label="逻辑页 2",
+            page_number=2,
+            heading_path=["部署", "Windows"],
+        )
+        unit = assemble_unit_from_drafts(
+            document_id="doc-structured",
+            document_name="指南.docx",
+            locator=locator,
+            drafts=[
+                BlockDraft(
+                    block_type="heading",
+                    text="Windows",
+                    heading_level=2,
+                ),
+                BlockDraft(
+                    block_type="paragraph",
+                    text="先安装依赖，再启动服务。",
+                ),
+            ],
+        )
+
+        chunks = chunk_units([unit], chunk_size=500, overlap=50)
+
+        assert len(chunks) == 1
+        chunk = chunks[0]
+        metadata = chunk.metadata
+        assert chunk.content == unit.canonical_text
+        assert unit.canonical_text[metadata.start_char:metadata.end_char] == chunk.content
+        assert metadata.unit_id == unit.unit_id
+        assert metadata.unit_index == 1
+        assert metadata.locator_kind == "virtual_page"
+        assert metadata.location_label == "逻辑页 2"
+        assert metadata.page_number == 2
+        assert metadata.heading_path == ["部署", "Windows"]
+        assert metadata.content_type == "mixed"
+        assert metadata.parser_version == unit.parser_version
+
+    def test_chunk_ids_and_offsets_are_stable(self):
+        locator = SourceLocator(
+            kind="page",
+            unit_index=0,
+            location_label="第 1 页",
+            page_number=1,
+        )
+        unit = assemble_unit_from_drafts(
+            document_id="stable-doc",
+            document_name="报告.pdf",
+            locator=locator,
+            drafts=[
+                BlockDraft(
+                    block_type="paragraph",
+                    text="第一段包含足够长的内容。\n\n第二段也包含足够长的内容。",
+                ),
+            ],
+        )
+
+        first = chunk_units([unit], chunk_size=14, overlap=3)
+        second = chunk_units([unit], chunk_size=14, overlap=3)
+
+        assert len(first) > 1
+        assert [chunk.metadata.chunk_id for chunk in first] == [
+            chunk.metadata.chunk_id for chunk in second
+        ]
+        assert [chunk.metadata.chunk_index for chunk in first] == list(
+            range(len(first))
+        )
+        for chunk in first:
+            metadata = chunk.metadata
+            assert unit.canonical_text[
+                metadata.start_char:metadata.end_char
+            ] == chunk.content
+            assert metadata.chunk_id == (
+                f"{unit.unit_id}_s{metadata.start_char}_e{metadata.end_char}"
+            )
+
+    def test_non_page_locator_does_not_fabricate_page_number(self):
+        locator = SourceLocator(
+            kind="slide",
+            unit_index=2,
+            location_label="第 3 张幻灯片",
+            slide_number=3,
+            heading_path=["检索评测"],
+        )
+        unit = assemble_unit_from_drafts(
+            document_id="slides-doc",
+            document_name="课件.pptx",
+            locator=locator,
+            drafts=[
+                BlockDraft(
+                    block_type="heading",
+                    text="检索评测",
+                    heading_level=1,
+                )
+            ],
+        )
+
+        metadata = chunk_units([unit], chunk_size=100, overlap=0)[0].metadata
+
+        assert metadata.page_number is None
+        assert metadata.slide_number == 3
+        assert metadata.location_label == "第 3 张幻灯片"
