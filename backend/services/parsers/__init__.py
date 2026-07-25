@@ -5,6 +5,7 @@
 
 PARSER_VERSION = "structured-v1"
 
+from backend.services.parsers.docx import parse_docx_units
 from backend.services.parsers.pdf import parse_pdf_units
 
-__all__ = ["PARSER_VERSION", "parse_pdf_units"]
+__all__ = ["PARSER_VERSION", "parse_pdf_units", "parse_docx_units"]
