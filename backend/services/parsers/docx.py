@@ -95,6 +95,7 @@ def _table_rows(table: Table) -> list[list[str]]:
 
 def _table_markdown(rows: list[list[str]]) -> str:
     """生成确定性检索文本；结构化二维单元格仍单独保留。"""
+
     def render(values: list[str]) -> str:
         escaped = [
             value.replace("|", r"\|").replace("\n", "<br>")
@@ -162,6 +163,11 @@ def parse_docx_units(
             if not text:
                 continue
 
+            # 只在下一段文本真正到来时分页。这样第 30 段后的表格仍属于
+            # 当前逻辑页，而第 31 段从下一逻辑页开始。
+            if paragraph_count >= PARAGRAPHS_PER_VIRTUAL_PAGE:
+                flush()
+
             style_name = item.style.name if item.style else ""
             heading_level = _heading_level(item)
             if heading_level is not None:
@@ -200,9 +206,6 @@ def parse_docx_units(
                         ),
                         counts_as_paragraph=True,
                     )
-
-            if paragraph_count >= PARAGRAPHS_PER_VIRTUAL_PAGE:
-                flush()
 
         elif isinstance(item, Table):
             rows = _table_rows(item)
