@@ -4,14 +4,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from backend.models.document_structure import (
-    ParsedBlock,
-    ParsedUnit,
-    SourceLocator,
-    assemble_parsed_unit,
-    make_block_id,
-)
-from backend.services.parsers import PARSER_VERSION
+from backend.models.document_structure import ParsedUnit, SourceLocator
+from backend.services.parsers.assembler import BlockDraft, assemble_unit_from_drafts
 from backend.services.parsers.text import normalize_text, split_paragraphs
 
 
@@ -36,7 +30,7 @@ def parse_txt_units(
             "".join(lines[line_offset:line_offset + LINES_PER_VIRTUAL_PAGE])
         )
         if not text:
-            text = f"[逻辑页{page_number}无可提取文本]"
+            continue
 
         locator = SourceLocator(
             kind="virtual_page",
@@ -45,29 +39,20 @@ def parse_txt_units(
             page_number=page_number,
         )
 
-        paragraphs = split_paragraphs(text) or [text]
-        blocks = [
-            ParsedBlock(
-                block_id=make_block_id(
-                    document_id,
-                    PARSER_VERSION,
-                    locator,
-                    sequence,
-                ),
+        drafts = [
+            BlockDraft(
                 block_type="paragraph",
                 text=paragraph,
-                sequence=sequence,
             )
-            for sequence, paragraph in enumerate(paragraphs)
+            for paragraph in split_paragraphs(text)
         ]
 
         units.append(
-            assemble_parsed_unit(
+            assemble_unit_from_drafts(
                 document_id=document_id,
                 document_name=name,
-                parser_version=PARSER_VERSION,
                 locator=locator,
-                blocks=blocks,
+                drafts=drafts,
             )
         )
 
