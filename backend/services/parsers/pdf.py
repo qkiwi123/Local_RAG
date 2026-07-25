@@ -1,16 +1,13 @@
-"""PDF adapter: PyPDF2 -> ParsedUnit."""
+"""PDF adapter: PyPDF2 -> ParsedUnit。"""
+
+from __future__ import annotations
 
 from pathlib import Path
 
 from PyPDF2 import PdfReader
 
-from backend.models.document_structure import (
-    ParsedBlock,
-    SourceLocator,
-    assemble_parsed_unit,
-    make_block_id,
-)
-from backend.services.parsers import PARSER_VERSION
+from backend.models.document_structure import ParsedUnit, SourceLocator
+from backend.services.parsers.assembler import BlockDraft, assemble_unit_from_drafts
 from backend.services.parsers.text import normalize_text, split_paragraphs
 
 
@@ -22,11 +19,11 @@ def parse_pdf_units(
     *,
     document_id: str,
     document_name: str | None = None,
-):
+) -> list[ParsedUnit]:
     """Parse PDF pages into structured units."""
     name = document_name or Path(file_path).name
     reader = PdfReader(file_path)
-    units = []
+    units: list[ParsedUnit] = []
 
     for index, page in enumerate(reader.pages, start=1):
         text = normalize_text(page.extract_text() or "")
@@ -40,29 +37,20 @@ def parse_pdf_units(
             page_number=index,
         )
 
-        blocks = []
-        for sequence, paragraph in enumerate(split_paragraphs(text)):
-            blocks.append(
-                ParsedBlock(
-                    block_id=make_block_id(
-                        document_id,
-                        PARSER_VERSION,
-                        locator,
-                        sequence,
-                    ),
-                    block_type="paragraph",
-                    text=paragraph,
-                    sequence=sequence,
-                )
+        drafts = [
+            BlockDraft(
+                block_type="paragraph",
+                text=paragraph,
             )
+            for paragraph in split_paragraphs(text)
+        ]
 
         units.append(
-            assemble_parsed_unit(
+            assemble_unit_from_drafts(
                 document_id=document_id,
                 document_name=name,
-                parser_version=PARSER_VERSION,
                 locator=locator,
-                blocks=blocks,
+                drafts=drafts,
             )
         )
 
