@@ -79,7 +79,13 @@ class Citation(BaseModel):
     source_id: int = Field(..., ge=1, description="回答中的来源编号，如【来源1】中的 1")
     chunk_id: Optional[str] = Field(default=None, description="引用对应的向量库文本块 ID")
     document_name: str = Field(..., description="引用的文档文件名")
-    page_number: int = Field(..., description="引用的页码")
+    unit_id: Optional[str] = Field(default=None, description="结构化来源单元 ID")
+    unit_index: Optional[int] = Field(default=None, ge=0, description="来源单元序号")
+    locator_kind: Optional[str] = Field(default=None, description="来源定位类型")
+    location_label: Optional[str] = Field(default=None, description="面向用户的来源位置")
+    page_number: Optional[int] = Field(default=None, ge=1, description="真实页或逻辑页")
+    slide_number: Optional[int] = Field(default=None, ge=1, description="幻灯片编号")
+    heading_path: list[str] = Field(default_factory=list, description="来源标题路径")
     excerpt: str = Field(..., description="引用的文本片段")
     document_id: Optional[str] = Field(default=None, description="稳定文档 ID")
     parser_version: Optional[str] = Field(default=None, description="解析器版本")
@@ -148,7 +154,9 @@ class RetrievalTraceChunk(BaseModel):
     """Trace 中按 chunk_id 去重保存的完整候选原文。"""
     chunk_id: str
     document_name: str
-    page_number: int
+    location_label: str = ""
+    page_number: Optional[int] = None
+    slide_number: Optional[int] = None
     content: str
 
 

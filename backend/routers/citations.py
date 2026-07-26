@@ -7,11 +7,11 @@ from fastapi import APIRouter, HTTPException
 from fastapi.responses import JSONResponse
 
 from backend.config import settings
-from backend.services.citation_preview import (
+from backend.services.structured_citation_preview import (
     CitationPreviewConflictError,
     CitationPreviewNotFoundError,
     CitationPreviewValidationError,
-    build_citation_preview,
+    build_structured_citation_preview,
 )
 
 router = APIRouter(tags=["citations"])
@@ -24,7 +24,7 @@ async def get_citation_preview(document_id: str, chunk_id: str):
         raise HTTPException(status_code=404, detail="引用预览功能未开启")
 
     try:
-        preview = build_citation_preview(document_id, chunk_id)
+        preview = build_structured_citation_preview(document_id, chunk_id)
     except CitationPreviewNotFoundError as error:
         raise HTTPException(status_code=404, detail=str(error))
     except CitationPreviewConflictError as error:

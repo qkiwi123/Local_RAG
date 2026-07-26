@@ -6,13 +6,32 @@ LLM 只能使用 【来源N】。N 是本次检索结果的 1-based 序号，文
 没有引用标记时返回空列表，不再把检索 Top-K 伪装成回答引用。
 """
 
+import json
 import re
 from typing import List
+
 from backend.models.schemas import Citation
+from backend.services.parsers.constants import PARSER_VERSION
 
 
 # 匹配稳定来源编号；允许“来源”和数字之间存在少量空白。
 _SOURCE_PATTERN = re.compile(r"【来源\s*(\d+)】")
+_LOCATOR_KINDS = {"page", "virtual_page", "slide", "section", "sheet"}
+
+
+def _heading_path(value) -> list[str] | None:
+    if isinstance(value, list) and all(isinstance(item, str) for item in value):
+        return value
+    if isinstance(value, str):
+        try:
+            decoded = json.loads(value)
+        except json.JSONDecodeError:
+            return None
+        if isinstance(decoded, list) and all(
+            isinstance(item, str) for item in decoded
+        ):
+            return decoded
+    return None
 
 
 def extract_citations(
@@ -55,42 +74,70 @@ def extract_citations(
         result = retrieval_results[result_index]
         meta = result.get("metadata") or {}
         doc_name = meta.get("document_name")
-        page_num = meta.get("page_number")
-        if not doc_name or not isinstance(page_num, int):
-            continue
-
         document_id = meta.get("document_id")
+        unit_id = meta.get("unit_id")
+        unit_index = meta.get("unit_index")
+        locator_kind = meta.get("locator_kind")
+        location_label = meta.get("location_label")
         parser_version = meta.get("parser_version")
-        content_type = meta.get("content_type")
         start_char = meta.get("start_char")
         end_char = meta.get("end_char")
         chunk_id = result.get("chunk_id")
+        heading_path = _heading_path(meta.get("heading_path"))
 
-        preview_available = (
-            preview_enabled
-            and document_id is not None
-            and parser_version is not None
-            and chunk_id is not None
-            and start_char is not None
-            and end_char is not None
-            and isinstance(start_char, int)
-            and isinstance(end_char, int)
-            and start_char >= 0
-            and end_char > start_char
-        )
+        if (
+            not isinstance(doc_name, str)
+            or not doc_name
+            or not isinstance(document_id, str)
+            or not document_id
+            or not isinstance(unit_id, str)
+            or not unit_id
+            or not isinstance(unit_index, int)
+            or unit_index < 0
+            or locator_kind not in _LOCATOR_KINDS
+            or not isinstance(location_label, str)
+            or not location_label
+            or parser_version != PARSER_VERSION
+            or not isinstance(chunk_id, str)
+            or not chunk_id
+            or not isinstance(start_char, int)
+            or not isinstance(end_char, int)
+            or start_char < 0
+            or end_char <= start_char
+            or heading_path is None
+        ):
+            continue
+
+        content_type = meta.get("content_type")
+        page_num = meta.get("page_number")
+        slide_num = meta.get("slide_number")
+        if page_num is not None and (
+            not isinstance(page_num, int) or page_num < 1
+        ):
+            continue
+        if slide_num is not None and (
+            not isinstance(slide_num, int) or slide_num < 1
+        ):
+            continue
 
         citations.append(Citation(
             source_id=source_id,
             chunk_id=chunk_id,
             document_name=doc_name,
+            unit_id=unit_id,
+            unit_index=unit_index,
+            locator_kind=locator_kind,
+            location_label=location_label,
             page_number=page_num,
+            slide_number=slide_num,
+            heading_path=heading_path,
             excerpt=result.get("content", "")[:200],
             document_id=document_id,
             parser_version=parser_version,
             content_type=content_type,
             start_char=start_char,
             end_char=end_char,
-            preview_available=preview_available,
+            preview_available=preview_enabled,
         ))
 
     return citations
@@ -123,7 +170,7 @@ def format_answer_with_citations(answer: str, citations: List[Citation]) -> str:
         excerpt_preview = citation.excerpt[:100].replace("\n", " ")
         lines.append(
             f"{i}. 【来源{citation.source_id}】《{citation.document_name}》"
-            f"第{citation.page_number}页"
+            f"{citation.location_label or '位置未知'}"
         )
         if excerpt_preview:
             lines.append(f'   > "{excerpt_preview}..."')

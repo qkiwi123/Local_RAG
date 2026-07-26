@@ -185,8 +185,8 @@ with st.sidebar:
     # ── 文档上传区 ──
     st.header("📤 上传文档")
     uploaded_files = st.file_uploader(
-        "支持 PDF / Word / TXT（可多选）",
-        type=["pdf", "docx", "txt"],
+        "支持 PDF / Word / TXT / Markdown / PPTX（可多选）",
+        type=["pdf", "docx", "txt", "md", "pptx"],
         accept_multiple_files=True,
         help="上传后系统将自动解析、切分、向量化并存入知识库",
         key=f"document_uploader_{st.session_state['_uploader_generation']}",
@@ -325,7 +325,7 @@ st.title("💬 知识库问答")
 if not st.session_state.messages:
     st.info(
         "👋 欢迎使用企业知识库问答系统！\n\n"
-        "1. 先在左侧上传文档（支持 PDF / Word / TXT，可多选）\n"
+        "1. 先在左侧上传文档（支持 PDF / Word / TXT / Markdown / PPTX，可多选）\n"
         "2. 然后在下方输入问题，系统将从文档中检索并回答\n\n"
         "⚠️ 请确认服务已启动（`.\\scripts\\start.ps1`）"
     )

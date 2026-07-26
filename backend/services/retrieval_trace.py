@@ -59,7 +59,9 @@ class TraceCollector:
                 RetrievalTraceChunk(
                     chunk_id=chunk_id,
                     document_name=metadata.get("document_name", "unknown"),
-                    page_number=int(metadata.get("page_number") or 0),
+                    location_label=metadata.get("location_label", ""),
+                    page_number=metadata.get("page_number"),
+                    slide_number=metadata.get("slide_number"),
                     content=row.get("content", ""),
                 ),
             )

@@ -19,6 +19,7 @@ TRACE_PAYLOAD = {
         "c1": {
             "chunk_id": "c1",
             "document_name": "doc.txt",
+            "location_label": "第 1 页",
             "page_number": 1,
             "content": LONG_CHUNK,
         }

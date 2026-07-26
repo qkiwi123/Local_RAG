@@ -13,7 +13,7 @@ from fastapi import APIRouter, File, HTTPException, UploadFile
 
 from backend.config import settings
 from backend.models.schemas import UploadResponse
-from backend.services.chunker import chunk_document
+from backend.services.chunker import chunk_units
 from backend.services.document_store import (
     create_document,
     delete_record,
@@ -21,29 +21,26 @@ from backend.services.document_store import (
     list_documents as list_document_records,
     mark_failed,
     mark_ready,
-    _now,
 )
 from backend.services.embedding import count_tokens
-from backend.services.page_store import (
-    delete_document_pages,
-    replace_document_pages,
+from backend.services.parsers import (
+    ADAPTERS,
+    PARSER_VERSION,
+    parse_document_structure,
 )
-from backend.services.parser import PARSER_VERSION, parse_document
-from backend.services.source_page import (
-    assemble_source_pages,
-    validate_chunks_against_pages,
+from backend.services.unit_store import (
+    delete_document_units,
+    replace_document_units,
 )
 from backend.services.vector_store import (
     add_chunks,
-    delete_document as delete_legacy_vectors,
     delete_document_by_id,
-    get_document_list as get_legacy_document_names,
 )
 
 router = APIRouter(tags=["upload"])
 logger = logging.getLogger(__name__)
 
-ALLOWED_EXTENSIONS = {".pdf", ".docx", ".txt"}
+ALLOWED_EXTENSIONS = frozenset(ADAPTERS)
 MAX_FILE_SIZE = 50 * 1024 * 1024
 
 
@@ -78,7 +75,14 @@ def _cleanup_failed_ingest(
     record_created: bool,
 ) -> None:
     delete_document_by_id(document_id)
-    delete_document_pages(document_id)
+    if record_created:
+        try:
+            delete_document_units(
+                document_id,
+                db_path=settings.METADATA_DB_PATH,
+            )
+        except Exception:
+            pass
     for path in paths:
         _safe_unlink(path, upload_dir)
     if record_created:
@@ -94,9 +98,10 @@ async def upload_document(file: UploadFile = File(...)):
     original_name = _validate_filename(file.filename or "")
     suffix = Path(original_name).suffix.lower()
     if suffix not in ALLOWED_EXTENSIONS:
+        supported = ", ".join(sorted(ALLOWED_EXTENSIONS))
         raise HTTPException(
             status_code=400,
-            detail=f"不支持的文件格式: {suffix}（当前支持: .pdf, .docx, .txt）",
+            detail=f"不支持的文件格式: {suffix}（当前支持: {supported}）",
         )
 
     content = await file.read()
@@ -126,20 +131,24 @@ async def upload_document(file: UploadFile = File(...)):
         )
         record_created = True
 
-        pages = parse_document(
+        parsed_document = parse_document_structure(
             str(temp_path),
-            document_name=original_name,
             document_id=document_id,
+            document_name=original_name,
         )
-        if not pages:
+        units = parsed_document.units
+        if not units:
             raise ValueError("文档解析失败：未能提取到任何文本内容")
+        for warning in parsed_document.warnings:
+            logger.warning(
+                "Document parse warning: document_id=%s code=%s message=%s",
+                document_id,
+                warning.code,
+                warning.message,
+            )
 
-        parsed_pages = assemble_source_pages(pages)
-        if not parsed_pages:
-            raise ValueError("文档解析失败：未能组装任何页面文本")
-
-        chunks = chunk_document(
-            pages,
+        chunks = chunk_units(
+            units,
             chunk_size=settings.CHUNK_SIZE,
             overlap=settings.CHUNK_OVERLAP,
             max_tokens=settings.CHUNK_MAX_TOKENS,
@@ -149,14 +158,13 @@ async def upload_document(file: UploadFile = File(...)):
         if not chunks:
             raise ValueError("文档切分失败：未能生成任何文本块")
 
-        validate_chunks_against_pages(chunks, parsed_pages)
-
+        replace_document_units(
+            document_id,
+            PARSER_VERSION,
+            units,
+            db_path=settings.METADATA_DB_PATH,
+        )
         chunk_count = add_chunks(chunks)
-        now_iso = _now()
-        replace_document_pages(document_id, PARSER_VERSION, [
-            {**page.model_dump(), "created_at": now_iso}
-            for page in parsed_pages
-        ])
         os.replace(temp_path, final_path)
         mark_ready(document_id, chunk_count)
 
@@ -195,27 +203,11 @@ async def upload_document(file: UploadFile = File(...)):
 
 @router.get("/documents")
 async def list_documents():
-    """返回新 document_id 记录，同时兼容迁移前的 Chroma 文档。"""
+    """只返回 structured-v1 登记且已就绪的文档。"""
     records = list_document_records(status="ready")
-    registered_names = {record["original_name"] for record in records}
-    legacy_items = [
-        {
-            "document_id": None,
-            "original_name": name,
-            "stored_name": name,
-            "size_bytes": None,
-            "status": "legacy",
-            "chunk_count": None,
-            "created_at": None,
-        }
-        for name in get_legacy_document_names()
-        if name not in registered_names
-    ]
-    items = records + legacy_items
     return {
-        # 保留旧字段，旧前端和外部调用仍可读取名称列表。
-        "documents": [item["original_name"] for item in items],
-        "document_items": items,
+        "documents": [item["original_name"] for item in records],
+        "document_items": records,
     }
 
 
@@ -227,7 +219,10 @@ def _delete_registered_document(document_id: str) -> dict:
     if not delete_document_by_id(document_id):
         raise HTTPException(status_code=500, detail="删除向量数据失败")
 
-    delete_document_pages(document_id)
+    delete_document_units(
+        document_id,
+        db_path=settings.METADATA_DB_PATH,
+    )
     upload_dir = Path(settings.UPLOAD_DIR)
     _safe_unlink(upload_dir / record["stored_name"], upload_dir)
     delete_record(document_id)
@@ -247,7 +242,7 @@ async def delete_document_by_stable_id(document_id: str):
 
 @router.delete("/documents/{document_name}")
 async def delete_document(document_name: str):
-    """兼容旧 API：按展示名删除该名称的所有登记版本或旧 Chroma 数据。"""
+    """兼容按展示名删除，但只处理 structured-v1 登记版本。"""
     matching = [
         record
         for record in list_document_records(status=None)
@@ -261,12 +256,4 @@ async def delete_document(document_name: str):
             "status": "success",
         }
 
-    upload_dir = Path(settings.UPLOAD_DIR)
-    legacy_path = upload_dir / document_name
-    if legacy_path.resolve().parent != upload_dir.resolve():
-        raise HTTPException(status_code=400, detail="文档名无效")
-    _safe_unlink(legacy_path, upload_dir)
-
-    if delete_legacy_vectors(document_name):
-        return {"message": f"文档 '{document_name}' 已删除", "status": "success"}
-    raise HTTPException(status_code=500, detail=f"删除文档 '{document_name}' 失败")
+    raise HTTPException(status_code=404, detail=f"文档不存在: {document_name}")

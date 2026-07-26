@@ -7,15 +7,26 @@ from typing import Optional
 
 from backend.config import settings
 from backend.models.schemas import StructuredCitationPreview
-from backend.services.citation_preview import (
-    CitationPreviewConflictError,
-    CitationPreviewNotFoundError,
-    CitationPreviewValidationError,
-)
 from backend.services.document_store import get_document
 from backend.services.parsers.constants import PARSER_VERSION
 from backend.services.unit_store import get_document_unit
 from backend.services.vector_store import get_chunk_by_id
+
+
+class CitationPreviewError(ValueError):
+    pass
+
+
+class CitationPreviewNotFoundError(CitationPreviewError):
+    pass
+
+
+class CitationPreviewConflictError(CitationPreviewError):
+    pass
+
+
+class CitationPreviewValidationError(CitationPreviewError):
+    pass
 
 
 def _decoded_heading_path(value) -> list[str]:
@@ -42,7 +53,8 @@ def build_structured_citation_preview(
     db_path: Optional[str] = None,
     _chunk: Optional[dict] = None,
 ) -> StructuredCitationPreview:
-    document = get_document(document_id, db_path=db_path)
+    effective_db_path = db_path or settings.METADATA_DB_PATH
+    document = get_document(document_id, db_path=effective_db_path)
     if not document or document.get("status") != "ready":
         raise CitationPreviewNotFoundError(f"文档不存在或未就绪: {document_id}")
 
@@ -67,7 +79,7 @@ def build_structured_citation_preview(
         document_id,
         PARSER_VERSION,
         unit_id,
-        db_path=db_path,
+        db_path=effective_db_path,
     )
     if unit is None:
         raise CitationPreviewNotFoundError(f"来源 unit 不存在: {unit_id}")

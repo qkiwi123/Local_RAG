@@ -10,34 +10,46 @@
 """
 
 from backend.utils.citation import extract_citations, format_answer_with_citations
+from backend.services.parsers.constants import PARSER_VERSION
 
 
 def _result(
     document_name: str,
-    page_number: int,
+    page_number: int | None,
     content: str,
     chunk_id: str,
     *,
-    document_id: str | None = None,
-    parser_version: str | None = None,
-    content_type: str | None = None,
-    start_char: int | None = None,
+    document_id: str = "doc-1",
+    parser_version: str = PARSER_VERSION,
+    content_type: str = "paragraph",
+    start_char: int = 0,
     end_char: int | None = None,
+    unit_id: str = "unit-1",
+    unit_index: int = 0,
+    locator_kind: str = "page",
+    location_label: str | None = None,
+    slide_number: int | None = None,
+    heading_path: list[str] | None = None,
 ) -> dict:
     meta = {
         "document_name": document_name,
-        "page_number": page_number,
+        "document_id": document_id,
+        "parser_version": parser_version,
+        "content_type": content_type,
+        "start_char": start_char,
+        "end_char": len(content) if end_char is None else end_char,
+        "unit_id": unit_id,
+        "unit_index": unit_index,
+        "locator_kind": locator_kind,
+        "location_label": location_label or (
+            f"第 {page_number} 页" if page_number is not None else "章节：测试"
+        ),
+        "heading_path": heading_path or [],
     }
-    if document_id is not None:
-        meta["document_id"] = document_id
-    if parser_version is not None:
-        meta["parser_version"] = parser_version
-    if content_type is not None:
-        meta["content_type"] = content_type
-    if start_char is not None:
-        meta["start_char"] = start_char
-    if end_char is not None:
-        meta["end_char"] = end_char
+    if page_number is not None:
+        meta["page_number"] = page_number
+    if slide_number is not None:
+        meta["slide_number"] = slide_number
 
     return {
         "chunk_id": chunk_id,
@@ -132,7 +144,7 @@ class TestExtractCitations:
             _result(
                 "doc.pdf", 1, "chunk content", "chunk-1",
                 document_id="doc-1",
-                parser_version="text-v1-pypdf2",
+                parser_version=PARSER_VERSION,
                 content_type="paragraph",
                 start_char=0,
                 end_char=12,
@@ -142,7 +154,7 @@ class TestExtractCitations:
         assert len(citations) == 1
         assert citations[0].preview_available is True
         assert citations[0].document_id == "doc-1"
-        assert citations[0].parser_version == "text-v1-pypdf2"
+        assert citations[0].parser_version == PARSER_VERSION
         assert citations[0].content_type == "paragraph"
         assert citations[0].start_char == 0
         assert citations[0].end_char == 12
@@ -154,7 +166,7 @@ class TestExtractCitations:
             _result(
                 "doc.pdf", 1, "chunk content", "chunk-1",
                 document_id="doc-1",
-                parser_version="text-v1-pypdf2",
+                parser_version=PARSER_VERSION,
                 start_char=0,
                 end_char=12,
             ),
@@ -166,10 +178,15 @@ class TestExtractCitations:
     def test_preview_not_available_for_legacy_metadata(self):
         """旧 metadata 缺少必要字段时 preview_available=False。"""
         answer = "【来源1】"
-        retrieval_results = [_result("doc.pdf", 1, "chunk content", "chunk-1")]
+        retrieval_results = [
+            {
+                "chunk_id": "chunk-1",
+                "content": "chunk content",
+                "metadata": {"document_name": "doc.pdf", "page_number": 1},
+            }
+        ]
         citations = extract_citations(answer, retrieval_results, preview_enabled=True)
-        assert len(citations) == 1
-        assert citations[0].preview_available is False
+        assert citations == []
 
     def test_preview_not_available_with_zero_start_char(self):
         """start_char=0 是合法值，不应被 truthy 判断误判。"""
@@ -178,7 +195,7 @@ class TestExtractCitations:
             _result(
                 "doc.pdf", 1, "chunk content", "chunk-1",
                 document_id="doc-1",
-                parser_version="text-v1-pypdf2",
+                parser_version=PARSER_VERSION,
                 start_char=0,
                 end_char=12,
             ),
@@ -196,7 +213,7 @@ class TestExtractCitations:
             _result(
                 "doc.pdf", 1, long_content, "chunk-1",
                 document_id="doc-1",
-                parser_version="text-v1-pypdf2",
+                parser_version=PARSER_VERSION,
                 start_char=10,
                 end_char=80,
             ),
@@ -205,8 +222,8 @@ class TestExtractCitations:
         assert len(citations) == 1
         assert len(citations[0].excerpt) == 200
 
-    def test_old_format_citation_still_works(self):
-        """旧格式检索 metadata 仍能生成文档名、页码和 excerpt。"""
+    def test_old_format_citation_is_rejected(self):
+        """生产链路不双读旧格式 metadata。"""
         answer = "【来源1】"
         retrieval_results = [
             {
@@ -217,11 +234,45 @@ class TestExtractCitations:
             },
         ]
         citations = extract_citations(answer, retrieval_results)
-        assert len(citations) == 1
-        assert citations[0].document_name == "old.pdf"
-        assert citations[0].page_number == 5
-        assert citations[0].excerpt
-        assert citations[0].preview_available is False
+        assert citations == []
+
+    def test_section_citation_does_not_fabricate_page_number(self):
+        citations = extract_citations(
+            "部署步骤见【来源1】",
+            [
+                _result(
+                    "部署指南.md",
+                    None,
+                    "先安装依赖。",
+                    "section-chunk",
+                    locator_kind="section",
+                    location_label="章节：部署",
+                    heading_path=["部署"],
+                )
+            ],
+        )
+
+        assert citations[0].page_number is None
+        assert citations[0].location_label == "章节：部署"
+
+    def test_slide_citation_uses_slide_location(self):
+        citations = extract_citations(
+            "指标定义见【来源1】",
+            [
+                _result(
+                    "课件.pptx",
+                    None,
+                    "MRR 衡量排序质量。",
+                    "slide-chunk",
+                    locator_kind="slide",
+                    location_label="第 3 张幻灯片",
+                    slide_number=3,
+                )
+            ],
+        )
+
+        assert citations[0].slide_number == 3
+        assert citations[0].location_label == "第 3 张幻灯片"
 
 
 class TestFormatAnswerWithCitations:
@@ -234,6 +285,7 @@ class TestFormatAnswerWithCitations:
                 source_id=1,
                 chunk_id="doc-1_p3_c0",
                 document_name="员工手册",
+                location_label="第 3 页",
                 page_number=3,
                 excerpt="公司规定员工每年享有5天带薪年假。",
             ),
@@ -245,7 +297,7 @@ class TestFormatAnswerWithCitations:
         assert "参考来源" in formatted
         assert "【来源1】" in formatted
         assert "员工手册" in formatted
-        assert "第3页" in formatted
+        assert "第 3 页" in formatted
 
     def test_formats_without_citations(self):
         answer = "这是一个简单回答。"

@@ -1,4 +1,4 @@
-"""从 SQLite 登记的 ready 文档安全重建独立 Chroma 索引，并补齐页快照。"""
+"""从 structured-v1 SQLite 登记的 ready 文档安全重建独立 Chroma 索引。"""
 
 from __future__ import annotations
 
@@ -11,16 +11,20 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Iterable
 
+from backend.models.document_structure import ParsedDocument, ParsedUnit
+
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
 
 @dataclass
 class PreparedDocument:
-    """单个文档重建的全部产出：登记记录、chunks 和解析出的规范页。"""
+    """单个文档重建产物：登记记录、结构化来源单元和 chunks。"""
+
     record: dict[str, Any]
     chunks: list[Any]
-    parsed_pages: list[Any]
+    parsed_units: list[ParsedUnit]
+    warnings: list[Any]
 
 
 def _resolve_project_path(value: str | Path) -> Path:
@@ -48,8 +52,11 @@ def load_ready_documents(metadata_db_path: str | Path) -> list[dict[str, Any]]:
     return [dict(row) for row in rows]
 
 
-def ensure_safe_target(source_index_dir: str | Path, target_index_dir: str | Path) -> None:
-    """拒绝原地重建及覆盖已有目录，确保旧索引始终可回滚。"""
+def ensure_safe_target(
+    source_index_dir: str | Path,
+    target_index_dir: str | Path,
+) -> None:
+    """拒绝原地重建及覆盖已有目录，确保源索引不被修改。"""
     source = Path(source_index_dir).resolve()
     target = Path(target_index_dir).resolve()
     if source == target:
@@ -58,11 +65,35 @@ def ensure_safe_target(source_index_dir: str | Path, target_index_dir: str | Pat
         raise FileExistsError(f"目标目录非空，拒绝覆盖: {target}")
 
 
+def _validate_chunks_against_units(
+    chunks: list[Any],
+    units: list[ParsedUnit],
+) -> None:
+    unit_by_id = {unit.unit_id: unit for unit in units}
+    for chunk in chunks:
+        metadata = chunk.metadata
+        unit = unit_by_id.get(metadata.unit_id)
+        if unit is None:
+            raise ValueError(f"chunk 引用了不存在的 unit: {metadata.unit_id}")
+        if metadata.document_id != unit.document_id:
+            raise ValueError("chunk document_id 与 unit 不一致")
+        if metadata.parser_version != unit.parser_version:
+            raise ValueError("chunk parser_version 与 unit 不一致")
+        start = metadata.start_char
+        end = metadata.end_char
+        if start < 0 or end <= start or end > len(unit.canonical_text):
+            raise ValueError("chunk offset 非法")
+        if unit.canonical_text[start:end] != chunk.content:
+            raise ValueError("chunk 与 unit canonical_text 切片不一致")
+        if metadata.chunk_id != f"{unit.unit_id}_s{start}_e{end}":
+            raise ValueError("chunk_id 不符合 structured-v1 稳定位置规则")
+
+
 def prepare_documents(
     records: Iterable[dict[str, Any]],
     upload_dir: str | Path,
     *,
-    parse_document: Callable[..., list[dict]],
+    parse_document: Callable[..., ParsedDocument],
     chunk_document: Callable[..., list[Any]],
     chunk_size: int,
     overlap: int,
@@ -71,13 +102,7 @@ def prepare_documents(
     token_counter: Callable[[str], int] | None = None,
     enforce_registered_counts: bool = True,
 ) -> list[PreparedDocument]:
-    """解析并切分全部源文件；产出 PreparedDocument（含 chunks 和规范页）。
-
-    每个文档在切分后立即验证全部 chunk/page 切片强不变量，
-    验证失败即终止，不等待写入 Chroma。
-    """
-    from backend.services.source_page import assemble_source_pages, validate_chunks_against_pages
-
+    """重新解析 ready 文档，并在写入前验证 structured-v1 强不变量。"""
     records = list(records)
     upload_dir = Path(upload_dir)
     missing = [
@@ -91,11 +116,16 @@ def prepare_documents(
     prepared = []
     for record in records:
         source_path = upload_dir / record["stored_name"]
-        pages = parse_document(
+        parsed = parse_document(
             str(source_path),
             document_name=record["original_name"],
             document_id=record["document_id"],
         )
+        if not isinstance(parsed, ParsedDocument):
+            raise TypeError("parse_document 必须返回 ParsedDocument")
+        if not parsed.units:
+            raise ValueError(f"文档未解析出来源单元: {record['document_id']}")
+
         chunk_options = {}
         if strategy is not None:
             chunk_options["strategy"] = strategy
@@ -103,7 +133,16 @@ def prepare_documents(
             chunk_options["max_tokens"] = max_tokens
         if token_counter is not None:
             chunk_options["token_counter"] = token_counter
-        chunks = chunk_document(pages, chunk_size, overlap, **chunk_options)
+        chunks = chunk_document(
+            parsed.units,
+            chunk_size,
+            overlap,
+            **chunk_options,
+        )
+        if not chunks:
+            raise ValueError(f"文档未生成 chunk: {record['document_id']}")
+        _validate_chunks_against_units(chunks, parsed.units)
+
         expected = int(record["chunk_count"])
         actual = len(chunks)
         if enforce_registered_counts and actual != expected:
@@ -111,16 +150,14 @@ def prepare_documents(
                 f"文档 {record['document_id']} 在 SQLite 登记为 {expected} chunks，"
                 f"实际生成 {actual} chunks；为避免登记与索引不一致，已终止重建"
             )
-
-        # 组装规范页并在写入 Chroma 前校验 chunk/page 切片强不变量
-        parsed_pages = assemble_source_pages(pages)
-        validate_chunks_against_pages(chunks, parsed_pages)
-
-        prepared.append(PreparedDocument(
-            record=record,
-            chunks=chunks,
-            parsed_pages=parsed_pages,
-        ))
+        prepared.append(
+            PreparedDocument(
+                record=record,
+                chunks=chunks,
+                parsed_units=parsed.units,
+                warnings=parsed.warnings,
+            )
+        )
     return prepared
 
 
@@ -153,68 +190,6 @@ def update_document_chunk_counts(
         connection.close()
 
 
-def _checked_write_page_snapshots(
-    prepared: list[PreparedDocument],
-    metadata_db_path: str | Path,
-    *,
-    expected_counts: dict[str, int],
-    expected_dimension: int,
-    _fake_collection_count: int | None = None,
-    _fake_collection_metadatas: list[dict] | None = None,
-    _fake_collection_embeddings: list[list[float]] | None = None,
-) -> None:
-    """在目标 Chroma 通过全量校验后，事务写入当前 parser 版本的页快照。
-
-    校验失败时页表完全不变。仅替换当前 parser 版本，不删除旧版本。
-    _fake_collection_* 参数仅用于测试；生产环境由 main() 在调用前完成 verify_collection。
-    """
-    from backend.services.page_store import replace_document_pages
-    from backend.services.parser import PARSER_VERSION
-
-    # 仅通过 _fake_collection_* 参数显式注入时才执行二次校验（测试路径）
-    if _fake_collection_count is not None or _fake_collection_metadatas is not None:
-        class _Wrapper:
-            def __init__(self, count, metadatas, embeddings):
-                self._count = count
-                self._metadatas = metadatas
-                self._embeddings = embeddings
-
-            def count(self):
-                return self._count
-
-            def get(self, include):
-                return {
-                    "embeddings": self._embeddings,
-                    "metadatas": self._metadatas,
-                }
-
-        verify_collection(
-            _Wrapper(
-                _fake_collection_count or sum(len(pd.chunks) for pd in prepared),
-                _fake_collection_metadatas if _fake_collection_metadatas is not None else [],
-                _fake_collection_embeddings if _fake_collection_embeddings is not None else [],
-            ),
-            expected_counts=expected_counts,
-            expected_dimension=expected_dimension,
-        )
-
-    now_iso = datetime.now(timezone.utc).isoformat(timespec="seconds")
-    db_path = str(metadata_db_path)
-    for pd in prepared:
-        document_id = pd.record["document_id"]
-        page_dicts = []
-        for page in pd.parsed_pages:
-            page_dicts.append({
-                "document_id": page.document_id,
-                "parser_version": page.parser_version,
-                "page_number": page.page_number,
-                "parsed_page_text": page.parsed_page_text,
-                "content_type": page.content_type,
-                "created_at": now_iso,
-            })
-        replace_document_pages(document_id, PARSER_VERSION, page_dicts, db_path=db_path)
-
-
 def verify_collection(
     collection: Any,
     *,
@@ -242,15 +217,14 @@ def verify_collection(
             f"实际 {chunks_by_document}，期望 {expected_counts}"
         )
 
-    if embeddings is None or len(embeddings) == 0:
-        actual_dimension = 0
-    else:
-        actual_dimension = len(embeddings[0])
+    actual_dimension = (
+        0 if embeddings is None or len(embeddings) == 0
+        else len(embeddings[0])
+    )
     if actual_dimension != expected_dimension:
         raise RuntimeError(
             f"向量维度不一致：实际 {actual_dimension}，期望 {expected_dimension}"
         )
-
     return {
         "chunk_count": actual_count,
         "document_count": len(chunks_by_document),
@@ -259,12 +233,41 @@ def verify_collection(
     }
 
 
+def _checked_write_document_units(
+    prepared: list[PreparedDocument],
+    metadata_db_path: str | Path,
+    *,
+    expected_counts: dict[str, int],
+    expected_dimension: int,
+    _fake_collection: Any | None = None,
+) -> None:
+    """仅在目标 Chroma 全量校验成功后替换 structured-v1 来源单元。"""
+    if _fake_collection is not None:
+        verify_collection(
+            _fake_collection,
+            expected_counts=expected_counts,
+            expected_dimension=expected_dimension,
+        )
+
+    from backend.services.parsers.constants import PARSER_VERSION
+    from backend.services.unit_store import replace_document_units
+
+    db_path = str(metadata_db_path)
+    for item in prepared:
+        replace_document_units(
+            item.record["document_id"],
+            PARSER_VERSION,
+            item.parsed_units,
+            db_path=db_path,
+        )
+
+
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="从 SQLite ready 文档重建独立 Chroma 索引，不覆盖旧索引。"
+        description="从 structured-v1 SQLite ready 文档重建独立 Chroma 索引。"
     )
     parser.add_argument("--target-dir", required=True, help="新 Chroma 索引目录")
-    parser.add_argument("--source-index-dir", help="旧索引目录；默认读取 .env")
+    parser.add_argument("--source-index-dir", help="源索引目录；默认读取 .env")
     parser.add_argument("--metadata-db", help="SQLite 路径；默认读取 .env")
     parser.add_argument("--upload-dir", help="原始上传目录；默认读取 .env")
     parser.add_argument("--model", help="Embedding 模型；默认读取 .env")
@@ -276,11 +279,7 @@ def _build_parser() -> argparse.ArgumentParser:
         choices=("fixed", "recursive"),
         help="默认读取 .env 或使用 fixed",
     )
-    parser.add_argument(
-        "--chunk-max-tokens",
-        type=int,
-        help="默认读取 .env 或使用 480",
-    )
+    parser.add_argument("--chunk-max-tokens", type=int, help="默认读取 .env 或使用 480")
     parser.add_argument(
         "--accept-chunk-count-change",
         action="store_true",
@@ -294,7 +293,6 @@ def main(argv: list[str] | None = None) -> int:
 
     load_dotenv(PROJECT_ROOT / ".env")
     args = _build_parser().parse_args(argv)
-
     source_index_dir = _resolve_project_path(
         args.source_index_dir or os.getenv("CHROMA_PERSIST_DIR", "data/chroma_db")
     )
@@ -306,50 +304,35 @@ def main(argv: list[str] | None = None) -> int:
         args.upload_dir or os.getenv("UPLOAD_DIR", "data/uploads")
     )
     model = args.model or os.getenv("EMBEDDING_MODEL", "BAAI/bge-large-zh-v1.5")
-    chunk_size = (
-        args.chunk_size
-        if args.chunk_size is not None
-        else int(os.getenv("CHUNK_SIZE", "500"))
-    )
+    chunk_size = args.chunk_size or int(os.getenv("CHUNK_SIZE", "500"))
     overlap = (
         args.chunk_overlap
         if args.chunk_overlap is not None
         else int(os.getenv("CHUNK_OVERLAP", "50"))
     )
-    strategy = (
-        args.chunk_strategy or os.getenv("CHUNK_STRATEGY", "fixed")
-    ).strip().lower()
-    max_tokens = (
-        args.chunk_max_tokens
-        if args.chunk_max_tokens is not None
-        else int(os.getenv("CHUNK_MAX_TOKENS", "480"))
-    )
+    strategy = (args.chunk_strategy or os.getenv("CHUNK_STRATEGY", "fixed")).strip().lower()
+    max_tokens = args.chunk_max_tokens or int(os.getenv("CHUNK_MAX_TOKENS", "480"))
 
     ensure_safe_target(source_index_dir, target_index_dir)
     records = load_ready_documents(metadata_db_path)
     if not records:
         raise RuntimeError(f"SQLite 中没有 ready 文档: {metadata_db_path}")
 
-    # config.py 在导入时创建单例，因此必须先覆盖目标路径和模型，再延迟导入后端。
     os.environ["CHROMA_PERSIST_DIR"] = str(target_index_dir)
     os.environ["METADATA_DB_PATH"] = str(metadata_db_path)
     os.environ["UPLOAD_DIR"] = str(upload_dir)
     os.environ["EMBEDDING_MODEL"] = model
-    os.environ["CHUNK_SIZE"] = str(chunk_size)
-    os.environ["CHUNK_OVERLAP"] = str(overlap)
-    os.environ["CHUNK_STRATEGY"] = strategy
-    os.environ["CHUNK_MAX_TOKENS"] = str(max_tokens)
 
     from backend.services import vector_store
-    from backend.services.chunker import chunk_document
+    from backend.services.chunker import chunk_units
     from backend.services.embedding import count_tokens
-    from backend.services.parser import parse_document
+    from backend.services.parsers import PARSER_VERSION, parse_document_structure
 
     prepared = prepare_documents(
         records,
         upload_dir,
-        parse_document=parse_document,
-        chunk_document=chunk_document,
+        parse_document=parse_document_structure,
+        chunk_document=chunk_units,
         chunk_size=chunk_size,
         overlap=overlap,
         strategy=strategy,
@@ -359,41 +342,36 @@ def main(argv: list[str] | None = None) -> int:
     )
     print(
         f"准备重建 {len(prepared)} 份文档、"
-        f"{sum(len(pd.chunks) for pd in prepared)} 个 chunks，模型 {model}"
+        f"{sum(len(item.chunks) for item in prepared)} 个 chunks，模型 {model}"
     )
-    for pd in prepared:
-        added = vector_store.add_chunks(pd.chunks)
-        if added != len(pd.chunks):
+    for item in prepared:
+        added = vector_store.add_chunks(item.chunks)
+        if added != len(item.chunks):
             raise RuntimeError(
-                f"文档 {pd.record['document_id']} 写入数量异常：{added}/{len(pd.chunks)}"
+                f"文档 {item.record['document_id']} 写入数量异常："
+                f"{added}/{len(item.chunks)}"
             )
-        print(f"已写入 {pd.record['original_name']}: {added} chunks")
+        print(f"已写入 {item.record['original_name']}: {added} chunks")
 
     registered_counts = {
         record["document_id"]: int(record["chunk_count"])
         for record in records
     }
     actual_counts = {
-        pd.record["document_id"]: len(pd.chunks)
-        for pd in prepared
+        item.record["document_id"]: len(item.chunks)
+        for item in prepared
     }
     summary = verify_collection(
         vector_store._collection,
         expected_counts=actual_counts,
         expected_dimension=args.expected_dimension,
     )
-
-    # Chroma 全量校验通过后，事务写入页快照
-    from backend.services.parser import PARSER_VERSION
-    _checked_write_page_snapshots(
+    _checked_write_document_units(
         prepared,
         metadata_db_path,
         expected_counts=actual_counts,
         expected_dimension=args.expected_dimension,
     )
-    page_count = sum(len(pd.parsed_pages) for pd in prepared)
-    summary["parser_version"] = PARSER_VERSION
-    summary["page_count"] = page_count
 
     changed_counts = {
         document_id: {
@@ -407,6 +385,9 @@ def main(argv: list[str] | None = None) -> int:
         update_document_chunk_counts(metadata_db_path, actual_counts)
     summary.update(
         {
+            "parser_version": PARSER_VERSION,
+            "unit_count": sum(len(item.parsed_units) for item in prepared),
+            "warning_count": sum(len(item.warnings) for item in prepared),
             "model": model,
             "chunk_strategy": strategy,
             "chunk_size": chunk_size,

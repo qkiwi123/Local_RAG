@@ -76,7 +76,7 @@ def candidate_rows(trace: dict, stage_name: str) -> list[dict]:
             {
                 "排名": candidate.get("rank"),
                 "文档": chunk.get("document_name", "unknown"),
-                "页码": chunk.get("page_number", 0),
+                "位置": chunk.get("location_label") or "位置未知",
                 "chunk_id": candidate.get("chunk_id", ""),
                 "distance": candidate.get("distance"),
                 "Dense名次": candidate.get("dense_rank"),
@@ -160,7 +160,8 @@ def _render_full_chunk(trace: dict, selected: dict) -> None:
     with st.container(border=True):
         st.caption(
             f"完整 Chunk · {chunk['document_name']} · "
-            f"第 {chunk['page_number']} 页 · {selected['chunk_id']}"
+            f"{chunk.get('location_label') or '位置未知'} · "
+            f"{selected['chunk_id']}"
         )
         st.markdown(chunk.get("content", ""))
 

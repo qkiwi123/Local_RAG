@@ -6,6 +6,8 @@ FastAPI 应用入口 — 创建应用实例、注册路由、配置中间件。
     然后访问 http://localhost:8000/docs 查看 Swagger 文档
 """
 
+from datetime import datetime, timezone
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -41,8 +43,14 @@ async def root():
 
 @app.on_event("startup")
 async def startup_event():
-    """应用启动时的初始化日志。"""
+    """启动前校验或创建 structured-v1 metadata schema。"""
     from backend.config import settings
+    from backend.services.metadata_schema import bootstrap_structured_database
+
+    bootstrap_structured_database(
+        settings.METADATA_DB_PATH,
+        created_at=datetime.now(timezone.utc).isoformat(timespec="seconds"),
+    )
     print(f"[启动] RAG Knowledge Base API v0.1.0")
     print(f"[启动] Embedding 模型: {settings.EMBEDDING_MODEL}")
     print(f"[启动] LLM 模型: {settings.DEEPSEEK_MODEL}")

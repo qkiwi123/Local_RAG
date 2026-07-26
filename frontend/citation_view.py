@@ -191,8 +191,6 @@ def fetch_citation_preview(
         return {"ok": False, "message": f"无法连接后端: {error}"}
 
 
-# 以下渲染逻辑保持不变
-
 def render_citations(
     citations: list[dict[str, Any]],
     message_key: str,
@@ -205,8 +203,10 @@ def render_citations(
         for i, citation in enumerate(citations, 1):
             source_id = citation.get("source_id", i)
             document_name = citation.get("document_name", "未知文档")
-            page_number = citation.get("page_number", "?")
-            st.markdown(f"**【来源{source_id}】《{document_name}》第{page_number}页**")
+            location_label = citation.get("location_label") or "位置未知"
+            st.markdown(
+                f"**【来源{source_id}】《{document_name}》{location_label}**"
+            )
             excerpt = citation.get("excerpt", "")
             if excerpt:
                 st.caption(f"> {excerpt[:150]}...")
@@ -231,20 +231,22 @@ def _show_preview_dialog(
         st.error(message)
         return
 
+    location = preview.get("location") or {}
     st.markdown(
         f"**文档**：{preview.get('document_name', '')}　"
-        f"**页码**：{preview.get('page_number', '')}　"
-        f"**类型**：{preview.get('content_type', '')}　"
+        f"**位置**：{location.get('location_label', '')}　"
+        f"**类型**：{location.get('kind', '')}　"
         f"**Chunk ID**：`{preview.get('chunk_id', '')}`"
     )
 
     try:
-        highlighted_html = build_highlight_html(
-            preview.get("parsed_page_text", ""),
+        highlighted_html = build_structured_preview_html(
+            preview.get("canonical_text", ""),
+            preview.get("blocks", []),
             preview.get("highlight_start", 0),
             preview.get("highlight_end", 0),
         )
-        st.markdown("**📄 完整解析页（被引用部分已高亮）**")
+        st.markdown("**📄 完整结构化来源（被引用部分已高亮）**")
         st.markdown(highlighted_html, unsafe_allow_html=True)
     except ValueError as err:
         st.error(f"高亮渲染失败: {err}")

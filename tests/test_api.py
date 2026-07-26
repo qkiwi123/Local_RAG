@@ -29,17 +29,25 @@ def client(monkeypatch, isolated_data_dir):
 
     monkeypatch.setattr(upload_router, "add_chunks", lambda chunks: len(chunks))
     monkeypatch.setattr(upload_router, "delete_document_by_id", lambda document_id: True)
-    monkeypatch.setattr(upload_router, "get_legacy_document_names", lambda: [])
 
     retrieval = [
         {
-            "chunk_id": "doc-1_p1_c0",
+            "chunk_id": "unit-1_s0_e49",
             "content": "Employees receive 5 days of annual leave.",
             "metadata": {
                 "document_id": "doc-1",
                 "document_name": "handbook.pdf",
+                "unit_id": "unit-1",
+                "unit_index": 0,
+                "locator_kind": "page",
+                "location_label": "第 1 页",
                 "page_number": 1,
+                "heading_path": "[]",
                 "chunk_index": 0,
+                "parser_version": "structured-v1",
+                "content_type": "paragraph",
+                "start_char": 0,
+                "end_char": 49,
             },
             "distance": 0.2,
         }
@@ -62,12 +70,16 @@ def client(monkeypatch, isolated_data_dir):
 
 def _upload_fixture(client, fixture_name="sample.txt", upload_name=None):
     path = Path("tests/fixtures") / fixture_name
+    return _upload_path(client, path, upload_name=upload_name)
+
+
+def _upload_path(client, path: Path, upload_name=None):
     with path.open("rb") as file_obj:
         return client.post(
             "/api/upload",
             files={
                 "file": (
-                    upload_name or fixture_name,
+                    upload_name or path.name,
                     file_obj,
                     "application/octet-stream",
                 )
@@ -160,6 +172,23 @@ class TestUploadAPI:
         assert response.status_code == 400
         assert "不支持的文件格式" in response.json()["detail"]
 
+    def test_upload_route_accepts_all_five_supported_formats(self, client):
+        paths = [
+            Path("tests/fixtures/sample.pdf"),
+            Path("tests/fixtures/sample.docx"),
+            Path("tests/fixtures/sample.txt"),
+            Path("eval/corpus/会议纪要（测试文档）.md"),
+            Path("eval/corpus/Chap01.pptx"),
+        ]
+
+        responses = [_upload_path(client, path) for path in paths]
+
+        assert [response.status_code for response in responses] == [200] * 5
+        assert {
+            Path(response.json()["document_name"]).suffix.lower()
+            for response in responses
+        } == {".pdf", ".docx", ".txt", ".md", ".pptx"}
+
     def test_rejects_path_in_filename(self):
         from backend.routers.upload import _validate_filename
 
@@ -168,7 +197,7 @@ class TestUploadAPI:
         with pytest.raises(Exception, match="文件名不能包含路径"):
             _validate_filename("folder\\outside.txt")
 
-    def test_list_documents_has_legacy_and_structured_fields(self, client):
+    def test_list_documents_has_compatibility_names_and_structured_items(self, client):
         _upload_fixture(client)
 
         response = client.get("/api/documents")
@@ -192,15 +221,21 @@ class TestChatAPI:
         assert data["citations"] == [
             {
                 "source_id": 1,
-                "chunk_id": "doc-1_p1_c0",
+                "chunk_id": "unit-1_s0_e49",
                 "document_name": "handbook.pdf",
+                "unit_id": "unit-1",
+                "unit_index": 0,
+                "locator_kind": "page",
+                "location_label": "第 1 页",
                 "page_number": 1,
+                "slide_number": None,
+                "heading_path": [],
                 "excerpt": "Employees receive 5 days of annual leave.",
                 "document_id": "doc-1",
-                "parser_version": None,
-                "content_type": None,
-                "start_char": None,
-                "end_char": None,
+                "parser_version": "structured-v1",
+                "content_type": "paragraph",
+                "start_char": 0,
+                "end_char": 49,
                 "preview_available": False,
             }
         ]
@@ -226,8 +261,17 @@ class TestChatAPI:
                 "chunk_id": "c1",
                 "content": "Employees receive 5 days of annual leave.",
                 "metadata": {
+                    "document_id": "doc-1",
                     "document_name": "handbook.pdf",
+                    "unit_id": "unit-1",
+                    "unit_index": 0,
+                    "locator_kind": "page",
+                    "location_label": "第 1 页",
                     "page_number": 1,
+                    "heading_path": "[]",
+                    "parser_version": "structured-v1",
+                    "start_char": 0,
+                    "end_char": 49,
                 },
                 "distance": 0.2,
             }
@@ -290,31 +334,81 @@ class TestChatAPI:
         assert payload["trace"] is None
 
 
-class TestUploadPageSnapshots:
-    """P2-4 Task 5：页快照在上传链路中的集成行为。"""
+class TestStructuredCitationPreviewAPI:
+    def test_preview_route_returns_only_structured_payload(
+        self,
+        client,
+        monkeypatch,
+    ):
+        from backend.config import settings
+        from backend.routers import upload as upload_router
+        from backend.services import structured_citation_preview
 
-    def test_successful_upload_persists_page_snapshots(self, client):
-        """上传成功后，每个页面快照都能从 SQLite 读取并切片验证。"""
-        from backend.services.page_store import get_document_page
-        from backend.services.parser import PARSER_VERSION
+        captured_chunks = []
+
+        def capture_chunks(chunks):
+            captured_chunks.extend(chunks)
+            return len(chunks)
+
+        monkeypatch.setattr(upload_router, "add_chunks", capture_chunks)
+        uploaded = _upload_path(
+            client,
+            Path("eval/corpus/会议纪要（测试文档）.md"),
+        ).json()
+        first_chunk = captured_chunks[0]
+        raw_chunk = {
+            "chunk_id": first_chunk.metadata.chunk_id,
+            "content": first_chunk.content,
+            "metadata": first_chunk.metadata.model_dump(),
+        }
+        monkeypatch.setattr(settings, "CITATION_PREVIEW_ENABLED", True)
+        monkeypatch.setattr(
+            structured_citation_preview,
+            "get_chunk_by_id",
+            lambda chunk_id: raw_chunk,
+        )
+
+        response = client.get(
+            f"/api/citations/{uploaded['document_id']}/chunks/"
+            f"{first_chunk.metadata.chunk_id}/preview"
+        )
+
+        assert response.status_code == 200, response.text
+        payload = response.json()
+        assert payload["parser_version"] == "structured-v1"
+        assert payload["location"]["kind"] == "section"
+        assert payload["canonical_text"]
+        assert payload["blocks"]
+        assert "parsed_page_text" not in payload
+        assert "page_number" not in payload
+
+
+class TestUploadStructuredUnits:
+    """structured-v1 来源单元在上传链路中的集成行为。"""
+
+    def test_successful_upload_persists_units(self, client):
+        from backend.config import settings
+        from backend.services.parsers.constants import PARSER_VERSION
+        from backend.services.unit_store import list_document_units
 
         uploaded = _upload_fixture(client).json()
         assert uploaded["status"] == "success"
         document_id = uploaded["document_id"]
 
-        # 每种格式至少有一页快照写入
-        page1 = get_document_page(document_id, PARSER_VERSION, 1)
-        assert page1 is not None
-        assert page1["document_id"] == document_id
-        assert page1["parser_version"] == PARSER_VERSION
-        assert len(page1["parsed_page_text"]) > 0
+        units = list_document_units(
+            document_id,
+            PARSER_VERSION,
+            db_path=settings.METADATA_DB_PATH,
+        )
+        assert units
+        assert all(unit.document_id == document_id for unit in units)
+        assert all(unit.canonical_text for unit in units)
 
-    def test_failed_ingest_cleans_page_snapshots(self, client, monkeypatch):
-        """入库失败后页快照不残留。"""
+    def test_failed_ingest_cleans_units(self, client, monkeypatch):
         from backend.config import settings
         from backend.routers import upload as upload_router
-        from backend.services.page_store import get_document_page
-        from backend.services.parser import PARSER_VERSION
+        from backend.services.parsers.constants import PARSER_VERSION
+        from backend.services.unit_store import list_document_units
 
         monkeypatch.setattr(
             upload_router,
@@ -324,29 +418,34 @@ class TestUploadPageSnapshots:
 
         response = _upload_fixture(client)
         assert response.status_code == 500
-        doc_id = response.json()["detail"]["document_id"] if "document_id" in response.json().get("detail", {}) else None
-        # 确认没有页快照残留（从 clean db 状态验证）
-        # 因为上传失败，文档应处于 failed 状态，页快照不应存在
         from backend.services.document_store import list_documents
         records = list_documents(status=None)
-        if records:
-            for r in records:
-                page = get_document_page(r["document_id"], PARSER_VERSION, 1)
-                assert page is None, f"孤立页快照残留: {r['document_id']}"
+        assert len(records) == 1
+        assert list_document_units(
+            records[0]["document_id"],
+            PARSER_VERSION,
+            db_path=settings.METADATA_DB_PATH,
+        ) == []
 
-    def test_delete_by_id_cleans_page_snapshots(self, client):
-        """按 ID 删除文档后页快照也一并清除。"""
-        from backend.services.page_store import get_document_page
-        from backend.services.parser import PARSER_VERSION
+    def test_delete_by_id_cleans_units(self, client):
+        from backend.config import settings
+        from backend.services.parsers.constants import PARSER_VERSION
+        from backend.services.unit_store import list_document_units
 
         uploaded = _upload_fixture(client).json()
         document_id = uploaded["document_id"]
 
-        # 删除前确认页快照存在
-        assert get_document_page(document_id, PARSER_VERSION, 1) is not None
+        assert list_document_units(
+            document_id,
+            PARSER_VERSION,
+            db_path=settings.METADATA_DB_PATH,
+        )
 
         response = client.delete(f"/api/documents/id/{document_id}")
         assert response.status_code == 200
 
-        # 删除后页快照不存在
-        assert get_document_page(document_id, PARSER_VERSION, 1) is None
+        assert list_document_units(
+            document_id,
+            PARSER_VERSION,
+            db_path=settings.METADATA_DB_PATH,
+        ) == []
