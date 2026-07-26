@@ -12,34 +12,31 @@ RAG-Knowledge-Base 前端 — Streamlit 聊天界面。
 前提：后端已启动（http://localhost:8000）
 """
 
-import streamlit as st
-import httpx
 import os
+import sys
+from pathlib import Path
 from urllib.parse import quote
 from uuid import uuid4
 
-try:
-    # pytest / `python -m` 从项目根目录导入。
-    from frontend.http_utils import (
-        pending_uploads,
-        response_error_detail,
-        upload_attempts,
-        upload_selection_complete,
-    )
-    from frontend.trace_view import render_retrieval_trace
-    from frontend.citation_view import render_citations
-except ModuleNotFoundError as error:
-    if error.name != "frontend":
-        raise
-    # `streamlit run frontend/app.py` 会把 frontend/ 放到 sys.path。
-    from http_utils import (
-        pending_uploads,
-        response_error_detail,
-        upload_attempts,
-        upload_selection_complete,
-    )
-    from trace_view import render_retrieval_trace
-    from citation_view import render_citations
+import httpx
+import streamlit as st
+
+
+# Streamlit 会把脚本目录 frontend/ 放到 sys.path 首位，但不会保证仓库根目录
+# 可导入。显式加入项目根目录，使 `streamlit run frontend/app.py` 与 pytest、
+# `python -m` 使用同一套 frontend/backend 绝对导入。
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
+from frontend.http_utils import (
+    pending_uploads,
+    response_error_detail,
+    upload_attempts,
+    upload_selection_complete,
+)
+from frontend.trace_view import render_retrieval_trace
+from frontend.citation_view import render_citations
 
 # ─── 页面配置 ────────────────────────────────────────
 st.set_page_config(
