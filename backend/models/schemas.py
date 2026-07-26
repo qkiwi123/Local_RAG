@@ -72,6 +72,10 @@ class UploadResponse(BaseModel):
 class ChatRequest(BaseModel):
     """POST /api/chat 的请求体。"""
     question: str = Field(..., min_length=1, description="用户提出的自然语言问题")
+    conversation_id: Optional[str] = None
+    request_id: Optional[str] = None
+    expected_last_message_id: Optional[str] = None
+    retry_failed: bool = False
 
 
 class Citation(BaseModel):
@@ -225,3 +229,38 @@ class ChatResponse(BaseModel):
         default=None,
         description="服务端允许时返回的检索调试链路",
     )
+    conversation_id: Optional[str] = None
+    user_message_id: Optional[str] = None
+    assistant_message_id: Optional[str] = None
+    standalone_question: Optional[str] = None
+
+
+class ConversationCreate(BaseModel):
+    title: Optional[str] = Field(default=None, max_length=120)
+
+
+class ConversationUpdate(BaseModel):
+    title: str = Field(..., min_length=1, max_length=120)
+
+
+class ConversationSummary(BaseModel):
+    conversation_id: str
+    title: str
+    created_at: str
+    updated_at: str
+
+
+class ConversationMessage(BaseModel):
+    message_id: str
+    request_id: str
+    sequence: int
+    role: str
+    content: str
+    status: str
+    standalone_question: Optional[str] = None
+    citations: list[Citation] = Field(default_factory=list)
+    created_at: str
+
+
+class ConversationDetail(ConversationSummary):
+    messages: list[ConversationMessage] = Field(default_factory=list)

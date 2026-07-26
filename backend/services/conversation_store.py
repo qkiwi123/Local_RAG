@@ -1,0 +1,385 @@
+"""本地单用户持久化对话存储与请求幂等控制。"""
+
+from __future__ import annotations
+
+import json
+from datetime import datetime, timedelta, timezone
+from typing import Optional
+from uuid import uuid4
+
+from backend.config import settings
+from backend.models.schemas import Citation
+from backend.services.document_store import _connection, _now
+from backend.services.metadata_schema import require_structured_database
+
+
+class ConversationError(ValueError):
+    def __init__(self, code: str, message: str):
+        super().__init__(message)
+        self.code = code
+
+
+def _db_path(db_path: Optional[str]) -> str:
+    value = db_path or settings.METADATA_DB_PATH
+    require_structured_database(value)
+    return value
+
+
+def create_conversation(title: str | None = None, *, db_path=None) -> dict:
+    conversation_id = uuid4().hex
+    timestamp = _now()
+    clean_title = (title or "新对话").strip()[:120] or "新对话"
+    with _connection(_db_path(db_path)) as connection:
+        connection.execute(
+            "INSERT INTO conversations VALUES (?, ?, ?, ?)",
+            (conversation_id, clean_title, timestamp, timestamp),
+        )
+    return get_conversation(conversation_id, db_path=db_path)
+
+
+def list_conversations(*, db_path=None) -> list[dict]:
+    with _connection(_db_path(db_path)) as connection:
+        rows = connection.execute(
+            "SELECT * FROM conversations ORDER BY updated_at DESC"
+        ).fetchall()
+    return [dict(row) for row in rows]
+
+
+def _decode_message(row) -> dict:
+    item = dict(row)
+    raw = item.pop("citations_json", None)
+    item["citations"] = (
+        [Citation.model_validate(value).model_dump() for value in json.loads(raw)]
+        if raw else []
+    )
+    item.pop("conversation_id", None)
+    return item
+
+
+def get_conversation(conversation_id: str, *, db_path=None) -> dict | None:
+    with _connection(_db_path(db_path)) as connection:
+        row = connection.execute(
+            "SELECT * FROM conversations WHERE conversation_id = ?",
+            (conversation_id,),
+        ).fetchone()
+        if not row:
+            return None
+        messages = connection.execute(
+            """
+            SELECT * FROM messages
+            WHERE conversation_id = ?
+            ORDER BY sequence
+            """,
+            (conversation_id,),
+        ).fetchall()
+    result = dict(row)
+    result["messages"] = [_decode_message(item) for item in messages]
+    return result
+
+
+def rename_conversation(conversation_id: str, title: str, *, db_path=None) -> dict:
+    clean = title.strip()
+    if not clean:
+        raise ConversationError("invalid_title", "标题不能为空")
+    with _connection(_db_path(db_path)) as connection:
+        cursor = connection.execute(
+            "UPDATE conversations SET title = ?, updated_at = ? WHERE conversation_id = ?",
+            (clean[:120], _now(), conversation_id),
+        )
+        if cursor.rowcount != 1:
+            raise ConversationError("conversation_not_found", "会话不存在")
+    return get_conversation(conversation_id, db_path=db_path)
+
+
+def delete_conversation(conversation_id: str, *, db_path=None) -> bool:
+    with _connection(_db_path(db_path)) as connection:
+        cursor = connection.execute(
+            "DELETE FROM conversations WHERE conversation_id = ?",
+            (conversation_id,),
+        )
+    return cursor.rowcount == 1
+
+
+def _saved_response(connection, request_id: str) -> dict:
+    rows = connection.execute(
+        """
+        SELECT * FROM messages
+        WHERE request_id = ?
+        ORDER BY sequence
+        """,
+        (request_id,),
+    ).fetchall()
+    user = next(row for row in rows if row["role"] == "user")
+    assistant = next(row for row in rows if row["role"] == "assistant")
+    citations = json.loads(assistant["citations_json"] or "[]")
+    return {
+        "conversation_id": user["conversation_id"],
+        "user_message_id": user["message_id"],
+        "assistant_message_id": assistant["message_id"],
+        "standalone_question": user["standalone_question"] or user["content"],
+        "answer": assistant["content"],
+        "citations": citations,
+    }
+
+
+def begin_chat(
+    *,
+    conversation_id: str,
+    request_id: str,
+    question: str,
+    expected_last_message_id: str | None,
+    retry_failed: bool,
+    db_path=None,
+) -> dict:
+    """原子校验会话尾部、幂等状态并预留 user sequence。"""
+    path = _db_path(db_path)
+    with _connection(path) as connection:
+        connection.execute("BEGIN IMMEDIATE")
+        conversation = connection.execute(
+            "SELECT * FROM conversations WHERE conversation_id = ?",
+            (conversation_id,),
+        ).fetchone()
+        if not conversation:
+            raise ConversationError("conversation_not_found", "会话不存在")
+
+        existing = connection.execute(
+            "SELECT * FROM chat_requests WHERE request_id = ?",
+            (request_id,),
+        ).fetchone()
+        if existing:
+            if existing["conversation_id"] != conversation_id:
+                raise ConversationError("request_id_conflict", "request_id 已被其他会话使用")
+            if existing["status"] == "complete":
+                return {"replay": _saved_response(connection, request_id)}
+            if existing["status"] == "pending":
+                raise ConversationError("request_in_progress", "请求正在处理中")
+            if not retry_failed:
+                raise ConversationError("retry_required", "失败请求必须显式重试")
+            user = connection.execute(
+                "SELECT * FROM messages WHERE request_id = ? AND role = 'user'",
+                (request_id,),
+            ).fetchone()
+            if user["content"] != question:
+                raise ConversationError(
+                    "request_id_conflict",
+                    "同一 request_id 的问题内容不能变化",
+                )
+            later = connection.execute(
+                "SELECT 1 FROM messages WHERE conversation_id = ? AND sequence > ? LIMIT 1",
+                (conversation_id, user["sequence"]),
+            ).fetchone()
+            if later:
+                raise ConversationError("stale_retry", "失败请求之后已有新消息")
+            connection.execute(
+                """
+                UPDATE chat_requests
+                SET status = 'pending', error_code = NULL, updated_at = ?
+                WHERE request_id = ?
+                """,
+                (_now(), request_id),
+            )
+            connection.execute(
+                """
+                UPDATE messages
+                SET status = 'pending', standalone_question = NULL
+                WHERE message_id = ?
+                """,
+                (user["message_id"],),
+            )
+            return {"user_message_id": user["message_id"]}
+
+        pending = connection.execute(
+            """
+            SELECT 1 FROM chat_requests
+            WHERE conversation_id = ? AND status = 'pending'
+            LIMIT 1
+            """,
+            (conversation_id,),
+        ).fetchone()
+        if pending:
+            raise ConversationError("request_in_progress", "该会话已有请求正在处理中")
+
+        last = connection.execute(
+            """
+            SELECT message_id FROM messages
+            WHERE conversation_id = ? AND status = 'complete'
+            ORDER BY sequence DESC LIMIT 1
+            """,
+            (conversation_id,),
+        ).fetchone()
+        actual_last = last["message_id"] if last else None
+        if actual_last != expected_last_message_id:
+            raise ConversationError("conversation_conflict", "会话末尾已变化，请刷新后重试")
+
+        count = connection.execute(
+            "SELECT count(1) FROM messages WHERE conversation_id = ?",
+            (conversation_id,),
+        ).fetchone()[0]
+        if count >= settings.CONVERSATION_MAX_MESSAGES:
+            raise ConversationError("conversation_limit", "当前会话已达到消息上限")
+        next_sequence = connection.execute(
+            "SELECT coalesce(max(sequence), -1) + 1 FROM messages WHERE conversation_id = ?",
+            (conversation_id,),
+        ).fetchone()[0]
+        timestamp = _now()
+        user_message_id = uuid4().hex
+        connection.execute(
+            """
+            INSERT INTO chat_requests VALUES (?, ?, ?, 'pending', NULL, ?, ?)
+            """,
+            (
+                request_id,
+                conversation_id,
+                expected_last_message_id,
+                timestamp,
+                timestamp,
+            ),
+        )
+        connection.execute(
+            """
+            INSERT INTO messages (
+                message_id, conversation_id, request_id, sequence, role,
+                content, status, standalone_question, citations_json, created_at
+            ) VALUES (?, ?, ?, ?, 'user', ?, 'pending', NULL, NULL, ?)
+            """,
+            (
+                user_message_id,
+                conversation_id,
+                request_id,
+                next_sequence,
+                question,
+                timestamp,
+            ),
+        )
+        if count == 0 and conversation["title"] == "新对话":
+            connection.execute(
+                "UPDATE conversations SET title = ?, updated_at = ? WHERE conversation_id = ?",
+                (question[:40], timestamp, conversation_id),
+            )
+    return {"user_message_id": user_message_id}
+
+
+def complete_chat(
+    *,
+    request_id: str,
+    standalone_question: str,
+    answer: str,
+    citations: list[Citation],
+    db_path=None,
+) -> dict:
+    with _connection(_db_path(db_path)) as connection:
+        connection.execute("BEGIN IMMEDIATE")
+        user = connection.execute(
+            "SELECT * FROM messages WHERE request_id = ? AND role = 'user'",
+            (request_id,),
+        ).fetchone()
+        if not user or user["status"] != "pending":
+            raise ConversationError("request_not_pending", "请求状态已变化")
+        assistant_message_id = uuid4().hex
+        timestamp = _now()
+        connection.execute(
+            """
+            UPDATE messages
+            SET status = 'complete', standalone_question = ?
+            WHERE message_id = ?
+            """,
+            (standalone_question, user["message_id"]),
+        )
+        connection.execute(
+            """
+            INSERT INTO messages VALUES (
+                ?, ?, ?, ?, 'assistant', ?, 'complete', NULL, ?, ?
+            )
+            """,
+            (
+                assistant_message_id,
+                user["conversation_id"],
+                request_id,
+                user["sequence"] + 1,
+                answer,
+                json.dumps(
+                    [citation.model_dump(mode="json") for citation in citations],
+                    ensure_ascii=False,
+                ),
+                timestamp,
+            ),
+        )
+        connection.execute(
+            "UPDATE chat_requests SET status = 'complete', updated_at = ? WHERE request_id = ?",
+            (timestamp, request_id),
+        )
+        connection.execute(
+            "UPDATE conversations SET updated_at = ? WHERE conversation_id = ?",
+            (timestamp, user["conversation_id"]),
+        )
+    return {
+        "conversation_id": user["conversation_id"],
+        "user_message_id": user["message_id"],
+        "assistant_message_id": assistant_message_id,
+    }
+
+
+def fail_chat(request_id: str, error_code: str, *, db_path=None) -> None:
+    with _connection(_db_path(db_path)) as connection:
+        timestamp = _now()
+        connection.execute(
+            """
+            UPDATE chat_requests
+            SET status = 'failed', error_code = ?, updated_at = ?
+            WHERE request_id = ? AND status = 'pending'
+            """,
+            (error_code[:80], timestamp, request_id),
+        )
+        connection.execute(
+            """
+            UPDATE messages SET status = 'failed'
+            WHERE request_id = ? AND role = 'user' AND status = 'pending'
+            """,
+            (request_id,),
+        )
+
+
+def complete_history(conversation_id: str, *, db_path=None) -> list[dict]:
+    with _connection(_db_path(db_path)) as connection:
+        rows = connection.execute(
+            """
+            SELECT role, content, message_id, sequence
+            FROM messages
+            WHERE conversation_id = ? AND status = 'complete'
+            ORDER BY sequence
+            """,
+            (conversation_id,),
+        ).fetchall()
+    return [dict(row) for row in rows]
+
+
+def recover_interrupted_requests(*, db_path=None) -> int:
+    cutoff = (
+        datetime.now(timezone.utc)
+        - timedelta(seconds=settings.CONVERSATION_PENDING_TIMEOUT_SECONDS)
+    ).isoformat(timespec="seconds")
+    with _connection(_db_path(db_path)) as connection:
+        rows = connection.execute(
+            """
+            SELECT request_id FROM chat_requests
+            WHERE status = 'pending' AND updated_at < ?
+            """,
+            (cutoff,),
+        ).fetchall()
+        for row in rows:
+            connection.execute(
+                """
+                UPDATE chat_requests
+                SET status = 'failed', error_code = 'interrupted', updated_at = ?
+                WHERE request_id = ?
+                """,
+                (_now(), row["request_id"]),
+            )
+            connection.execute(
+                """
+                UPDATE messages SET status = 'failed'
+                WHERE request_id = ? AND role = 'user' AND status = 'pending'
+                """,
+                (row["request_id"],),
+            )
+    return len(rows)

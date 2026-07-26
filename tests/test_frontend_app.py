@@ -109,6 +109,15 @@ class FakeBackendClient:
     uploaded_names = []
     documents = []
     chat_payload = {"answer": "", "citations": [], "trace": None}
+    conversations = [
+        {
+            "conversation_id": "conversation-1",
+            "title": "测试对话",
+            "created_at": "2026-07-26T00:00:00+00:00",
+            "updated_at": "2026-07-26T00:00:00+00:00",
+        }
+    ]
+    conversation_messages = []
 
     def __init__(self, *args, **kwargs):
         pass
@@ -127,6 +136,17 @@ class FakeBackendClient:
                     "document_items": list(self.documents),
                 }
             )
+        if url.endswith("/api/conversations"):
+            return FakeResponse(list(self.conversations))
+        if "/api/conversations/" in url:
+            conversation_id = url.rsplit("/", 1)[-1]
+            conversation = next(
+                item for item in self.conversations
+                if item["conversation_id"] == conversation_id
+            )
+            return FakeResponse(
+                {**conversation, "messages": list(self.conversation_messages)}
+            )
         return FakeResponse({"status": "ok"})
 
     def post(self, url, files=None, json=None):
@@ -142,7 +162,51 @@ class FakeBackendClient:
                 }
             )
             return FakeResponse({"status": "success"})
-        return FakeResponse(self.chat_payload)
+        if url.endswith("/api/conversations"):
+            conversation = {
+                "conversation_id": "conversation-new",
+                "title": "新对话",
+                "created_at": "2026-07-26T00:00:00+00:00",
+                "updated_at": "2026-07-26T00:00:00+00:00",
+                "messages": [],
+            }
+            self.conversations.insert(0, {
+                key: value for key, value in conversation.items()
+                if key != "messages"
+            })
+            return FakeResponse(conversation)
+        payload = {
+            **self.chat_payload,
+            "conversation_id": json["conversation_id"],
+            "user_message_id": "user-1",
+            "assistant_message_id": "assistant-1",
+            "standalone_question": json["question"],
+        }
+        self.conversation_messages.extend([
+            {
+                "message_id": "user-1",
+                "request_id": json["request_id"],
+                "sequence": 0,
+                "role": "user",
+                "content": json["question"],
+                "status": "complete",
+                "standalone_question": json["question"],
+                "citations": [],
+                "created_at": "2026-07-26T00:00:00+00:00",
+            },
+            {
+                "message_id": "assistant-1",
+                "request_id": json["request_id"],
+                "sequence": 1,
+                "role": "assistant",
+                "content": payload["answer"],
+                "status": "complete",
+                "standalone_question": None,
+                "citations": payload["citations"],
+                "created_at": "2026-07-26T00:00:01+00:00",
+            },
+        ])
+        return FakeResponse(payload)
 
 
 def test_candidate_rows_join_full_chunk_catalog_and_make_preview():
@@ -194,6 +258,7 @@ def test_selected_candidate_is_recovered_before_trace_panel_renders():
 def test_successful_upload_clears_file_uploader(monkeypatch):
     FakeBackendClient.uploaded_names = []
     FakeBackendClient.documents = []
+    FakeBackendClient.conversation_messages = []
     monkeypatch.setattr(httpx, "Client", FakeBackendClient)
 
     app = AppTest.from_file("frontend/app.py", default_timeout=10)
@@ -209,6 +274,7 @@ def test_successful_upload_clears_file_uploader(monkeypatch):
 
 
 def test_trace_panel_is_present_and_collapsed_after_chat(monkeypatch):
+    FakeBackendClient.conversation_messages = []
     FakeBackendClient.documents = [
         {
             "document_id": "doc-1",

@@ -87,6 +87,65 @@ def ask(question: str, context: str) -> str:
     return response.choices[0].message.content
 
 
+def rewrite_followup(question: str, history: str) -> str:
+    """把含指代或省略的追问改写为可独立检索的问题。"""
+    response = _get_client().chat.completions.create(
+        model=settings.DEEPSEEK_MODEL,
+        messages=[
+            {
+                "role": "system",
+                "content": (
+                    "根据对话历史，把当前追问改写成语义完整、可独立检索的问题。"
+                    "只输出改写后的问题；不得回答问题，不得补充历史中不存在的事实。"
+                ),
+            },
+            {
+                "role": "user",
+                "content": f"对话历史：\n{history}\n\n当前追问：{question}",
+            },
+        ],
+        temperature=0,
+        max_tokens=200,
+    )
+    rewritten = (response.choices[0].message.content or "").strip()
+    if not rewritten:
+        raise ValueError("追问改写返回空文本")
+    return rewritten
+
+
+def ask_with_history(
+    question: str,
+    standalone_question: str,
+    context: str,
+    history: str,
+) -> str:
+    """使用有界历史保持对话连贯，但事实仍只取自当前检索证据。"""
+    response = _get_client().chat.completions.create(
+        model=settings.DEEPSEEK_MODEL,
+        messages=[
+            {
+                "role": "system",
+                "content": SYSTEM_PROMPT + (
+                    "\n7. 对话历史只用于理解指代和保持表达连贯，不能作为事实证据；"
+                    "事实仍必须由本轮文档内容支持。"
+                ),
+            },
+            {
+                "role": "user",
+                "content": (
+                    f"对话历史：\n{history or '（无）'}\n\n"
+                    f"本轮检索问题：{standalone_question}\n\n"
+                    f"本轮文档内容：\n{context}\n\n"
+                    f"用户当前原始问题：{question}"
+                ),
+            },
+        ],
+        temperature=0.3,
+        max_tokens=2000,
+    )
+    return response.choices[0].message.content
+
+
 def ask_stream(question: str, context: str) -> Generator[str, None, None]:
     """
     流式向 LLM 提问，逐 token 返回生成的文本。

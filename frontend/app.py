@@ -16,6 +16,7 @@ import streamlit as st
 import httpx
 import os
 from urllib.parse import quote
+from uuid import uuid4
 
 try:
     # pytest / `python -m` 从项目根目录导入。
@@ -55,6 +56,10 @@ if "messages" not in st.session_state:
     st.session_state.messages = []
 if "documents" not in st.session_state:
     st.session_state.documents = []
+if "conversations" not in st.session_state:
+    st.session_state.conversations = []
+if "current_conversation_id" not in st.session_state:
+    st.session_state.current_conversation_id = None
 if "_uploaded_set" not in st.session_state:
     # 只记录本次 uploader 选择中已成功入库的文件指纹；失败项必须允许重试。
     st.session_state["_uploaded_set"] = set()
@@ -133,13 +138,76 @@ def upload_file(uploaded_file) -> bool:
         return False
 
 
-def ask_question(question: str) -> dict | None:
-    """向后端发送问题，返回 {answer, citations} 或 None。"""
+def refresh_conversations() -> None:
+    try:
+        with httpx.Client(trust_env=False, timeout=5) as client:
+            response = client.get(f"{BACKEND_URL}/api/conversations")
+        if response.status_code == 200:
+            st.session_state.conversations = response.json()
+    except Exception:
+        pass
+
+
+def load_conversation(conversation_id: str) -> bool:
+    try:
+        with httpx.Client(trust_env=False, timeout=5) as client:
+            response = client.get(
+                f"{BACKEND_URL}/api/conversations/{conversation_id}"
+            )
+        if response.status_code != 200:
+            return False
+        payload = response.json()
+        st.session_state.current_conversation_id = conversation_id
+        st.session_state.messages = payload.get("messages", [])
+        return True
+    except Exception:
+        return False
+
+
+def create_new_conversation() -> bool:
+    try:
+        with httpx.Client(trust_env=False, timeout=5) as client:
+            response = client.post(
+                f"{BACKEND_URL}/api/conversations",
+                json={},
+            )
+        if response.status_code != 200:
+            return False
+        conversation = response.json()
+        refresh_conversations()
+        return load_conversation(conversation["conversation_id"])
+    except Exception:
+        return False
+
+
+def ask_question(
+    question: str,
+    *,
+    request_id: str | None = None,
+    retry_failed: bool = False,
+) -> dict | None:
+    """向后端发送持久化问题。"""
+    conversation_id = st.session_state.current_conversation_id
+    complete_messages = [
+        message
+        for message in st.session_state.messages
+        if message.get("status", "complete") == "complete"
+    ]
+    expected_last = (
+        complete_messages[-1].get("message_id")
+        if complete_messages else None
+    )
     try:
         with httpx.Client(trust_env=False, timeout=120) as client:
             resp = client.post(
                 f"{BACKEND_URL}/api/chat",
-                json={"question": question},
+                json={
+                    "question": question,
+                    "conversation_id": conversation_id,
+                    "request_id": request_id or uuid4().hex,
+                    "expected_last_message_id": expected_last,
+                    "retry_failed": retry_failed,
+                },
             )
         if resp.status_code == 200:
             return resp.json()
@@ -176,11 +244,85 @@ def clear_completed_upload_selection() -> None:
 if "_initial_load_done" not in st.session_state:
     st.session_state["_initial_load_done"] = True
     refresh_document_list()
+    refresh_conversations()
+    available_ids = {
+        item["conversation_id"] for item in st.session_state.conversations
+    }
+    if st.session_state.current_conversation_id in available_ids:
+        load_conversation(st.session_state.current_conversation_id)
+    elif st.session_state.conversations:
+        load_conversation(st.session_state.conversations[0]["conversation_id"])
 
 
 # ─── 侧边栏 ──────────────────────────────────────────
 with st.sidebar:
     st.title("📚 RAG 知识库")
+
+    st.header("💬 历史对话")
+    if st.button("➕ 新建对话", type="primary", use_container_width=True):
+        if create_new_conversation():
+            st.rerun()
+        st.error("新建对话失败，请确认后端可用")
+
+    for conversation in st.session_state.conversations:
+        conversation_id = conversation["conversation_id"]
+        label = conversation["title"]
+        if conversation_id == st.session_state.current_conversation_id:
+            label = "▶ " + label
+        if st.button(
+            label,
+            key=f"conversation_{conversation_id}",
+            use_container_width=True,
+        ):
+            if load_conversation(conversation_id):
+                st.rerun()
+
+    current_id = st.session_state.current_conversation_id
+    if current_id:
+        current = next(
+            (
+                item for item in st.session_state.conversations
+                if item["conversation_id"] == current_id
+            ),
+            None,
+        )
+        with st.expander("管理当前对话"):
+            title = st.text_input(
+                "标题",
+                value=current["title"] if current else "",
+                key=f"conversation_title_{current_id}",
+            )
+            if st.button("保存标题", key=f"rename_{current_id}"):
+                with httpx.Client(trust_env=False, timeout=5) as client:
+                    response = client.patch(
+                        f"{BACKEND_URL}/api/conversations/{current_id}",
+                        json={"title": title},
+                    )
+                if response.status_code == 200:
+                    refresh_conversations()
+                    st.rerun()
+                st.error("重命名失败")
+            confirm_key = f"_confirm_delete_{current_id}"
+            if st.button("删除当前对话", key=f"delete_{current_id}"):
+                st.session_state[confirm_key] = True
+            if st.session_state.get(confirm_key):
+                st.warning("删除后无法恢复，确定继续？")
+                yes, no = st.columns(2)
+                if yes.button("确定删除", key=f"confirm_{current_id}"):
+                    with httpx.Client(trust_env=False, timeout=5) as client:
+                        response = client.delete(
+                            f"{BACKEND_URL}/api/conversations/{current_id}"
+                        )
+                    if response.status_code == 200:
+                        st.session_state.current_conversation_id = None
+                        st.session_state.messages = []
+                        refresh_conversations()
+                        st.rerun()
+                if no.button("取消", key=f"cancel_{current_id}"):
+                    st.session_state.pop(confirm_key, None)
+                    st.rerun()
+
+    st.divider()
 
     # ── 文档上传区 ──
     st.header("📤 上传文档")
@@ -310,19 +452,15 @@ with st.sidebar:
 
     st.divider()
 
-    # ── 清空对话 ──
-    if st.button("🗑️ 清空对话"):
-        st.session_state.messages = []
-        st.rerun()
-
-    st.divider()
     st.caption(f"后端: {BACKEND_URL}")
 
 
 # ─── 主区域：对话界面 ────────────────────────────────
 st.title("💬 知识库问答")
 
-if not st.session_state.messages:
+if not st.session_state.current_conversation_id:
+    st.info("请在左侧新建或选择一个对话。")
+elif not st.session_state.messages:
     st.info(
         "👋 欢迎使用企业知识库问答系统！\n\n"
         "1. 先在左侧上传文档（支持 PDF / Word / TXT / Markdown / PPTX，可多选）\n"
@@ -334,6 +472,25 @@ if not st.session_state.messages:
 for message_index, msg in enumerate(st.session_state.messages):
     with st.chat_message(msg["role"]):
         st.markdown(msg["content"])
+        if msg.get("status") == "failed":
+            st.error("该消息处理失败，可在会话末尾重新发送。")
+            if (
+                msg.get("role") == "user"
+                and message_index == len(st.session_state.messages) - 1
+                and st.button(
+                    "重试该消息",
+                    key=f"retry_message_{msg.get('message_id', message_index)}",
+                )
+            ):
+                result = ask_question(
+                    msg["content"],
+                    request_id=msg.get("request_id"),
+                    retry_failed=True,
+                )
+                if result is not None:
+                    load_conversation(st.session_state.current_conversation_id)
+                    refresh_conversations()
+                    st.rerun()
         if msg.get("citations"):
             render_citations(
                 msg["citations"],
@@ -345,12 +502,14 @@ for message_index, msg in enumerate(st.session_state.messages):
 
 
 # 输入框
-if question := st.chat_input("请输入您的问题..."):
+if question := st.chat_input(
+    "请输入您的问题...",
+    disabled=not st.session_state.current_conversation_id,
+):
     if not st.session_state.documents:
         st.warning("⚠️ 请先在左侧上传至少一份文档")
         st.stop()
 
-    st.session_state.messages.append({"role": "user", "content": question})
     with st.chat_message("user"):
         st.markdown(question)
 
@@ -364,23 +523,17 @@ if question := st.chat_input("请输入您的问题..."):
         answer = result.get("answer", "")
         citations = result.get("citations", [])
         trace = result.get("trace")
-        st.markdown(answer)
 
-        if citations:
-            render_citations(
-                citations,
-                f"new_{len(st.session_state.messages)}",
-                BACKEND_URL,
-            )
-
-        render_retrieval_trace(
-            trace,
-            str(len(st.session_state.messages)),
-        )
-
-    st.session_state.messages.append({
-        "role": "assistant",
-        "content": answer,
-        "citations": citations,
-        "trace": trace,
-    })
+    assistant_message_id = result.get("assistant_message_id")
+    load_conversation(st.session_state.current_conversation_id)
+    for message in reversed(st.session_state.messages):
+        if message.get("role") != "assistant":
+            continue
+        if (
+            assistant_message_id is None
+            or message.get("message_id") == assistant_message_id
+        ):
+            message["trace"] = trace
+            break
+    refresh_conversations()
+    st.rerun()

@@ -504,7 +504,7 @@ $env:TRANSFORMERS_OFFLINE='1'
 
 ### 当前做到哪一步
 
-当前开发分支为 `phase1/unified-structure-model`。**五种范围内格式的统一结构解析、结构化 chunk、版本化 SQLite schema、`document_units` 和 Chroma 轻量定位 metadata 已贯通；23 份真实语料已全部完成确定性解析，PPTX 组合形状中的原生文字也已纳入。生产上传、文档管理、引用 API、来源预览、检索 Trace、前端上传与展示以及索引重建脚本均已切换到 `structured-v1`，并通过五格式隔离 API 验收。旧生产数据尚未执行一次性清理和重新入库。**
+当前开发分支为 `phase1/unified-structure-model`。**五种范围内格式的统一结构解析、结构化 chunk、版本化 SQLite schema、`document_units` 和 Chroma 轻量定位 metadata 已贯通。生产上传、文档管理、引用 API、来源预览、检索 Trace、前端上传与展示以及索引重建脚本均已切换到 `structured-v1`。旧生产 Chroma、metadata、uploads 和备份已按确认清单清理，23 份语料已通过真实生产 API 重新入库为 2,438 units / 2,584 chunks。持久化多轮对话的后端、历史窗口、追问改写、幂等/并发控制、启动恢复和前端会话管理也已完成。**
 
 | 工作项 | 当前状态 |
 |---|---|
@@ -519,20 +519,20 @@ $env:TRANSFORMERS_OFFLINE='1'
 | DOCX/TXT Adapter 专项测试 | 已完成 |
 | `ParsedUnit` 原生 chunker | 已接入生产上传和索引重建脚本 |
 | 新 SQLite schema 与 `document_units` | 已完成 bootstrap、版本拒绝、事务替换、读取重校验和级联测试；应用启动会执行 schema 门禁 |
-| Chroma 结构化 metadata | 已接入生产上传与重建脚本；等待旧生产 collection 一次性清理后重新入库 |
+| Chroma 结构化 metadata | 生产库已重建，23 份文档共 2,584 chunks |
 | Markdown Adapter | 已完成 fixture 与 3 份真实 Markdown 验收 |
 | PPTX Adapter | 已完成标题、文本框、嵌套组合形状、列表、表格和无文本 warning 测试，并通过 17 份真实 PPTX 验收 |
 | DOCX/PPTX ZIP 资源边界 | 已完成 entry 数、单项 XML 和总解压大小校验 |
 | 结构化引用预览服务与安全 renderer | 已接入生产 API/UI；只读取 `document_units`，不回退 `document_pages` |
-| 生产上传/API/UI 切换与旧数据清理 | 代码切换及五格式隔离 API 验收已完成；待确认精确删除清单后清理并重新入库 |
+| 生产上传/API/UI 切换与旧数据清理 | 已完成；API/SQLite/uploads/Chroma 文档数均为 23，结构化检索、引用和预览冒烟通过 |
 | Dataset v3 prepare | 已把 6 个候选批次合并并追加 5 道域外题；35 道单题、6 组对话（17 轮）、80 条 evidence 均已定位，manifest 已生成 |
 | Dataset v3 语义预审 | 已完成代码辅助的 52 个 answer item 全量检查，修正 3 处语义问题，补齐 48 个原先无法命中标准答案的 keypoint 变体，并为 5 道域外题执行 whole-corpus 关键词排查 |
 | Dataset v3 structured preflight | 已贯通 manifest → 五格式解析 → 2,438 units → 2,584 chunks → 隔离 Chroma → 52 项检索；Hit/Recall 97.67%、MRR 95.35%，1 道可回答题漏检；2 道用户授权的真实 LLM smoke 均通过 |
 | Dataset v3 人工审核与冻结 | 审核包已生成，但真实人工签核尚未完成；当前全部 review 保持 `draft`，strict validate 会按设计失败 |
-| 多轮对话 | 尚未开始 |
+| 多轮对话 | 已完成本地单用户持久化、CRUD、刷新恢复、追问改写、有界历史、citation snapshot、幂等重放、并发冲突和 pending 启动恢复；真实外部 LLM 冒烟待网络恢复补跑 |
 
 因此，当前最准确的阶段结论是：
 
-> **统一结构、真实格式解析、结构化 preview/renderer、Dataset v3 prepare 和生产代码切换已贯通。当前阻塞点只剩旧生产数据的一次性清理/重建，以及独立的持久化多轮对话阶段；检索漏检与参数优化按当前决策后置。**
+> **本轮代码优化与生产数据切换已完成。当前外部网络无法连接 `api.deepseek.com:443`，因此生产 `/api/chat` 的最终 LLM 生成冒烟待网络恢复补跑；不依赖外网的真实检索、引用映射和结构化预览已通过。Dataset v3 的真实人工签核仍未完成，检索漏检与参数优化按当前决策后置。**
 
 所有简历指标都以实际 eval 报告为准，不预先填写目标值。

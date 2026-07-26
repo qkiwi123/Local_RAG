@@ -334,6 +334,113 @@ class TestChatAPI:
         assert payload["trace"] is None
 
 
+class TestPersistentConversationAPI:
+    def test_two_turn_conversation_persists_rewrites_and_replays(
+        self,
+        client,
+        monkeypatch,
+    ):
+        from backend.routers import chat as chat_router
+
+        monkeypatch.setattr(
+            chat_router,
+            "ask_with_history",
+            lambda question, standalone, context, history: (
+                f"回答 {standalone}【来源1】"
+            ),
+        )
+        rewritten = "员工手册中的年假政策还有哪些限制？"
+        monkeypatch.setattr(
+            chat_router,
+            "rewrite_followup",
+            lambda question, history: rewritten,
+        )
+
+        conversation = client.post("/api/conversations", json={}).json()
+        conversation_id = conversation["conversation_id"]
+        first_payload = {
+            "question": "员工有多少天年假？",
+            "conversation_id": conversation_id,
+            "request_id": "request-1",
+            "expected_last_message_id": None,
+        }
+        first = client.post("/api/chat", json=first_payload)
+
+        assert first.status_code == 200, first.text
+        first_data = first.json()
+        assert first_data["standalone_question"] == first_payload["question"]
+        assert first_data["conversation_id"] == conversation_id
+
+        second_payload = {
+            "question": "还有哪些限制？",
+            "conversation_id": conversation_id,
+            "request_id": "request-2",
+            "expected_last_message_id": first_data["assistant_message_id"],
+        }
+        second = client.post("/api/chat", json=second_payload)
+
+        assert second.status_code == 200, second.text
+        second_data = second.json()
+        assert second_data["standalone_question"] == rewritten
+
+        detail = client.get(f"/api/conversations/{conversation_id}").json()
+        assert [message["role"] for message in detail["messages"]] == [
+            "user",
+            "assistant",
+            "user",
+            "assistant",
+        ]
+        assert detail["messages"][2]["content"] == "还有哪些限制？"
+        assert detail["messages"][2]["standalone_question"] == rewritten
+        assert detail["messages"][3]["citations"]
+
+        replay = client.post("/api/chat", json=second_payload)
+        assert replay.status_code == 200
+        assert replay.json()["assistant_message_id"] == second_data[
+            "assistant_message_id"
+        ]
+        assert replay.json()["trace"] is None
+
+    def test_stale_expected_last_message_is_rejected(self, client):
+        conversation_id = client.post(
+            "/api/conversations",
+            json={"title": "测试"},
+        ).json()["conversation_id"]
+
+        response = client.post(
+            "/api/chat",
+            json={
+                "question": "问题",
+                "conversation_id": conversation_id,
+                "request_id": "request-conflict",
+                "expected_last_message_id": "stale",
+            },
+        )
+
+        assert response.status_code == 409
+        assert response.json()["detail"]["code"] == "conversation_conflict"
+
+    def test_conversation_crud_and_cascade_delete(self, client):
+        created = client.post(
+            "/api/conversations",
+            json={"title": "原标题"},
+        ).json()
+        conversation_id = created["conversation_id"]
+
+        renamed = client.patch(
+            f"/api/conversations/{conversation_id}",
+            json={"title": "新标题"},
+        )
+        assert renamed.json()["title"] == "新标题"
+        assert client.get("/api/conversations").json()[0]["conversation_id"] == (
+            conversation_id
+        )
+
+        deleted = client.delete(f"/api/conversations/{conversation_id}")
+        assert deleted.status_code == 200
+        assert client.get(f"/api/conversations/{conversation_id}").status_code == 404
+
+
 class TestStructuredCitationPreviewAPI:
     def test_preview_route_returns_only_structured_payload(
         self,

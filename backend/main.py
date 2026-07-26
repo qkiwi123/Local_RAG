@@ -28,11 +28,12 @@ app.add_middleware(
 )
 
 # 注册路由
-from backend.routers import upload, chat, citations
+from backend.routers import upload, chat, citations, conversations
 
 app.include_router(upload.router, prefix="/api")
 app.include_router(chat.router, prefix="/api")
 app.include_router(citations.router)
+app.include_router(conversations.router, prefix="/api")
 
 
 @app.get("/")
@@ -46,11 +47,13 @@ async def startup_event():
     """启动前校验或创建 structured-v1 metadata schema。"""
     from backend.config import settings
     from backend.services.metadata_schema import bootstrap_structured_database
+    from backend.services.conversation_store import recover_interrupted_requests
 
     bootstrap_structured_database(
         settings.METADATA_DB_PATH,
         created_at=datetime.now(timezone.utc).isoformat(timespec="seconds"),
     )
+    recover_interrupted_requests()
     print(f"[启动] RAG Knowledge Base API v0.1.0")
     print(f"[启动] Embedding 模型: {settings.EMBEDDING_MODEL}")
     print(f"[启动] LLM 模型: {settings.DEEPSEEK_MODEL}")

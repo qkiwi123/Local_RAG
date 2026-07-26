@@ -7,6 +7,7 @@
 路由层保持轻薄：只做参数校验和调用 services。
 """
 
+import logging
 from time import perf_counter
 
 from fastapi import APIRouter, HTTPException
@@ -17,10 +18,19 @@ from backend.services.retriever import (
     format_retrieval_context,
 )
 from backend.services.retrieval_trace import finalize_chat_trace
-from backend.services.llm import ask
+from backend.services.llm import ask, ask_with_history, rewrite_followup
+from backend.services.conversation_context import bounded_history, format_history
+from backend.services.conversation_store import (
+    ConversationError,
+    begin_chat,
+    complete_chat,
+    complete_history,
+    fail_chat,
+)
 from backend.utils.citation import extract_citations
 
 router = APIRouter(tags=["chat"])
+logger = logging.getLogger(__name__)
 
 
 @router.post("/chat", response_model=ChatResponse)
@@ -40,9 +50,53 @@ async def chat(request: ChatRequest):
 
     if not question:
         raise HTTPException(status_code=422, detail="问题不能为空")
+    if len(question) > settings.CONVERSATION_MESSAGE_MAX_CHARS:
+        raise HTTPException(status_code=422, detail="问题超过最大长度")
+
+    persistent = request.conversation_id is not None
+    history_rows: list[dict] = []
+    user_message_id = None
+    standalone_question = question
+    if persistent:
+        if not request.request_id:
+            raise HTTPException(status_code=422, detail="持久化对话必须提供 request_id")
+        try:
+            started = begin_chat(
+                conversation_id=request.conversation_id,
+                request_id=request.request_id,
+                question=question,
+                expected_last_message_id=request.expected_last_message_id,
+                retry_failed=request.retry_failed,
+            )
+        except ConversationError as error:
+            raise HTTPException(
+                status_code=409 if error.code != "conversation_not_found" else 404,
+                detail={"code": error.code, "message": str(error)},
+            ) from error
+        if "replay" in started:
+            return ChatResponse(**started["replay"], trace=None)
+        user_message_id = started["user_message_id"]
+        history_rows = complete_history(request.conversation_id)
+        if history_rows:
+            history_text = format_history(bounded_history(history_rows))
+            try:
+                standalone_question = rewrite_followup(question, history_text)
+            except Exception as error:
+                logger.warning(
+                    "Follow-up rewrite failed: conversation_id=%s request_id=%s error=%s",
+                    request.conversation_id,
+                    request.request_id,
+                    type(error).__name__,
+                )
+                standalone_question = question
 
     # 1. 语义检索
-    retrieval = retrieve_with_trace(question)
+    try:
+        retrieval = retrieve_with_trace(standalone_question)
+    except Exception as error:
+        if persistent:
+            fail_chat(request.request_id, "retrieval_error")
+        raise HTTPException(status_code=500, detail="检索执行失败") from error
     retrieval_results = retrieval.results
 
     if not retrieval_results:
@@ -54,10 +108,28 @@ async def chat(request: ChatRequest):
             llm_generation_ms=0.0,
             total_ms=(perf_counter() - total_started) * 1000,
         )
+        answer = "未找到与您问题相关的文档内容。请确认已上传相关文档，或尝试换个问法。"
+        response_fields = {}
+        if persistent:
+            try:
+                response_fields = complete_chat(
+                    request_id=request.request_id,
+                    standalone_question=standalone_question,
+                    answer=answer,
+                    citations=[],
+                )
+            except Exception as error:
+                fail_chat(request.request_id, "persistence_error")
+                raise HTTPException(
+                    status_code=500,
+                    detail="对话保存失败",
+                ) from error
         return ChatResponse(
-            answer="未找到与您问题相关的文档内容。请确认已上传相关文档，或尝试换个问法。",
+            answer=answer,
             citations=[],
             trace=trace,
+            standalone_question=standalone_question if persistent else None,
+            **response_fields,
         )
 
     # 2. 格式化上下文
@@ -68,8 +140,19 @@ async def chat(request: ChatRequest):
     # 3. 调用 LLM 生成答案
     llm_started = perf_counter()
     try:
-        answer = ask(question, context)
+        if persistent:
+            history_text = format_history(bounded_history(history_rows))
+            answer = ask_with_history(
+                question,
+                standalone_question,
+                context,
+                history_text,
+            )
+        else:
+            answer = ask(question, context)
     except Exception as e:
+        if persistent:
+            fail_chat(request.request_id, "llm_error")
         raise HTTPException(
             status_code=502,
             detail=f"LLM 调用失败: {str(e)}"
@@ -89,8 +172,22 @@ async def chat(request: ChatRequest):
         total_ms=(perf_counter() - total_started) * 1000,
     )
 
+    response_fields = {}
+    if persistent:
+        try:
+            response_fields = complete_chat(
+                request_id=request.request_id,
+                standalone_question=standalone_question,
+                answer=answer,
+                citations=citations,
+            )
+        except Exception as error:
+            fail_chat(request.request_id, "persistence_error")
+            raise HTTPException(status_code=500, detail="对话保存失败") from error
     return ChatResponse(
         answer=answer,
         citations=citations,
         trace=trace,
+        standalone_question=standalone_question if persistent else None,
+        **response_fields,
     )

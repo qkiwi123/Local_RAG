@@ -80,6 +80,23 @@ class Settings:
         os.getenv("CITATION_PREVIEW_MAX_PAGE_CHARS", "200000")
     )
 
+    # ─── 持久化对话 ──────────────────────────────────
+    CONVERSATION_HISTORY_MESSAGES: int = int(
+        os.getenv("CONVERSATION_HISTORY_MESSAGES", "12")
+    )
+    CONVERSATION_HISTORY_MAX_TOKENS: int = int(
+        os.getenv("CONVERSATION_HISTORY_MAX_TOKENS", "1500")
+    )
+    CONVERSATION_MESSAGE_MAX_CHARS: int = int(
+        os.getenv("CONVERSATION_MESSAGE_MAX_CHARS", "8000")
+    )
+    CONVERSATION_MAX_MESSAGES: int = int(
+        os.getenv("CONVERSATION_MAX_MESSAGES", "200")
+    )
+    CONVERSATION_PENDING_TIMEOUT_SECONDS: int = int(
+        os.getenv("CONVERSATION_PENDING_TIMEOUT_SECONDS", "300")
+    )
+
     # ─── Reranker ────────────────────────────────────
     # 安全默认关闭，生产环境通过 .env 显式启用高质量模式。
     RERANKER_ENABLED: bool = _env_bool("RERANKER_ENABLED", False)
