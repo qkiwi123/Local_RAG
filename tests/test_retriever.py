@@ -139,3 +139,20 @@ class TestFormatRetrievalContext:
         assert "【来源1】《test.pdf》第1页" in context
         assert "【来源2】" not in context  # 只有一条
         assert "Test content." in context
+
+    def test_format_structured_result_uses_location_label(self):
+        results = [
+            {
+                "content": "Structured content.",
+                "metadata": {
+                    "document_name": "slides.pptx",
+                    "location_label": "第 8 张幻灯片",
+                },
+                "distance": 0.1,
+            }
+        ]
+
+        context = format_retrieval_context(results)
+
+        assert "【来源1】《slides.pptx》第 8 张幻灯片" in context
+        assert "第?页" not in context

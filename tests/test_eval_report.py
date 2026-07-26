@@ -93,6 +93,42 @@ def test_review_blockquotes_do_not_emit_trailing_spaces(tmp_path):
     assert not any(line.endswith(" ") for line in review.splitlines())
 
 
+def test_review_uses_structured_evidence_location(tmp_path):
+    payload = _payload()
+    payload["per_question"] = [
+        {
+            "id": "q01",
+            "answerable": True,
+            "hit": True,
+            "keypoint_satisfied": 1,
+            "keypoint_total": 1,
+            "citation_count": 1,
+        }
+    ]
+    questions = [
+        {
+            "id": "q01",
+            "category": "fact",
+            "question": "课件说了什么？",
+            "reference_answer": "答案。",
+            "evidence": [
+                {
+                    "document_name": "slides.pptx",
+                    "snippet": "答案",
+                    "locator": {"location_label": "第 8 张幻灯片"},
+                }
+            ],
+        }
+    ]
+    answers = {"q01": {"answer": "答案【来源1】"}}
+
+    write_review_md(tmp_path, payload, questions, answers)
+    review = (tmp_path / "review.md").read_text(encoding="utf-8")
+
+    assert "《slides.pptx》第 8 张幻灯片" in review
+    assert "第?页" not in review
+
+
 def test_format_retrieval_debug_handles_sparse_only_result():
     from eval.report import _format_retrieval_debug
 

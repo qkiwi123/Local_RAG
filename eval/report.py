@@ -51,6 +51,14 @@ def _format_location(metadata: dict) -> str:
     return "位置未知"
 
 
+def _format_evidence_location(evidence: dict) -> str:
+    locator = evidence.get("locator") or {}
+    if locator.get("location_label"):
+        return str(locator["location_label"])
+    page_hint = evidence.get("page_hint")
+    return f"第{page_hint}页" if page_hint is not None else "位置未知"
+
+
 def _format_retrieval_debug(row: dict) -> str:
     """格式化允许缺少 Dense distance 的混合检索调试信息。"""
     metadata = row["metadata"]
@@ -201,7 +209,7 @@ def write_review_md(run_dir: Path, payload: dict, questions: List[dict], answers
             lines.append("")
             for ev in q["evidence"]:
                 lines.append(
-                    f"- 《{ev['document_name']}》第{ev.get('page_hint', '?')}页："
+                    f"- 《{ev['document_name']}》{_format_evidence_location(ev)}："
                     f"「{ev['snippet']}」"
                 )
             lines.append("")

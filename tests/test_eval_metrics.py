@@ -75,6 +75,26 @@ class TestParseCitations:
         assert cite["source_id"] == 9
         assert cite["valid"] is False
 
+    def test_structured_location_is_valid_without_page_number(self):
+        retrieval = [
+            {
+                "chunk_id": "chunk-slide",
+                "content": "课件内容",
+                "metadata": {
+                    "document_name": "课件.pptx",
+                    "parser_version": "structured-v1",
+                    "unit_id": "unit-8",
+                    "location_label": "第 8 张幻灯片",
+                },
+            }
+        ]
+
+        cite = parse_citations("见【来源1】。", retrieval)[0]
+
+        assert cite["valid"] is True
+        assert cite["page"] is None
+        assert cite["doc"] == "课件.pptx"
+
     def test_no_marker(self):
         assert parse_citations("没有引用的回答") == []
 

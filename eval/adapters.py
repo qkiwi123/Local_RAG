@@ -12,13 +12,20 @@
    （检索为空时的固定拒答串必须与 chat.py 完全一致，且不调用 LLM）。
 """
 
+import hashlib
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import List
 
 # 与 backend/routers/chat.py 中检索为空时的回复保持逐字一致
 REFUSAL_CANNED = "未找到与您问题相关的文档内容。请确认已上传相关文档，或尝试换个问法。"
 _LEGACY_PARSER_SUFFIXES = {".pdf", ".docx", ".txt"}
+
+
+def _structured_document_id(relative_name: str) -> str:
+    digest = hashlib.sha256(relative_name.encode("utf-8")).hexdigest()[:24]
+    return f"eval-{digest}"
 
 
 def _get_store():
@@ -84,8 +91,26 @@ def get_run_config() -> dict:
     }
 
 
-def parse_corpus(corpus_dir: Path) -> dict:
+def parse_corpus(corpus_dir: Path, *, structured: bool = False) -> dict:
     """解析语料，返回 {document_name: 全文文本}，供 dataset snippet 自检。"""
+    if structured:
+        from backend.services.parsers import ADAPTERS, parse_document_structure
+
+        texts = {}
+        for source in sorted(corpus_dir.iterdir()):
+            if not source.is_file() or source.suffix.lower() not in ADAPTERS:
+                continue
+            relative_name = source.relative_to(corpus_dir).as_posix()
+            parsed = parse_document_structure(
+                str(source),
+                document_id=_structured_document_id(relative_name),
+                document_name=relative_name,
+            )
+            texts[relative_name] = "\n\n".join(
+                unit.canonical_text for unit in parsed.units
+            )
+        return texts
+
     from backend.services.parser import parse_document
 
     texts = {}
@@ -97,13 +122,16 @@ def parse_corpus(corpus_dir: Path) -> dict:
     return texts
 
 
-def ingest_corpus(corpus_dir: Path) -> dict:
+def ingest_corpus(corpus_dir: Path, *, structured: bool = False) -> dict:
     """
     复刻 upload router 的入库链路：parse → chunk → add_chunks。
 
     Returns:
         {"documents": {文档名: chunk数}, "total_chunks": int, "ingest_s": float}
     """
+    if structured:
+        return _ingest_structured_corpus(corpus_dir)
+
     from backend.config import settings
     from backend.services.parser import parse_document
     from backend.services.chunker import chunk_document
@@ -129,6 +157,94 @@ def ingest_corpus(corpus_dir: Path) -> dict:
     return {
         "documents": doc_chunks,
         "total_chunks": sum(doc_chunks.values()),
+        "ingest_s": round(time.perf_counter() - t0, 2),
+    }
+
+
+def _ingest_structured_corpus(corpus_dir: Path) -> dict:
+    """在隔离库中贯通 structured-v1 的五格式 parse/store/chunk/index。"""
+    from backend.config import settings
+    from backend.services.chunker import chunk_units
+    from backend.services.document_store import (
+        create_document,
+        mark_failed,
+        mark_ready,
+    )
+    from backend.services.embedding import count_tokens
+    from backend.services.metadata_schema import bootstrap_structured_database
+    from backend.services.parsers import (
+        ADAPTERS,
+        PARSER_VERSION,
+        parse_document_structure,
+    )
+    from backend.services.unit_store import replace_document_units
+
+    store = _get_store()
+    t0 = time.perf_counter()
+    doc_chunks: dict[str, int] = {}
+    doc_units: dict[str, int] = {}
+    warning_count = 0
+    bootstrap_structured_database(
+        settings.METADATA_DB_PATH,
+        created_at=datetime.now(timezone.utc).isoformat(timespec="seconds"),
+    )
+
+    for source in sorted(corpus_dir.iterdir()):
+        if not source.is_file() or source.suffix.lower() not in ADAPTERS:
+            continue
+        relative_name = source.relative_to(corpus_dir).as_posix()
+        document_id = _structured_document_id(relative_name)
+        create_document(
+            document_id,
+            relative_name,
+            f"{document_id}{source.suffix.lower()}",
+            source.stat().st_size,
+            settings.METADATA_DB_PATH,
+        )
+        try:
+            parsed = parse_document_structure(
+                str(source),
+                document_id=document_id,
+                document_name=relative_name,
+            )
+            chunks = chunk_units(
+                parsed.units,
+                settings.CHUNK_SIZE,
+                settings.CHUNK_OVERLAP,
+                max_tokens=settings.CHUNK_MAX_TOKENS,
+                token_counter=count_tokens,
+                strategy=settings.CHUNK_STRATEGY,
+            )
+            replace_document_units(
+                document_id,
+                PARSER_VERSION,
+                parsed.units,
+                db_path=settings.METADATA_DB_PATH,
+            )
+            count = store.add_chunks(chunks)
+            mark_ready(
+                document_id,
+                count,
+                settings.METADATA_DB_PATH,
+            )
+        except Exception as error:
+            mark_failed(
+                document_id,
+                str(error),
+                settings.METADATA_DB_PATH,
+            )
+            raise
+        doc_chunks[relative_name] = count
+        doc_units[relative_name] = len(parsed.units)
+        warning_count += len(parsed.warnings)
+
+    return {
+        "parser_mode": "structured-v1",
+        "documents": doc_chunks,
+        "units": doc_units,
+        "total_units": sum(doc_units.values()),
+        "total_chunks": sum(doc_chunks.values()),
+        "parse_warnings": warning_count,
         "ingest_s": round(time.perf_counter() - t0, 2),
     }
 

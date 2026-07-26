@@ -124,6 +124,24 @@ def test_ablation_compares_hybrid_reranker_to_dense_reranker():
     assert "不可回答题进入 LLM" in report
 
 
+def test_v3_dataset_id_is_not_rendered_as_numeric_version():
+    payload = build_hybrid_ablation(
+        label="v3",
+        config={},
+        ingest={"total_chunks": 1, "ingest_s": 0.1},
+        results=[
+            _mode("dense_reranker", hit_rate=0.0),
+            _mode("hybrid_reranker", hit_rate=1.0),
+        ],
+        dataset_version="general-courseware-v1",
+    )
+
+    report = render_hybrid_ablation(payload)
+
+    assert "Dataset：general-courseware-v1" in report
+    assert "Dataset：vgeneral-courseware-v1" not in report
+
+
 def test_hybrid_ablation_cli_ingests_once_and_restores_settings(
     monkeypatch, tmp_path
 ):

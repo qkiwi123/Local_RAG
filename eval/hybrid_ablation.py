@@ -104,7 +104,7 @@ def build_hybrid_ablation(
     config: dict,
     ingest: dict,
     results: list[dict],
-    dataset_version: int,
+    dataset_version: int | str,
 ) -> dict:
     """组装机器可读消融报告。"""
     return {
@@ -128,10 +128,16 @@ def render_hybrid_ablation(payload: dict) -> str:
         (row.get("question_count", 0) for row in payload["results"]),
         default=0,
     )
+    dataset_version = payload["config"]["dataset_version"]
+    dataset_label = (
+        f"v{dataset_version}"
+        if isinstance(dataset_version, int)
+        else str(dataset_version)
+    )
     lines = [
         f"# P2-1 混合检索消融 — {payload['label']}",
         "",
-        f"- Dataset：v{payload['config']['dataset_version']}（{question_count} 题）",
+        f"- Dataset：{dataset_label}（{question_count} 题）",
         f"- 入库：{payload['ingest']['total_chunks']} chunks，"
         f"{payload['ingest']['ingest_s']}s",
         "- 部署对照：Dense + Reranker → Hybrid + Reranker",

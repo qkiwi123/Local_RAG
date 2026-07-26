@@ -62,6 +62,18 @@ def _setup_env(args) -> Path:
                 f"无法删除旧向量库 {chroma_dir}（文件被占用）。"
                 "请关闭其他正在使用该目录的进程后重试。"
             )
+    # structured-v1 会在隔离 run 目录写 SQLite。每次运行必须和 Chroma 一样
+    # 从空库开始，否则 --overwrite 或中断重跑会遇到旧 document_id 冲突。
+    for suffix in ("", "-wal", "-shm"):
+        metadata_file = run_dir / f"metadata.db{suffix}"
+        if metadata_file.exists():
+            try:
+                metadata_file.unlink()
+            except PermissionError:
+                sys.exit(
+                    f"无法删除旧评测数据库 {metadata_file}（文件被占用）。"
+                    "请关闭使用该 run 的进程后重试。"
+                )
     run_dir.mkdir(parents=True, exist_ok=True)
 
     os.environ["CHROMA_PERSIST_DIR"] = str(chroma_dir)
@@ -105,8 +117,72 @@ def _setup_env(args) -> Path:
 
 
 def _load_dataset(path: Path) -> dict:
+    from eval.dataset_runtime import normalize_for_evaluation
+
     with open(path, encoding="utf-8") as f:
-        return json.load(f)
+        return normalize_for_evaluation(json.load(f))
+
+
+def _validate_v3_gate(
+    dataset_path: Path,
+    corpus_dir: Path,
+    *,
+    manifest_path: str | None,
+    allow_draft: bool,
+) -> bool:
+    """运行 v3 manifest/gold 校验；返回是否应使用 structured-v1 链路。"""
+    from eval.dataset_runtime import is_dataset_v3
+
+    with open(dataset_path, encoding="utf-8") as dataset_file:
+        raw_dataset = json.load(dataset_file)
+    if not is_dataset_v3(raw_dataset):
+        return False
+
+    from eval.dataset_v3 import (
+        build_corpus_manifest,
+        load_json_objects,
+        parse_corpus,
+        validate_dataset,
+    )
+
+    resolved_manifest = (
+        Path(manifest_path)
+        if manifest_path
+        else dataset_path.with_name("corpus_v3_manifest.json")
+    )
+    if not resolved_manifest.is_file():
+        sys.exit(f"Dataset v3 manifest 不存在：{resolved_manifest}")
+    parsed_documents = parse_corpus(corpus_dir)
+    manifest_objects = load_json_objects(resolved_manifest)
+    if len(manifest_objects) != 1:
+        sys.exit("Dataset v3 manifest 必须只有一个顶层对象")
+    current_manifest = build_corpus_manifest(
+        corpus_dir,
+        parsed_documents,
+        corpus_id=raw_dataset.get("corpus_id", ""),
+    )
+    result = validate_dataset(
+        raw_dataset,
+        parsed_documents=parsed_documents,
+        manifest=manifest_objects[0],
+        current_manifest=current_manifest,
+        strict=not allow_draft,
+    )
+    if not result.ok:
+        preview = "\n".join(f"  - {error}" for error in result.errors[:20])
+        remainder = len(result.errors) - 20
+        suffix = f"\n  …另有 {remainder} 项" if remainder > 0 else ""
+        sys.exit(
+            "Dataset v3 校验失败：\n"
+            f"{preview}{suffix}\n"
+            "未完成人工审核时，只允许预检并显式传 --allow-draft-v3。"
+        )
+    if allow_draft and result.warnings:
+        print(
+            f"  [预检] Dataset v3 有 {len(result.warnings)} 个审核组仍为 draft；"
+            "本次结果不得作为正式冻结评测。"
+        )
+    return True
 
 
 def _validate_dataset(dataset: dict, corpus_texts: dict):
@@ -128,7 +204,7 @@ def _validate_dataset(dataset: dict, corpus_texts: dict):
             count = normed[doc].count(norm(ev["snippet"]))
             if count == 0:
                 warns.append(f"{q['id']}: snippet 未出现于解析文本：{ev['snippet']}")
-            elif count > 1:
+            elif count > 1 and dataset.get("schema_version") != 3:
                 errors.append(f"{q['id']}: snippet 出现 {count} 次，须唯一：{ev['snippet']}")
     for w in warns:
         print(f"  [警告] {w}")
@@ -158,17 +234,43 @@ def cmd_run(args):
         sys.exit(str(e))
 
     corpus_dir = Path(args.corpus)
-    dataset = _load_dataset(Path(args.dataset))
+    dataset_path = Path(args.dataset)
+    structured = _validate_v3_gate(
+        dataset_path,
+        corpus_dir,
+        manifest_path=getattr(args, "manifest", None),
+        allow_draft=getattr(args, "allow_draft_v3", False),
+    )
+    dataset = _load_dataset(dataset_path)
     questions = dataset["questions"]
+    if structured and args.limit and not getattr(args, "allow_draft_v3", False):
+        sys.exit(
+            "Dataset v3 正式评测禁止 --limit；"
+            "冒烟预检必须显式传 --allow-draft-v3。"
+        )
     if args.limit:
         questions = questions[: args.limit]
 
     print(f"[1/4] 校验数据集（{len(questions)} 题）…")
-    corpus_texts = adapters.parse_corpus(corpus_dir)
-    _validate_dataset({"questions": questions}, corpus_texts)
+    corpus_texts = (
+        adapters.parse_corpus(corpus_dir, structured=True)
+        if structured
+        else adapters.parse_corpus(corpus_dir)
+    )
+    _validate_dataset(
+        {
+            "schema_version": dataset.get("schema_version"),
+            "questions": questions,
+        },
+        corpus_texts,
+    )
 
     print(f"[2/4] 入库语料 → {os.environ['CHROMA_PERSIST_DIR']}")
-    ingest_info = adapters.ingest_corpus(corpus_dir)
+    ingest_info = (
+        adapters.ingest_corpus(corpus_dir, structured=True)
+        if structured
+        else adapters.ingest_corpus(corpus_dir)
+    )
     for doc, n in ingest_info["documents"].items():
         print(f"  {doc}: {n} chunks")
     print(f"  共 {ingest_info['total_chunks']} chunks，耗时 {ingest_info['ingest_s']}s")
@@ -296,15 +398,30 @@ def cmd_retrieval_sweep(args):
 
     adapters.assert_isolation()
     corpus_dir = Path(args.corpus)
-    dataset = _load_dataset(Path(args.dataset))
+    dataset_path = Path(args.dataset)
+    structured = _validate_v3_gate(
+        dataset_path,
+        corpus_dir,
+        manifest_path=getattr(args, "manifest", None),
+        allow_draft=getattr(args, "allow_draft_v3", False),
+    )
+    dataset = _load_dataset(dataset_path)
     questions = dataset["questions"]
 
     print(f"[1/3] 校验数据集（{len(questions)} 题）…")
-    corpus_texts = adapters.parse_corpus(corpus_dir)
+    corpus_texts = (
+        adapters.parse_corpus(corpus_dir, structured=True)
+        if structured
+        else adapters.parse_corpus(corpus_dir)
+    )
     _validate_dataset(dataset, corpus_texts)
 
     print(f"[2/3] 入库语料 → {os.environ['CHROMA_PERSIST_DIR']}")
-    ingest_info = adapters.ingest_corpus(corpus_dir)
+    ingest_info = (
+        adapters.ingest_corpus(corpus_dir, structured=True)
+        if structured
+        else adapters.ingest_corpus(corpus_dir)
+    )
     print(
         f"  共 {ingest_info['total_chunks']} chunks，"
         f"耗时 {ingest_info['ingest_s']}s"
@@ -384,15 +501,30 @@ def cmd_hybrid_ablation(args):
 
     adapters.assert_isolation()
     corpus_dir = Path(args.corpus)
-    dataset = _load_dataset(Path(args.dataset))
+    dataset_path = Path(args.dataset)
+    structured = _validate_v3_gate(
+        dataset_path,
+        corpus_dir,
+        manifest_path=getattr(args, "manifest", None),
+        allow_draft=getattr(args, "allow_draft_v3", False),
+    )
+    dataset = _load_dataset(dataset_path)
     questions = dataset["questions"]
 
     print(f"[1/3] 校验数据集（{len(questions)} 题）…")
-    corpus_texts = adapters.parse_corpus(corpus_dir)
+    corpus_texts = (
+        adapters.parse_corpus(corpus_dir, structured=True)
+        if structured
+        else adapters.parse_corpus(corpus_dir)
+    )
     _validate_dataset(dataset, corpus_texts)
 
     print(f"[2/3] 入库语料 → {os.environ['CHROMA_PERSIST_DIR']}")
-    ingest_info = adapters.ingest_corpus(corpus_dir)
+    ingest_info = (
+        adapters.ingest_corpus(corpus_dir, structured=True)
+        if structured
+        else adapters.ingest_corpus(corpus_dir)
+    )
     print(
         f"  共 {ingest_info['total_chunks']} chunks，"
         f"耗时 {ingest_info['ingest_s']}s"
@@ -472,6 +604,15 @@ def main():
     p_run.add_argument("--label", required=True, help="运行标签，如 baseline / p0-1-bge")
     p_run.add_argument("--dataset", default=str(DEFAULT_DATASET))
     p_run.add_argument("--corpus", default=str(LEGACY_CORPUS_DIR))
+    p_run.add_argument(
+        "--manifest",
+        help="Dataset v3 corpus manifest；默认使用数据集同目录的 corpus_v3_manifest.json",
+    )
+    p_run.add_argument(
+        "--allow-draft-v3",
+        action="store_true",
+        help="仅用于 v3 预检；允许 review=draft，结果不得作为正式冻结评测",
+    )
     p_run.add_argument("--limit", type=int, help="只跑前 N 题（冒烟测试）")
     p_run.add_argument("--overwrite", action="store_true", help="覆盖同名 label 的已有报告")
     p_run.add_argument("--embedding-model", help="覆盖 EMBEDDING_MODEL（需模型已在本地缓存）")
@@ -564,6 +705,15 @@ def main():
     )
     p_retrieval.add_argument("--corpus", default=str(LEGACY_CORPUS_DIR))
     p_retrieval.add_argument(
+        "--manifest",
+        help="Dataset v3 corpus manifest；默认使用数据集同目录的 corpus_v3_manifest.json",
+    )
+    p_retrieval.add_argument(
+        "--allow-draft-v3",
+        action="store_true",
+        help="仅用于 v3 预检；允许 review=draft",
+    )
+    p_retrieval.add_argument(
         "--candidate-ks",
         nargs="+",
         type=int,
@@ -596,6 +746,15 @@ def main():
         default=str(DEFAULT_DATASET),
     )
     p_hybrid.add_argument("--corpus", default=str(LEGACY_CORPUS_DIR))
+    p_hybrid.add_argument(
+        "--manifest",
+        help="Dataset v3 corpus manifest；默认使用数据集同目录的 corpus_v3_manifest.json",
+    )
+    p_hybrid.add_argument(
+        "--allow-draft-v3",
+        action="store_true",
+        help="仅用于 v3 预检；允许 review=draft",
+    )
     p_hybrid.add_argument("--overwrite", action="store_true")
     p_hybrid.add_argument("--embedding-model")
     p_hybrid.add_argument("--query-instruction")

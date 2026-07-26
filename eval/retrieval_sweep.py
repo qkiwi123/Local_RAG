@@ -151,7 +151,7 @@ def build_retrieval_sweep(
     config: dict,
     ingest: dict,
     candidates: list[dict],
-    dataset_version: int,
+    dataset_version: int | str,
 ) -> dict:
     return {
         "label": label,

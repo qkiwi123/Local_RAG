@@ -488,6 +488,20 @@ whole-corpus 关键词排查，但仍需在冻结前由真实审核者签核。
   --strict
 ```
 
+未冻结数据只能运行显式预检。v3 评测入口会校验 manifest，展开 17 个 dialogue turn，并让
+它们使用 gold `standalone_question`；这只验证下游检索，不代表追问改写服务已经实现。
+
+```powershell
+$env:HF_HUB_OFFLINE='1'
+$env:TRANSFORMERS_OFFLINE='1'
+.\.venv\Scripts\python.exe -m eval.eval retrieval-sweep `
+  --label v3-structured-preflight `
+  --dataset eval/dataset/questions_v3.json `
+  --corpus eval/corpus `
+  --candidate-ks 15 `
+  --allow-draft-v3
+```
+
 ### 当前做到哪一步
 
 当前开发分支为 `phase1/unified-structure-model`。**五种范围内格式的统一结构解析、结构化 chunk、版本化 SQLite schema、`document_units` 和 Chroma 轻量定位 metadata 已在隔离测试链路贯通；23 份真实语料已全部完成确定性解析，PPTX 组合形状中的原生文字也已纳入。当前生产上传、引用 API 和前端仍使用旧 page-dict / `document_pages` 链路，尚未切换，也未清理现有生产数据。**
@@ -513,6 +527,7 @@ whole-corpus 关键词排查，但仍需在冻结前由真实审核者签核。
 | 生产上传/API/UI 切换与旧数据清理 | 尚未开始；必须在真实格式与预览验收后单独执行 |
 | Dataset v3 prepare | 已把 6 个候选批次合并并追加 5 道域外题；35 道单题、6 组对话（17 轮）、80 条 evidence 均已定位，manifest 已生成 |
 | Dataset v3 语义预审 | 已完成代码辅助的 52 个 answer item 全量检查，修正 3 处语义问题，补齐 48 个原先无法命中标准答案的 keypoint 变体，并为 5 道域外题执行 whole-corpus 关键词排查 |
+| Dataset v3 structured preflight | 已贯通 manifest → 五格式解析 → 2,438 units → 2,584 chunks → 隔离 Chroma → 52 项检索；Hit/Recall 97.67%、MRR 95.35%，1 道可回答题漏检；真实 LLM 尚未授权运行 |
 | Dataset v3 人工审核与冻结 | 审核包已生成，但真实人工签核尚未完成；当前全部 review 保持 `draft`，strict validate 会按设计失败 |
 | 多轮对话 | 尚未开始 |
 

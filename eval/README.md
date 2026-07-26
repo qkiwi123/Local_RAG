@@ -167,6 +167,22 @@ PYTHONIOENCODING=utf-8 ./.venv/Scripts/python.exe -m eval.eval compare \
   --output eval/dataset/questions_v3_review.md
 ```
 
+- v3 的 `run`、`retrieval-sweep` 和 `hybrid-ablation` 会自动启用五格式
+  `structured-v1` 解析、校验 corpus manifest，并把 dialogue turn 展平；下游检索使用 gold
+  `standalone_question`。正式运行要求 strict review 全部通过，未冻结时只能显式传
+  `--allow-draft-v3` 做 preflight：
+
+```powershell
+.\.venv\Scripts\python.exe -m eval.eval retrieval-sweep `
+  --label v3-structured-preflight `
+  --dataset eval/dataset/questions_v3.json `
+  --corpus eval/corpus `
+  --candidate-ks 15 `
+  --allow-draft-v3
+```
+
+  当前预检证据见 `eval/results/v3-structured-preflight/validation.md`。
+
 - 历史 v1 数据集：`eval/dataset/questions.json` 21 题——fact 6、numeric 4、table 2、
   multi_doc 3、procedural 2、unanswerable 4（2 域外 + 2 域内相邻陷阱题 q20/q21）。
 - 默认 legacy regression：`eval/dataset/questions_v2.json` 保留上述 21 题并追加 6 道
