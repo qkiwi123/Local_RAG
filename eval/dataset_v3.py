@@ -6,6 +6,7 @@ import argparse
 import copy
 import hashlib
 import json
+import unicodedata
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Iterable
@@ -219,6 +220,12 @@ def _normalized_text_with_positions(text: str) -> tuple[str, list[int]]:
         characters.append(character)
         positions.append(index)
     return "".join(characters), positions
+
+
+def _metric_norm(text: str) -> str:
+    """与 eval.metrics.norm 保持一致，验证 gold answer 与 keypoint 自洽。"""
+    normalized = unicodedata.normalize("NFKC", text)
+    return "".join(normalized.split()).lower()
 
 
 def _all_occurrences(text: str, needle: str) -> list[int]:
@@ -545,6 +552,20 @@ def validate_dataset(
                 result.errors.append(
                     f"{path}.keypoints[{keypoint_index}]: 必须是非空字符串数组"
                 )
+                continue
+            reference_answer = item.get("reference_answer")
+            if (
+                answerable
+                and isinstance(reference_answer, str)
+                and not any(
+                    _metric_norm(variant) in _metric_norm(reference_answer)
+                    for variant in variants
+                )
+            ):
+                result.errors.append(
+                    f"{path}.keypoints[{keypoint_index}]: "
+                    "没有变体能命中 reference_answer"
+                )
 
         for evidence_index, evidence in enumerate(evidence_values):
             evidence_count += 1
@@ -689,6 +710,197 @@ def validate_dataset(
     return result
 
 
+def _dataset_sha256(dataset: dict[str, Any]) -> str:
+    serialized = json.dumps(
+        dataset,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return hashlib.sha256(serialized).hexdigest()
+
+
+def _review_evidence_markdown(evidence_values: list[dict[str, Any]]) -> list[str]:
+    lines: list[str] = []
+    if not evidence_values:
+        return ["_无 evidence；不可回答题需执行 whole-corpus 核查。_", ""]
+    for index, evidence in enumerate(evidence_values, start=1):
+        locator = evidence.get("locator") or {}
+        lines.extend(
+            [
+                f"#### Evidence {index}",
+                "",
+                f"- 文档：`{evidence.get('document_name', '')}`",
+                (
+                    f"- 定位：`{evidence.get('unit_id', '')}`，"
+                    f"{locator.get('location_label', '')}，"
+                    f"`[{evidence.get('start_char')}:{evidence.get('end_char')})`"
+                ),
+                "",
+                "```text",
+                str(evidence.get("snippet", "")),
+                "```",
+                "",
+            ]
+        )
+    return lines
+
+
+def _review_item_markdown(
+    item: dict[str, Any],
+    *,
+    heading_level: int,
+) -> list[str]:
+    item_id = item.get("id", item.get("turn_id", "unknown"))
+    prefix = "#" * heading_level
+    lines = [
+        f"{prefix} {item_id}",
+        "",
+        f"**问题：** {item.get('question', '')}",
+        "",
+    ]
+    if "turn_id" in item:
+        lines.extend(
+            [
+                f"**独立改写：** {item.get('standalone_question', '')}",
+                "",
+            ]
+        )
+    lines.extend(
+        [
+            f"**可回答：** `{str(item.get('answerable')).lower()}`",
+            "",
+            f"**不可回答类型：** `{item.get('unanswerable_type')}`",
+            "",
+            "**标准答案：**",
+            "",
+            str(item.get("reference_answer", "")),
+            "",
+            "**Keypoints：**",
+            "",
+        ]
+    )
+    for index, variants in enumerate(item.get("keypoints", []), start=1):
+        lines.append(f"{index}. " + " / ".join(f"`{value}`" for value in variants))
+    if not item.get("keypoints"):
+        lines.append("_无 keypoint。_")
+    lines.extend(["", "**Evidence：**", ""])
+    lines.extend(_review_evidence_markdown(item.get("evidence", [])))
+    return lines
+
+
+def _review_checklist(*, has_unanswerable: bool) -> list[str]:
+    lines = [
+        "- [ ] 问题清晰、无歧义，难度和分类合理",
+        "- [ ] 每条 evidence 均直接支持对应答案",
+        "- [ ] 标准答案事实正确且没有超出 evidence",
+        "- [ ] keypoint 分组与允许变体合理",
+    ]
+    if has_unanswerable:
+        lines.append("- [ ] 已检查整个 corpus，确认不可回答类型正确")
+    lines.extend(
+        [
+            "- [ ] split 可接受，未发现同组泄漏",
+            "",
+            "**决定：** `approve / revise / reject`",
+            "",
+            "**Reviewer：**",
+            "",
+            "**备注：**",
+            "",
+        ]
+    )
+    return lines
+
+
+def build_review_packet(dataset: dict[str, Any]) -> str:
+    """导出人工审核包；不写 verified 状态，也不代替人工结论。"""
+    questions = dataset.get("questions", [])
+    dialogues = dataset.get("dialogues", [])
+    turns = [
+        turn
+        for dialogue in dialogues
+        for turn in dialogue.get("turns", [])
+    ]
+    answer_items = [*questions, *turns]
+    split_counts = {
+        split: sum(
+            1
+            for item in [*questions, *dialogues]
+            if item.get("split") == split
+        )
+        for split in SPLITS
+    }
+    unanswerable_type_counts = {
+        value: sum(
+            1
+            for item in answer_items
+            if item.get("unanswerable_type") == value
+        )
+        for value in UNANSWERABLE_TYPES
+    }
+    lines = [
+        "# Dataset v3 人工审核包",
+        "",
+        f"- Dataset：`{dataset.get('dataset_id')}`",
+        f"- Corpus：`{dataset.get('corpus_id')}`",
+        f"- Parser：`{dataset.get('parser_version')}`",
+        f"- Dataset SHA-256：`{_dataset_sha256(dataset)}`",
+        (
+            f"- 规模：{len(questions)} 道单题，{len(dialogues)} 组对话，"
+            f"{len(turns)} 个 dialogue turn"
+        ),
+        (
+            "- Group split："
+            + "，".join(f"{key}={value}" for key, value in split_counts.items())
+        ),
+        (
+            "- 不可回答类型："
+            + "，".join(
+                f"{key}={value}"
+                for key, value in unanswerable_type_counts.items()
+            )
+        ),
+        "",
+        "> 此文件只用于人工逐项核对。勾选、Reviewer 和决定不会自动写回数据集；",
+        "> 未完成真实人工审核前，不得把 review.status 改为 verified。",
+        "",
+        "## 单题",
+        "",
+    ]
+    for question in questions:
+        lines.extend(_review_item_markdown(question, heading_level=3))
+        lines.extend(
+            _review_checklist(has_unanswerable=not question.get("answerable", True))
+        )
+
+    lines.extend(["## 多轮对话", ""])
+    for dialogue in dialogues:
+        lines.extend(
+            [
+                f"### {dialogue.get('dialogue_id')}",
+                "",
+                (
+                    f"- Split：`{dialogue.get('split')}`；"
+                    f"Difficulty：`{dialogue.get('difficulty')}`"
+                ),
+                "",
+            ]
+        )
+        dialogue_turns = dialogue.get("turns", [])
+        for turn in dialogue_turns:
+            lines.extend(_review_item_markdown(turn, heading_level=4))
+        lines.extend(
+            _review_checklist(
+                has_unanswerable=any(
+                    not turn.get("answerable", True)
+                    for turn in dialogue_turns
+                )
+            )
+        )
+    return "\n".join(lines).rstrip() + "\n"
+
+
 def _write_json(path: str | Path, value: Any) -> None:
     output = Path(path)
     output.parent.mkdir(parents=True, exist_ok=True)
@@ -719,11 +931,38 @@ def _build_parser() -> argparse.ArgumentParser:
     validate.add_argument("--manifest", required=True)
     validate.add_argument("--report")
     validate.add_argument("--strict", action="store_true")
+
+    review = subparsers.add_parser("review-export", help="导出人工逐题审核包")
+    review.add_argument("--dataset", required=True)
+    review.add_argument("--output", required=True)
     return parser
 
 
 def main(argv: list[str] | None = None) -> int:
     args = _build_parser().parse_args(argv)
+
+    if args.command == "review-export":
+        dataset_objects = load_json_objects(args.dataset)
+        if len(dataset_objects) != 1:
+            raise DatasetPreparationError(
+                "review-export 要求 Dataset v3 只有一个顶层对象"
+            )
+        output = Path(args.output)
+        output.parent.mkdir(parents=True, exist_ok=True)
+        packet = build_review_packet(dataset_objects[0])
+        output.write_text(packet, encoding="utf-8", newline="\n")
+        print(
+            json.dumps(
+                {
+                    "dataset_sha256": _dataset_sha256(dataset_objects[0]),
+                    "output": str(output),
+                },
+                ensure_ascii=False,
+                indent=2,
+            )
+        )
+        return 0
+
     parsed_documents = parse_corpus(args.corpus)
 
     if args.command == "prepare":

@@ -5,6 +5,7 @@ import pytest
 
 from eval.dataset_v3 import (
     DatasetPreparationError,
+    build_review_packet,
     build_corpus_manifest,
     load_json_objects,
     parse_corpus,
@@ -142,6 +143,55 @@ def test_validate_allows_drafts_non_strict_but_rejects_them_strict(tmp_path):
     assert non_strict.warnings
     assert not strict.ok
     assert any("review.status" in error for error in strict.errors)
+
+
+def test_validate_rejects_keypoint_not_covered_by_reference_answer(tmp_path):
+    corpus = tmp_path / "corpus"
+    corpus.mkdir()
+    (corpus / "facts.txt").write_text("RAG 用于检索。", encoding="utf-8")
+    parsed = parse_corpus(corpus)
+    candidate = _candidate("RAG 用于检索。")
+    candidate["questions"][0]["keypoints"] = [["生成答案"]]
+    dataset, _ = prepare_dataset(
+        [candidate],
+        parsed,
+        dataset_id="dataset-v1",
+        corpus_id="corpus-v1",
+    )
+    manifest = build_corpus_manifest(corpus, parsed, corpus_id="corpus-v1")
+
+    result = validate_dataset(
+        dataset,
+        parsed_documents=parsed,
+        manifest=manifest,
+        current_manifest=manifest,
+        strict=False,
+    )
+
+    assert not result.ok
+    assert any("没有变体能命中 reference_answer" in error for error in result.errors)
+
+
+def test_review_packet_contains_dataset_binding_and_evidence(tmp_path):
+    corpus = tmp_path / "corpus"
+    corpus.mkdir()
+    (corpus / "facts.txt").write_text("RAG 用于检索。", encoding="utf-8")
+    parsed = parse_corpus(corpus)
+    dataset, _ = prepare_dataset(
+        [_candidate("RAG 用于检索。")],
+        parsed,
+        dataset_id="dataset-v1",
+        corpus_id="corpus-v1",
+    )
+
+    packet = build_review_packet(dataset)
+
+    assert "# Dataset v3 人工审核包" in packet
+    assert "Dataset SHA-256" in packet
+    assert "### q1" in packet
+    assert "RAG 用于检索。" in packet
+    assert "- [ ] 每条 evidence 均直接支持对应答案" in packet
+    assert "**决定：** `approve / revise / reject`" in packet
 
 
 def test_manifest_detects_corpus_change(tmp_path):

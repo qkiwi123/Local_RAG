@@ -158,6 +158,15 @@ PYTHONIOENCODING=utf-8 ./.venv/Scripts/python.exe -m eval.eval compare \
 - legacy v2 语料：`eval/corpus_legacy/` 4 篇中文文档（docx×2、pdf、txt），已随 git
   固化，勿随意改动（改动会使历史 run 不可比）。
 - Dataset v3 语料：`eval/corpus/`，由独立 manifest 冻结，不得与 legacy v2 混用。
+- Dataset v3 主文件：`eval/dataset/questions_v3.json`。可用下列命令生成与当前数据集
+  SHA-256 绑定的逐项审核包；审核包不会自动修改 `review`，必须由真实审核者核对后再回写：
+
+```powershell
+.\.venv\Scripts\python.exe -m eval.dataset_v3 review-export `
+  --dataset eval/dataset/questions_v3.json `
+  --output eval/dataset/questions_v3_review.md
+```
+
 - 历史 v1 数据集：`eval/dataset/questions.json` 21 题——fact 6、numeric 4、table 2、
   multi_doc 3、procedural 2、unanswerable 4（2 域外 + 2 域内相邻陷阱题 q20/q21）。
 - 默认 legacy regression：`eval/dataset/questions_v2.json` 保留上述 21 题并追加 6 道

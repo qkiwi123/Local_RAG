@@ -461,15 +461,23 @@ Dataset v3 固定为单一顶层 JSON。模型生成的候选题只提供文档�
 snippet hash 和完整 locator；零命中或多位置命中必须通过显式 evidence override 处理，
 工具不会自动把人工审核状态改为 `verified`。
 
-当前候选集已完成 prepare，但尚未冻结：冻结前仍需人工核对问题、标准答案、证据和全部
-不可回答题的 whole-corpus 检查。数据集覆盖事实题、语义题、跨段落题、表格题、精确术语
-题、多轮追问题和不可回答题。
+当前候选集已完成 prepare 和一次代码辅助的全量语义审计，但尚未冻结：审计修正了两处
+题意/答案表述问题，以及一处因 PPTX 组合形状漏解析而被误判为不可回答的问题；同时增加
+了 keypoint 必须能由标准答案命中的校验，避免 gold answer 在 Strict Accuracy 下自相矛盾。
+冻结前仍需真实人工逐项核对问题、标准答案、证据和全部不可回答题的 whole-corpus 检查。
+当前 47 个 answer item 中有 43 个可回答、4 个 `insufficient_detail`；尚无
+`out_of_scope` 样本，这是冻结前需要由审核者明确接受或补充的覆盖缺口。
 
 ```powershell
 .\.venv\Scripts\python.exe -m eval.dataset_v3 validate `
   --dataset eval/dataset/questions_v3.json `
   --corpus eval/corpus `
   --manifest eval/dataset/corpus_v3_manifest.json
+
+# 导出与当前数据集哈希绑定的逐项人工审核包
+.\.venv\Scripts\python.exe -m eval.dataset_v3 review-export `
+  --dataset eval/dataset/questions_v3.json `
+  --output eval/dataset/questions_v3_review.md
 
 # 只在人工审核字段全部完成后才应通过
 .\.venv\Scripts\python.exe -m eval.dataset_v3 validate `
@@ -502,8 +510,9 @@ snippet hash 和完整 locator；零命中或多位置命中必须通过显式 e
 | DOCX/PPTX ZIP 资源边界 | 已完成 entry 数、单项 XML 和总解压大小校验 |
 | 结构化引用预览服务与安全 renderer | 已完成隔离实现和测试；尚未接入旧 API/UI |
 | 生产上传/API/UI 切换与旧数据清理 | 尚未开始；必须在真实格式与预览验收后单独执行 |
-| Dataset v3 prepare | 已把 6 个候选批次合并为单一 JSON；30 道单题、6 组对话（17 轮）、78 条 evidence 均已定位，manifest 已生成 |
-| Dataset v3 人工审核与冻结 | 尚未完成；当前全部 review 保持 `draft`，strict validate 会按设计失败 |
+| Dataset v3 prepare | 已把 6 个候选批次合并为单一 JSON；30 道单题、6 组对话（17 轮）、80 条 evidence 均已定位，manifest 已生成 |
+| Dataset v3 语义预审 | 已完成代码辅助的 47 个 answer item 全量检查，修正 3 处语义问题，并补齐 48 个原先无法命中标准答案的 keypoint 变体 |
+| Dataset v3 人工审核与冻结 | 审核包已生成，但真实人工签核尚未完成；当前全部 review 保持 `draft`，strict validate 会按设计失败 |
 | 多轮对话 | 尚未开始 |
 
 因此，当前最准确的阶段结论是：
