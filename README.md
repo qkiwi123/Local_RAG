@@ -527,7 +527,7 @@ $env:TRANSFORMERS_OFFLINE='1'
 | 生产上传/API/UI 切换与旧数据清理 | 尚未开始；必须在真实格式与预览验收后单独执行 |
 | Dataset v3 prepare | 已把 6 个候选批次合并并追加 5 道域外题；35 道单题、6 组对话（17 轮）、80 条 evidence 均已定位，manifest 已生成 |
 | Dataset v3 语义预审 | 已完成代码辅助的 52 个 answer item 全量检查，修正 3 处语义问题，补齐 48 个原先无法命中标准答案的 keypoint 变体，并为 5 道域外题执行 whole-corpus 关键词排查 |
-| Dataset v3 structured preflight | 已贯通 manifest → 五格式解析 → 2,438 units → 2,584 chunks → 隔离 Chroma → 52 项检索；Hit/Recall 97.67%、MRR 95.35%，1 道可回答题漏检；真实 LLM 尚未授权运行 |
+| Dataset v3 structured preflight | 已贯通 manifest → 五格式解析 → 2,438 units → 2,584 chunks → 隔离 Chroma → 52 项检索；Hit/Recall 97.67%、MRR 95.35%，1 道可回答题漏检；2 道用户授权的真实 LLM smoke 均通过 |
 | Dataset v3 人工审核与冻结 | 审核包已生成，但真实人工签核尚未完成；当前全部 review 保持 `draft`，strict validate 会按设计失败 |
 | 多轮对话 | 尚未开始 |
 
