@@ -4,9 +4,11 @@ import pytest
 from backend.models.document_structure import SourceLocator
 from backend.services.parsers.assembler import BlockDraft, assemble_unit_from_drafts
 from frontend.citation_view import (
+    PREVIEW_DIALOG_BEHAVIOR_HTML,
     build_highlight_html,
     build_structured_document_preview_html,
     build_structured_preview_html,
+    render_preview_dialog_behavior,
 )
 
 
@@ -201,3 +203,25 @@ class TestBuildStructuredPreviewHtml:
         assert "整份文档的后续内容也必须展示。" in result
         assert "<mark>" in result
         assert result.count("🎯") == 1
+        assert result.count('data-citation-preview-target="true"') == 1
+
+
+def test_preview_dialog_behavior_fixes_close_button_and_scrolls_to_highlight(
+    monkeypatch,
+):
+    rendered = {}
+
+    def fake_html(content, **kwargs):
+        rendered["content"] = content
+        rendered["kwargs"] = kwargs
+
+    monkeypatch.setattr("frontend.citation_view.components.html", fake_html)
+
+    render_preview_dialog_behavior()
+
+    assert rendered["content"] == PREVIEW_DIALOG_BEHAVIOR_HTML
+    assert rendered["kwargs"] == {"height": 0}
+    assert "button[aria-label=\"Close\"]" in PREVIEW_DIALOG_BEHAVIOR_HTML
+    assert "'position', 'fixed'" in PREVIEW_DIALOG_BEHAVIOR_HTML
+    assert '[data-citation-preview-target="true"] mark' in PREVIEW_DIALOG_BEHAVIOR_HTML
+    assert "dialog.scrollTo" in PREVIEW_DIALOG_BEHAVIOR_HTML

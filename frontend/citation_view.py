@@ -10,8 +10,79 @@ import html
 from typing import Any
 
 import streamlit as st
+import streamlit.components.v1 as components
 
 from backend.models.document_structure import LocatedBlock, render_table_text
+
+
+PREVIEW_DIALOG_BEHAVIOR_HTML = """
+<script>
+(() => {
+  const hostWindow = window.parent;
+  const hostDocument = hostWindow.document;
+
+  function configurePreviewDialog() {
+    const dialogs = hostDocument.querySelectorAll('[data-testid="stDialog"]');
+    const dialog = dialogs[dialogs.length - 1];
+    if (!dialog) {
+      return false;
+    }
+
+    const closeButton = dialog.querySelector('button[aria-label="Close"]');
+    const panel = dialog.querySelector('[role="dialog"]');
+    if (closeButton) {
+      const panelRect = panel ? panel.getBoundingClientRect() : null;
+      const right = panelRect
+        ? Math.max(16, hostWindow.innerWidth - panelRect.right + 16)
+        : 16;
+      closeButton.style.setProperty('position', 'fixed', 'important');
+      closeButton.style.setProperty('top', '4rem', 'important');
+      closeButton.style.setProperty('right', `${right}px`, 'important');
+      closeButton.style.setProperty('width', '2.25rem', 'important');
+      closeButton.style.setProperty('height', '2.25rem', 'important');
+      closeButton.style.setProperty('z-index', '1000001', 'important');
+      closeButton.style.setProperty('background', 'rgba(255, 255, 255, 0.96)', 'important');
+      closeButton.style.setProperty('border', '1px solid rgba(49, 51, 63, 0.22)', 'important');
+      closeButton.style.setProperty('box-shadow', '0 2px 8px rgba(0, 0, 0, 0.16)', 'important');
+      closeButton.title = '关闭预览';
+    }
+
+    const target = dialog.querySelector(
+      '[data-citation-preview-target="true"] mark'
+    );
+    if (!target) {
+      return false;
+    }
+
+    const dialogRect = dialog.getBoundingClientRect();
+    const targetRect = target.getBoundingClientRect();
+    const centeredTop = (
+      dialog.scrollTop
+      + targetRect.top
+      - dialogRect.top
+      - (dialog.clientHeight / 2)
+      + (targetRect.height / 2)
+    );
+    dialog.scrollTo({top: Math.max(0, centeredTop), behavior: 'auto'});
+    return true;
+  }
+
+  let attempts = 0;
+  const timer = hostWindow.setInterval(() => {
+    attempts += 1;
+    if (configurePreviewDialog() || attempts >= 20) {
+      hostWindow.clearInterval(timer);
+    }
+  }, 50);
+})();
+</script>
+"""
+
+
+def render_preview_dialog_behavior() -> None:
+    """固定关闭按钮，并在弹窗首次渲染时将引用高亮滚动到视口中央。"""
+    components.html(PREVIEW_DIALOG_BEHAVIOR_HTML, height=0)
+
 
 def build_highlight_html(text: str, start: int, end: int) -> str:
     """将 text 中 [start, end) 区间用 <mark> 包裹，其余全部 HTML 转义。"""
@@ -188,8 +259,11 @@ def build_structured_document_preview_html(
             highlight_end if is_target else None,
         )
         css_class = " preview-target" if is_target else ""
+        target_attribute = (
+            ' data-citation-preview-target="true"' if is_target else ""
+        )
         output.append(
-            f'<section class="preview-unit{css_class}">'
+            f'<section class="preview-unit{css_class}"{target_attribute}>'
             f"<h3>{marker}{label}</h3>{body}</section>"
         )
     if not target_found:
@@ -288,5 +362,6 @@ def _show_preview_dialog(
         )
         st.markdown("**📄 完整文档（🎯 所在位置的引用内容已高亮）**")
         st.markdown(highlighted_html, unsafe_allow_html=True)
+        render_preview_dialog_behavior()
     except ValueError as err:
         st.error(f"高亮渲染失败: {err}")
