@@ -105,14 +105,20 @@ def _table_html(
 def build_structured_preview_html(
     canonical_text: str,
     blocks: list[dict[str, Any]] | list[LocatedBlock],
-    highlight_start: int,
-    highlight_end: int,
+    highlight_start: int | None,
+    highlight_end: int | None,
 ) -> str:
     """按 block 类型安全渲染 structured-v1 来源并精确标记相交字符。"""
-    if highlight_start < 0 or highlight_end <= highlight_start:
-        raise ValueError("高亮范围非法")
-    if highlight_end > len(canonical_text):
-        raise ValueError("高亮范围超出 canonical_text")
+    if (highlight_start is None) != (highlight_end is None):
+        raise ValueError("高亮起止必须同时提供或同时省略")
+    if highlight_start is None:
+        render_start, render_end = -1, -1
+    else:
+        if highlight_start < 0 or highlight_end <= highlight_start:
+            raise ValueError("高亮范围非法")
+        if highlight_end > len(canonical_text):
+            raise ValueError("高亮范围超出 canonical_text")
+        render_start, render_end = highlight_start, highlight_end
 
     validated = [
         block if isinstance(block, LocatedBlock)
@@ -129,13 +135,13 @@ def build_structured_preview_html(
     output: list[str] = []
     for block in validated:
         if block.block_type == "table":
-            output.append(_table_html(block, highlight_start, highlight_end))
+            output.append(_table_html(block, render_start, render_end))
             continue
         content = _escaped_with_highlight(
             block.text,
             block.start_char,
-            highlight_start,
-            highlight_end,
+            render_start,
+            render_end,
         )
         if block.block_type == "heading":
             level = block.heading_level or 1
@@ -154,6 +160,40 @@ def build_structured_preview_html(
             )
         else:
             raise ValueError(f"不支持的 block type: {block.block_type}")
+    return "".join(output)
+
+
+def build_structured_document_preview_html(
+    units: list[dict[str, Any]],
+    target_unit_id: str,
+    highlight_start: int,
+    highlight_end: int,
+) -> str:
+    """按原始 unit 顺序渲染整份文档，并只高亮目标 unit。"""
+    if not units:
+        raise ValueError("整文档预览 units 不能为空")
+    output: list[str] = []
+    target_found = False
+    for unit in units:
+        unit_id = unit.get("unit_id")
+        location = unit.get("location") or {}
+        is_target = unit_id == target_unit_id
+        target_found = target_found or is_target
+        label = html.escape(location.get("location_label") or "位置未知")
+        marker = "🎯 " if is_target else ""
+        body = build_structured_preview_html(
+            unit.get("canonical_text", ""),
+            unit.get("blocks", []),
+            highlight_start if is_target else None,
+            highlight_end if is_target else None,
+        )
+        css_class = " preview-target" if is_target else ""
+        output.append(
+            f'<section class="preview-unit{css_class}">'
+            f"<h3>{marker}{label}</h3>{body}</section>"
+        )
+    if not target_found:
+        raise ValueError("target_unit_id 不在整文档 units 中")
     return "".join(output)
 
 
@@ -240,18 +280,13 @@ def _show_preview_dialog(
     )
 
     try:
-        highlighted_html = build_structured_preview_html(
-            preview.get("canonical_text", ""),
-            preview.get("blocks", []),
+        highlighted_html = build_structured_document_preview_html(
+            preview.get("units", []),
+            preview.get("target_unit_id", ""),
             preview.get("highlight_start", 0),
             preview.get("highlight_end", 0),
         )
-        st.markdown("**📄 完整结构化来源（被引用部分已高亮）**")
+        st.markdown("**📄 完整文档（🎯 所在位置的引用内容已高亮）**")
         st.markdown(highlighted_html, unsafe_allow_html=True)
     except ValueError as err:
         st.error(f"高亮渲染失败: {err}")
-
-    chunk_content = preview.get("chunk_content", "")
-    if chunk_content:
-        with st.expander("📋 完整 Chunk 原文", expanded=False):
-            st.code(chunk_content, language=None)

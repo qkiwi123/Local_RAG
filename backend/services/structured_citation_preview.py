@@ -9,7 +9,7 @@ from backend.config import settings
 from backend.models.schemas import StructuredCitationPreview
 from backend.services.document_store import get_document
 from backend.services.parsers.constants import PARSER_VERSION
-from backend.services.unit_store import get_document_unit
+from backend.services.unit_store import get_document_unit, list_document_units
 from backend.services.vector_store import get_chunk_by_id
 
 
@@ -83,6 +83,18 @@ def build_structured_citation_preview(
     )
     if unit is None:
         raise CitationPreviewNotFoundError(f"来源 unit 不存在: {unit_id}")
+    document_units = list_document_units(
+        document_id,
+        PARSER_VERSION,
+        db_path=effective_db_path,
+    )
+    if not document_units:
+        raise CitationPreviewNotFoundError(f"文档没有来源 units: {document_id}")
+    document_chars = sum(len(item.canonical_text) for item in document_units)
+    if document_chars > settings.CITATION_PREVIEW_MAX_DOCUMENT_CHARS:
+        raise CitationPreviewValidationError(
+            f"整文档文本过大 ({document_chars} chars)"
+        )
 
     expected_locator_metadata = {
         "unit_index": unit.locator.unit_index,
@@ -126,9 +138,16 @@ def build_structured_citation_preview(
         document_name=document["original_name"],
         parser_version=PARSER_VERSION,
         location=unit.locator,
-        canonical_text=unit.canonical_text,
-        blocks=unit.blocks,
+        target_unit_id=unit.unit_id,
+        units=[
+            {
+                "unit_id": item.unit_id,
+                "location": item.locator,
+                "canonical_text": item.canonical_text,
+                "blocks": item.blocks,
+            }
+            for item in document_units
+        ],
         highlight_start=start_char,
         highlight_end=end_char,
-        chunk_content=chunk_content,
     )

@@ -484,10 +484,14 @@ class TestStructuredCitationPreviewAPI:
         payload = response.json()
         assert payload["parser_version"] == "structured-v1"
         assert payload["location"]["kind"] == "section"
-        assert payload["canonical_text"]
-        assert payload["blocks"]
+        assert payload["target_unit_id"]
+        assert payload["units"]
+        assert payload["units"][0]["canonical_text"]
+        assert payload["units"][0]["blocks"]
         assert "parsed_page_text" not in payload
         assert "page_number" not in payload
+        assert "chunk_content" not in payload
+        assert "canonical_text" not in payload
 
 
 class TestUploadStructuredUnits:

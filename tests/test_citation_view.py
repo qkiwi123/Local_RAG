@@ -3,7 +3,11 @@
 import pytest
 from backend.models.document_structure import SourceLocator
 from backend.services.parsers.assembler import BlockDraft, assemble_unit_from_drafts
-from frontend.citation_view import build_highlight_html, build_structured_preview_html
+from frontend.citation_view import (
+    build_highlight_html,
+    build_structured_document_preview_html,
+    build_structured_preview_html,
+)
 
 
 class TestBuildHighlightHtml:
@@ -137,3 +141,63 @@ class TestBuildStructuredPreviewHtml:
                 0,
                 1,
             )
+
+    def test_can_render_non_target_unit_without_highlight(self):
+        unit = self._unit()
+
+        result = build_structured_preview_html(
+            unit.canonical_text,
+            unit.blocks,
+            None,
+            None,
+        )
+
+        assert "<mark>" not in result
+        assert "<h1>&lt;部署&gt;</h1>" in result
+
+    def test_document_preview_keeps_all_units_and_highlights_only_target(self):
+        first = self._unit()
+        second = assemble_unit_from_drafts(
+            document_id="doc-1",
+            document_name="guide.md",
+            locator=SourceLocator(
+                kind="section",
+                unit_index=1,
+                location_label="章节：验收",
+                heading_path=["验收"],
+            ),
+            drafts=[
+                BlockDraft(
+                    block_type="paragraph",
+                    text="整份文档的后续内容也必须展示。",
+                ),
+            ],
+        )
+        start = first.canonical_text.index("安装依赖")
+        units = [
+            {
+                "unit_id": first.unit_id,
+                "location": first.locator.model_dump(),
+                "canonical_text": first.canonical_text,
+                "blocks": [block.model_dump() for block in first.blocks],
+            },
+            {
+                "unit_id": second.unit_id,
+                "location": second.locator.model_dump(),
+                "canonical_text": second.canonical_text,
+                "blocks": [block.model_dump() for block in second.blocks],
+            },
+        ]
+
+        result = build_structured_document_preview_html(
+            units,
+            first.unit_id,
+            start,
+            start + len("安装依赖"),
+        )
+
+        assert "章节：部署" in result
+        assert "章节：验收" in result
+        assert "整份文档的后续内容也必须展示。" in result
+        assert "<mark>" in result
+        assert result.count("🎯") == 1

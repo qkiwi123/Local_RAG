@@ -523,7 +523,7 @@ $env:TRANSFORMERS_OFFLINE='1'
 | Markdown Adapter | 已完成 fixture 与 3 份真实 Markdown 验收 |
 | PPTX Adapter | 已完成标题、文本框、嵌套组合形状、列表、表格和无文本 warning 测试，并通过 17 份真实 PPTX 验收 |
 | DOCX/PPTX ZIP 资源边界 | 已完成 entry 数、单项 XML 和总解压大小校验 |
-| 结构化引用预览服务与安全 renderer | 已接入生产 API/UI；只读取 `document_units`，不回退 `document_pages` |
+| 结构化引用预览服务与安全 renderer | 已接入生产 API/UI；点击后按 unit 原序展示整份文档，仅高亮引用区间，不回退 `document_pages`，不重复展示 Chunk 原文 |
 | 生产上传/API/UI 切换与旧数据清理 | 已完成；API/SQLite/uploads/Chroma 文档数均为 23，结构化检索、引用和预览冒烟通过 |
 | Dataset v3 prepare | 已把 6 个候选批次合并并追加 5 道域外题；35 道单题、6 组对话（17 轮）、80 条 evidence 均已定位，manifest 已生成 |
 | Dataset v3 语义预审 | 已完成代码辅助的 52 个 answer item 全量检查，修正 3 处语义问题，补齐 48 个原先无法命中标准答案的 keypoint 变体，并为 5 道域外题执行 whole-corpus 关键词排查 |

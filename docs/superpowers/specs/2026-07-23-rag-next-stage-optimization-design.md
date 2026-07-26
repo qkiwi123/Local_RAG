@@ -387,6 +387,7 @@ document_units(document_id, parser_version, unit_id)
   "document_id": "doc-id",
   "chunk_id": "chunk-id",
   "parser_version": "structured-v1",
+  "target_unit_id": "unit-id",
   "location": {
     "kind": "slide",
     "unit_index": 8,
@@ -394,25 +395,27 @@ document_units(document_id, parser_version, unit_id)
     "slide_number": 8,
     "heading_path": ["RAG 评测"]
   },
-  "canonical_text": "规范文本",
-  "blocks": [
+  "units": [
     {
-      "block_id": "doc-id_u8_b0",
-      "block_type": "heading",
-      "text": "RAG 评测",
-      "start_char": 0,
-      "end_char": 6,
-      "heading_level": 1
+      "unit_id": "unit-id",
+      "location": {
+        "kind": "slide",
+        "unit_index": 8,
+        "location_label": "第 8 张幻灯片",
+        "slide_number": 8
+      },
+      "canonical_text": "规范文本",
+      "blocks": []
     }
   ],
   "highlight_start": 10,
-  "highlight_end": 80,
-  "chunk_content": "被引用 chunk"
+  "highlight_end": 80
 }
 ```
 
-预览响应只返回 `canonical_text` 和结构化 `blocks`，不保留旧 `parsed_page_text` 回退。
-`page_number` 仅在 locator 对应页或逻辑页时出现。
+预览响应按原始顺序返回整份文档的 `units`，每个 unit 包含 `canonical_text` 和结构化
+`blocks`；高亮 offset 只作用于 `target_unit_id`。不保留旧 `parsed_page_text` 回退，也不再
+重复返回或展示 `chunk_content`。`page_number` 仅在 locator 对应页或逻辑页时出现。
 
 服务端继续执行强一致性校验：
 
@@ -425,14 +428,14 @@ document_units(document_id, parser_version, unit_id)
 
 ### 8.2 前端
 
-预览对话框按 block 类型安全渲染：
+预览对话框按 unit 原始顺序展示整份文档，并按 block 类型安全渲染：
 
 - heading：按 1–6 级显示；
 - paragraph/quote：保持段落和换行；
 - list item：按层级缩进；
 - table：使用二维 cells 渲染表格；
 - code：使用代码块；
-- 引用范围与 block 相交时只高亮交集。
+- 只有目标 unit 中与引用范围相交的 block 高亮交集，其余内容完整展示但不高亮。
 
 所有文档文字必须先 HTML 转义。不得直接把 `structure_json`、Markdown 或原文作为
 `unsafe_allow_html=True` 内容。表格单元格同样按普通文本处理。

@@ -44,10 +44,27 @@ def _prepared_preview(temp_dir):
         ],
     )
     chunk = chunk_units([unit], chunk_size=500, overlap=0)[0]
+    second_unit = assemble_unit_from_drafts(
+        document_id="doc-1",
+        document_name="课件.pptx",
+        locator=SourceLocator(
+            kind="slide",
+            unit_index=3,
+            location_label="第 4 张幻灯片",
+            slide_number=4,
+            heading_path=["结论"],
+        ),
+        drafts=[
+            BlockDraft(
+                block_type="paragraph",
+                text="这是未被引用但仍应出现在整文档预览中的内容。",
+            ),
+        ],
+    )
     replace_document_units(
         "doc-1",
         PARSER_VERSION,
-        [unit],
+        [unit, second_unit],
         db_path=db_path,
     )
     mark_ready("doc-1", 1, db_path)
@@ -80,11 +97,14 @@ def test_structured_preview_returns_location_blocks_and_exact_slice(temp_dir):
 
     assert preview.location.kind == "slide"
     assert preview.location.slide_number == 3
-    assert preview.canonical_text == unit.canonical_text
-    assert preview.blocks == unit.blocks
-    assert preview.canonical_text[
+    assert preview.target_unit_id == unit.unit_id
+    assert len(preview.units) == 2
+    assert preview.units[0].canonical_text == unit.canonical_text
+    assert preview.units[1].location.slide_number == 4
+    assert preview.units[0].canonical_text[
         preview.highlight_start:preview.highlight_end
-    ] == preview.chunk_content
+    ] == chunk.content
+    assert not hasattr(preview, "chunk_content")
 
 
 def test_structured_preview_rejects_locator_or_content_mismatch(temp_dir):

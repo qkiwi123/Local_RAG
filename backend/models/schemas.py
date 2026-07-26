@@ -124,33 +124,54 @@ class CitationPreview(BaseModel):
         return self
 
 
+class StructuredPreviewUnit(BaseModel):
+    unit_id: str
+    location: SourceLocator
+    canonical_text: str
+    blocks: list[LocatedBlock]
+
+    @model_validator(mode="after")
+    def validate_unit(self):
+        expected_text = "\n\n".join(block.text for block in self.blocks)
+        if expected_text != self.canonical_text:
+            raise ValueError("blocks 与 canonical_text 不一致")
+        return self
+
+
 class StructuredCitationPreview(BaseModel):
-    """structured-v1 来源预览，不包含旧 parsed_page_text 回退。"""
+    """structured-v1 整文档预览，不包含旧 parsed_page_text 或重复 chunk。"""
     document_id: str
     chunk_id: str
     document_name: str
     parser_version: str
     location: SourceLocator
-    canonical_text: str
-    blocks: list[LocatedBlock]
+    target_unit_id: str
+    units: list[StructuredPreviewUnit]
     highlight_start: int = Field(..., ge=0)
     highlight_end: int = Field(..., ge=0)
-    chunk_content: str
 
     @model_validator(mode="after")
     def validate_preview(self):
+        if not self.units:
+            raise ValueError("预览必须包含至少一个 unit")
+        unit_ids = [unit.unit_id for unit in self.units]
+        if len(unit_ids) != len(set(unit_ids)):
+            raise ValueError("预览 unit_id 不能重复")
+        target = next(
+            (
+                unit for unit in self.units
+                if unit.unit_id == self.target_unit_id
+            ),
+            None,
+        )
+        if target is None:
+            raise ValueError("target_unit_id 不在预览 units 中")
+        if target.location != self.location:
+            raise ValueError("目标 location 与 target unit 不一致")
         if self.highlight_end <= self.highlight_start:
             raise ValueError("highlight_end 必须大于 highlight_start")
-        if self.highlight_end > len(self.canonical_text):
+        if self.highlight_end > len(target.canonical_text):
             raise ValueError("highlight offset 超出 canonical_text")
-        if (
-            self.canonical_text[self.highlight_start:self.highlight_end]
-            != self.chunk_content
-        ):
-            raise ValueError("chunk_content 与 canonical_text 切片不一致")
-        expected_text = "\n\n".join(block.text for block in self.blocks)
-        if expected_text != self.canonical_text:
-            raise ValueError("blocks 与 canonical_text 不一致")
         return self
 
 

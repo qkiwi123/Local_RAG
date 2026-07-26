@@ -79,6 +79,9 @@ class Settings:
     CITATION_PREVIEW_MAX_PAGE_CHARS: int = int(
         os.getenv("CITATION_PREVIEW_MAX_PAGE_CHARS", "200000")
     )
+    CITATION_PREVIEW_MAX_DOCUMENT_CHARS: int = int(
+        os.getenv("CITATION_PREVIEW_MAX_DOCUMENT_CHARS", "500000")
+    )
 
     # ─── 持久化对话 ──────────────────────────────────
     CONVERSATION_HISTORY_MESSAGES: int = int(
