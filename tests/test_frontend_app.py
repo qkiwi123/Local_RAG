@@ -311,3 +311,43 @@ def test_trace_panel_is_present_and_collapsed_after_chat(monkeypatch):
         "最终上下文",
     ]
     assert app.session_state.messages[-1]["trace"] == TRACE_PAYLOAD
+
+
+def test_first_question_automatically_creates_conversation(monkeypatch):
+    monkeypatch.setattr(FakeBackendClient, "conversations", [])
+    monkeypatch.setattr(FakeBackendClient, "conversation_messages", [])
+    monkeypatch.setattr(
+        FakeBackendClient,
+        "documents",
+        [
+            {
+                "document_id": "doc-1",
+                "original_name": "doc.txt",
+                "status": "ready",
+                "chunk_count": 1,
+            }
+        ],
+    )
+    monkeypatch.setattr(
+        FakeBackendClient,
+        "chat_payload",
+        {"answer": "自动创建后的回答", "citations": [], "trace": None},
+    )
+    monkeypatch.setattr(httpx, "Client", FakeBackendClient)
+
+    app = AppTest.from_file("frontend/app.py", default_timeout=10)
+    app.run()
+
+    assert not app.chat_input[0].disabled
+    assert app.session_state.current_conversation_id is None
+
+    app.chat_input[0].set_value("首次直接提问")
+    app.run()
+
+    assert not app.exception
+    assert app.session_state.current_conversation_id == "conversation-new"
+    assert [message["content"] for message in app.session_state.messages] == [
+        "首次直接提问",
+        "自动创建后的回答",
+    ]
+    assert FakeBackendClient.conversations[0]["conversation_id"] == "conversation-new"

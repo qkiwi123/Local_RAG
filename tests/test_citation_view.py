@@ -223,5 +223,7 @@ def test_preview_dialog_behavior_fixes_close_button_and_scrolls_to_highlight(
     assert rendered["kwargs"] == {"height": 0}
     assert "button[aria-label=\"Close\"]" in PREVIEW_DIALOG_BEHAVIOR_HTML
     assert "'position', 'fixed'" in PREVIEW_DIALOG_BEHAVIOR_HTML
+    assert "getComputedStyle(surface)" in PREVIEW_DIALOG_BEHAVIOR_HTML
+    assert "rgba(255, 255, 255" not in PREVIEW_DIALOG_BEHAVIOR_HTML
     assert '[data-citation-preview-target="true"] mark' in PREVIEW_DIALOG_BEHAVIOR_HTML
     assert "dialog.scrollTo" in PREVIEW_DIALOG_BEHAVIOR_HTML

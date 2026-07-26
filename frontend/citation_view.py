@@ -32,18 +32,33 @@ PREVIEW_DIALOG_BEHAVIOR_HTML = """
     const panel = dialog.querySelector('[role="dialog"]');
     if (closeButton) {
       const panelRect = panel ? panel.getBoundingClientRect() : null;
+      const surface = panel?.parentElement || panel;
+      const surfaceStyle = surface
+        ? hostWindow.getComputedStyle(surface)
+        : null;
       const right = panelRect
         ? Math.max(16, hostWindow.innerWidth - panelRect.right + 16)
         : 16;
+      const backgroundColor = surfaceStyle?.backgroundColor || 'Canvas';
+      const textColor = surfaceStyle?.color || 'CanvasText';
       closeButton.style.setProperty('position', 'fixed', 'important');
       closeButton.style.setProperty('top', '4rem', 'important');
       closeButton.style.setProperty('right', `${right}px`, 'important');
       closeButton.style.setProperty('width', '2.25rem', 'important');
       closeButton.style.setProperty('height', '2.25rem', 'important');
       closeButton.style.setProperty('z-index', '1000001', 'important');
-      closeButton.style.setProperty('background', 'rgba(255, 255, 255, 0.96)', 'important');
-      closeButton.style.setProperty('border', '1px solid rgba(49, 51, 63, 0.22)', 'important');
-      closeButton.style.setProperty('box-shadow', '0 2px 8px rgba(0, 0, 0, 0.16)', 'important');
+      closeButton.style.setProperty('background', backgroundColor, 'important');
+      closeButton.style.setProperty('color', textColor, 'important');
+      closeButton.style.setProperty(
+        'border',
+        '1px solid color-mix(in srgb, currentColor 24%, transparent)',
+        'important'
+      );
+      closeButton.style.setProperty(
+        'box-shadow',
+        '0 2px 8px rgba(0, 0, 0, 0.24)',
+        'important'
+      );
       closeButton.title = '关闭预览';
     }
 

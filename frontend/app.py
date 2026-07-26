@@ -455,13 +455,11 @@ with st.sidebar:
 # ─── 主区域：对话界面 ────────────────────────────────
 st.title("💬 知识库问答")
 
-if not st.session_state.current_conversation_id:
-    st.info("请在左侧新建或选择一个对话。")
-elif not st.session_state.messages:
+if not st.session_state.messages:
     st.info(
         "👋 欢迎使用企业知识库问答系统！\n\n"
         "1. 先在左侧上传文档（支持 PDF / Word / TXT / Markdown / PPTX，可多选）\n"
-        "2. 然后在下方输入问题，系统将从文档中检索并回答\n\n"
+        "2. 然后直接在下方输入问题，系统会自动创建对话记录并从文档中检索回答\n\n"
         "⚠️ 请确认服务已启动（`.\\scripts\\start.ps1`）"
     )
 
@@ -501,10 +499,16 @@ for message_index, msg in enumerate(st.session_state.messages):
 # 输入框
 if question := st.chat_input(
     "请输入您的问题...",
-    disabled=not st.session_state.current_conversation_id,
 ):
     if not st.session_state.documents:
         st.warning("⚠️ 请先在左侧上传至少一份文档")
+        st.stop()
+
+    if (
+        not st.session_state.current_conversation_id
+        and not create_new_conversation()
+    ):
+        st.error("无法自动创建对话，请确认后端可用后重试")
         st.stop()
 
     with st.chat_message("user"):
