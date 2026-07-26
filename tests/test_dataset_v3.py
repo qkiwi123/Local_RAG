@@ -172,6 +172,45 @@ def test_validate_rejects_keypoint_not_covered_by_reference_answer(tmp_path):
     assert any("没有变体能命中 reference_answer" in error for error in result.errors)
 
 
+def test_validate_reports_unanswerable_type_distribution(tmp_path):
+    corpus = tmp_path / "corpus"
+    corpus.mkdir()
+    (corpus / "facts.txt").write_text("RAG 用于检索。", encoding="utf-8")
+    parsed = parse_corpus(corpus)
+    candidate = _candidate("RAG 用于检索。")
+    question = candidate["questions"][0]
+    question.update(
+        {
+            "answerable": False,
+            "unanswerable_type": "out_of_scope",
+            "evidence": [],
+            "keypoints": [],
+            "reference_answer": "根据给定语料无法回答该问题。",
+        }
+    )
+    dataset, _ = prepare_dataset(
+        [candidate],
+        parsed,
+        dataset_id="dataset-v1",
+        corpus_id="corpus-v1",
+    )
+    manifest = build_corpus_manifest(corpus, parsed, corpus_id="corpus-v1")
+
+    result = validate_dataset(
+        dataset,
+        parsed_documents=parsed,
+        manifest=manifest,
+        current_manifest=manifest,
+        strict=False,
+    )
+
+    assert result.ok
+    assert result.stats["unanswerable_type_counts"] == {
+        "out_of_scope": 1,
+        "insufficient_detail": 0,
+    }
+
+
 def test_review_packet_contains_dataset_binding_and_evidence(tmp_path):
     corpus = tmp_path / "corpus"
     corpus.mkdir()

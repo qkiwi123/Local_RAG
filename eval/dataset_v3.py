@@ -478,6 +478,9 @@ def validate_dataset(
     evidence_count = 0
     answerable_count = 0
     unanswerable_count = 0
+    unanswerable_type_counts = {
+        value: 0 for value in UNANSWERABLE_TYPES
+    }
     split_counts = {split: 0 for split in SPLITS}
 
     def validate_answer_item(item: Any, path: str) -> bool:
@@ -540,8 +543,11 @@ def validate_dataset(
             unanswerable_count += 1
             if evidence_values:
                 result.errors.append(f"{path}: 不可回答题 evidence 必须为空")
-            if item.get("unanswerable_type") not in UNANSWERABLE_TYPES:
+            unanswerable_type = item.get("unanswerable_type")
+            if unanswerable_type not in UNANSWERABLE_TYPES:
                 result.errors.append(f"{path}: unanswerable_type 非法")
+            else:
+                unanswerable_type_counts[unanswerable_type] += 1
 
         for keypoint_index, variants in enumerate(keypoints):
             if (
@@ -703,6 +709,7 @@ def validate_dataset(
         ),
         "answerable_items": answerable_count,
         "unanswerable_items": unanswerable_count,
+        "unanswerable_type_counts": unanswerable_type_counts,
         "evidence": evidence_count,
         "group_split_counts": split_counts,
         "parsed_corpus_sha256": current_manifest.get("parsed_corpus_sha256"),
