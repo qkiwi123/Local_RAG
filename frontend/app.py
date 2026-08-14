@@ -74,6 +74,9 @@ if "_pending_upload_tags" not in st.session_state:
 if "_edit_tags_for" not in st.session_state:
     # 正在编辑标签的文档（document_id 或展示名）；None 表示未展开编辑区。
     st.session_state["_edit_tags_for"] = None
+if "_confirm_delete_tag" not in st.session_state:
+    # 待确认删除的标签路径；None 表示未进入删除确认。
+    st.session_state["_confirm_delete_tag"] = None
 if "_uploader_generation" not in st.session_state:
     # file_uploader 没有 clear API；轮换 key 可在全部暂存文件处理完后重建为空控件。
     st.session_state["_uploader_generation"] = 0
@@ -291,6 +294,46 @@ def create_tag_and_select(raw_path: str) -> None:
         st.error("新建标签异常: " + str(error))
 
 
+def rename_tag_path(old_path: str, new_path: str) -> None:
+    """重命名标签及其整个子树；文档关联由后端随前缀一并更新。"""
+    cleaned = (new_path or "").strip()
+    if not cleaned:
+        st.warning("请输入重命名后的新路径")
+        return
+    try:
+        with httpx.Client(trust_env=False, timeout=10) as client:
+            resp = client.patch(
+                f"{BACKEND_URL}/api/tags/{quote(old_path, safe='')}",
+                json={"new_path": cleaned},
+            )
+        if resp.status_code == 200:
+            refresh_tag_tree()
+            st.toast(f"标签已重命名为「{cleaned}」", icon="🏷")
+            st.rerun()
+        else:
+            st.error("重命名失败: " + response_error_detail(resp))
+    except Exception as error:
+        st.error("重命名异常: " + str(error))
+
+
+def delete_tag_path(tag_path: str) -> None:
+    """删除标签及其整个子树；文档本身保留，仅解除关联。"""
+    try:
+        with httpx.Client(trust_env=False, timeout=10) as client:
+            resp = client.delete(
+                f"{BACKEND_URL}/api/tags/{quote(tag_path, safe='')}"
+            )
+        if resp.status_code == 200:
+            st.session_state["_confirm_delete_tag"] = None
+            refresh_tag_tree()
+            st.toast(f"标签「{tag_path}」已删除", icon="🗑️")
+            st.rerun()
+        else:
+            st.error("删除失败: " + response_error_detail(resp))
+    except Exception as error:
+        st.error("删除异常: " + str(error))
+
+
 def process_staged_uploads() -> None:
     """把暂存区文件逐个提交（带当前标签选择）；成功移除，失败保留可重试。"""
     staged = st.session_state["_staged_files"]
@@ -438,16 +481,50 @@ with st.sidebar:
 
     st.divider()
 
-    # ── 标签管理（独立新建空标签） ──
+    # ── 标签管理（独立新建空标签 + 重命名/删除） ──
     st.header("🏷 标签管理")
-    with st.expander("新建与查看标签", expanded=False):
+    with st.expander("标签管理（新建、重命名、删除）", expanded=False):
         st.text_input(
             "新标签路径（如：课程课件/数据结构）",
             key="tag_mgmt_new_input",
         )
         if st.button("➕ 新建标签", key="tag_mgmt_create"):
             create_tag_and_select(st.session_state["tag_mgmt_new_input"])
+
         if st.session_state.tag_tree:
+            tag_paths = sorted(
+                tag["tag_path"] for tag in st.session_state.tag_tree
+            )
+            st.selectbox("选择标签", options=tag_paths, key="tag_mgmt_selected")
+            st.text_input(
+                "重命名为（新路径，可含子级）",
+                key="tag_mgmt_rename_input",
+            )
+            rename_col, delete_col = st.columns(2)
+            if rename_col.button("✏️ 重命名", key="tag_mgmt_rename"):
+                rename_tag_path(
+                    st.session_state["tag_mgmt_selected"],
+                    st.session_state["tag_mgmt_rename_input"],
+                )
+            if delete_col.button("🗑️ 删除", key="tag_mgmt_delete"):
+                st.session_state["_confirm_delete_tag"] = (
+                    st.session_state["tag_mgmt_selected"]
+                )
+
+            confirm_tag = st.session_state["_confirm_delete_tag"]
+            if confirm_tag:
+                st.warning(
+                    f"删除「{confirm_tag}」及其全部子标签？"
+                    "文档本身会保留，仅解除关联。"
+                )
+                yes_col, no_col = st.columns(2)
+                if yes_col.button("确定删除", key="tag_mgmt_delete_confirm"):
+                    delete_tag_path(confirm_tag)
+                if no_col.button("取消", key="tag_mgmt_delete_cancel"):
+                    st.session_state["_confirm_delete_tag"] = None
+                    st.rerun()
+
+            st.divider()
             for tag in sorted(
                 st.session_state.tag_tree, key=lambda item: item["tag_path"]
             ):

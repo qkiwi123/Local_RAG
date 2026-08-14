@@ -2,6 +2,7 @@
 
 import httpx
 from streamlit.testing.v1 import AppTest
+from urllib.parse import unquote
 
 from frontend.trace_view import (
     candidate_rows,
@@ -110,6 +111,8 @@ class FakeBackendClient:
     documents = []
     tags = []
     put_calls = []
+    patch_calls = []
+    delete_calls = []
     chat_payload = {"answer": "", "citations": [], "trace": None}
     conversations = [
         {
@@ -240,6 +243,32 @@ class FakeBackendClient:
             {"status": "success", "document_id": document_id, "tags": json["tags"]}
         )
 
+    def patch(self, url, json=None):
+        self._assert_absolute(url)
+        self.patch_calls.append((url, json))
+        old_path = unquote(url.rstrip("/").split("/")[-1])
+        new_path = json["new_path"]
+        renamed = []
+        for item in self.tags:
+            path = item["tag_path"]
+            if path == old_path or path.startswith(old_path + "/"):
+                item["tag_path"] = new_path + path[len(old_path):]
+                item["name"] = item["tag_path"].rsplit("/", 1)[-1]
+                renamed.append(item["tag_path"])
+        return FakeResponse({"status": "success", "renamed": renamed})
+
+    def delete(self, url):
+        self._assert_absolute(url)
+        self.delete_calls.append(url)
+        old_path = unquote(url.rstrip("/").split("/")[-1])
+        self.tags[:] = [
+            item
+            for item in self.tags
+            if item["tag_path"] != old_path
+            and not item["tag_path"].startswith(old_path + "/")
+        ]
+        return FakeResponse({"status": "success"})
+
 
 def test_candidate_rows_join_full_chunk_catalog_and_make_preview():
     rows = candidate_rows(TRACE_PAYLOAD, "dense")
@@ -292,6 +321,8 @@ def _reset_backend():
     FakeBackendClient.documents = []
     FakeBackendClient.tags = []
     FakeBackendClient.put_calls = []
+    FakeBackendClient.patch_calls = []
+    FakeBackendClient.delete_calls = []
     FakeBackendClient.conversation_messages = []
 
 
@@ -488,6 +519,69 @@ def test_cancelling_tag_edit_closes_without_requests(monkeypatch):
     assert app.session_state["_edit_tags_for"] is None
     assert FakeBackendClient.put_calls == []
     assert FakeBackendClient.documents[0]["tags"] == ["旧标签"]
+
+
+def test_rename_tag_from_management_ui(monkeypatch):
+    from urllib.parse import quote
+
+    _reset_backend()
+    FakeBackendClient.tags = [
+        {"tag_path": "旧分类", "name": "旧分类", "document_count": 1},
+        {"tag_path": "旧分类/子类", "name": "子类", "document_count": 1},
+    ]
+    monkeypatch.setattr(httpx, "Client", FakeBackendClient)
+
+    app = AppTest.from_file("frontend/app.py", default_timeout=10)
+    app.run()
+
+    app.selectbox(key="tag_mgmt_selected").set_value("旧分类")
+    next(
+        item for item in app.text_input if item.label.startswith("重命名为")
+    ).set_value("新分类")
+    next(button for button in app.button if button.label == "✏️ 重命名").click()
+    app.run()
+
+    assert not app.exception
+    assert FakeBackendClient.patch_calls == [
+        (
+            "http://127.0.0.1:8000/api/tags/" + quote("旧分类", safe=""),
+            {"new_path": "新分类"},
+        )
+    ]
+    assert {tag["tag_path"] for tag in FakeBackendClient.tags} == {
+        "新分类",
+        "新分类/子类",
+    }
+
+
+def test_delete_tag_requires_confirmation(monkeypatch):
+    from urllib.parse import quote
+
+    _reset_backend()
+    FakeBackendClient.tags = [
+        {"tag_path": "待删除", "name": "待删除", "document_count": 0}
+    ]
+    monkeypatch.setattr(httpx, "Client", FakeBackendClient)
+
+    app = AppTest.from_file("frontend/app.py", default_timeout=10)
+    app.run()
+
+    app.selectbox(key="tag_mgmt_selected").set_value("待删除")
+    next(button for button in app.button if button.label == "🗑️ 删除").click()
+    app.run()
+
+    assert not app.exception
+    assert FakeBackendClient.delete_calls == []
+    assert app.session_state["_confirm_delete_tag"] == "待删除"
+
+    next(button for button in app.button if button.label == "确定删除").click()
+    app.run()
+
+    assert FakeBackendClient.delete_calls == [
+        "http://127.0.0.1:8000/api/tags/" + quote("待删除", safe="")
+    ]
+    assert FakeBackendClient.tags == []
+    assert app.session_state["_confirm_delete_tag"] is None
 
 
 def test_trace_panel_is_present_and_collapsed_after_chat(monkeypatch):
