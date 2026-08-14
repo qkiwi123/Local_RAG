@@ -240,9 +240,22 @@ def ask_question(
             )
         if resp.status_code == 200:
             return resp.json()
-        else:
-            st.error(f"问答失败（HTTP {resp.status_code}）: {response_error_detail(resp)}")
-            return None
+        if resp.status_code == 409:
+            detail = None
+            try:
+                detail = resp.json().get("detail")
+            except ValueError:
+                pass
+            code = detail.get("code") if isinstance(detail, dict) else None
+            if code in ("conversation_conflict", "request_in_progress", "stale_retry"):
+                # 本地会话落后于服务端（例如上次请求超时但服务端已完成）：
+                # 自动重同步会话并提示重新发送，而不是抛出原始错误。
+                load_conversation(st.session_state.current_conversation_id)
+                refresh_conversations()
+                st.warning("会话已在服务端更新，已自动刷新；请重新发送问题。")
+                return None
+        st.error(f"问答失败（HTTP {resp.status_code}）: {response_error_detail(resp)}")
+        return None
     except httpx.ConnectError:
         st.error(f"无法连接到后端（{BACKEND_URL}），请先启动后端")
         return None

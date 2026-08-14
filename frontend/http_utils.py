@@ -17,6 +17,9 @@ def response_error_detail(response: Any) -> str:
     if isinstance(payload, dict):
         detail = payload.get("detail")
         if detail not in (None, ""):
+            if isinstance(detail, dict):
+                message = detail.get("message")
+                return str(message) if message else str(detail)
             return str(detail)
 
     body = response.text.strip()

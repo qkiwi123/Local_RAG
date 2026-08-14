@@ -31,6 +31,21 @@ def test_response_error_detail_accepts_json_detail():
     assert response_error_detail(response) == "文档解析失败"
 
 
+def test_response_error_detail_extracts_message_from_dict_detail():
+    response = FakeResponse(
+        409,
+        "",
+        payload={
+            "detail": {
+                "code": "conversation_conflict",
+                "message": "会话末尾已变化，请刷新后重试",
+            }
+        },
+    )
+
+    assert response_error_detail(response) == "会话末尾已变化，请刷新后重试"
+
+
 def test_response_error_detail_handles_empty_non_json_response():
     response = FakeResponse(502, "", payload_error=ValueError("empty body"))
 

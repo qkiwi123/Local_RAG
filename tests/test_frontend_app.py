@@ -113,6 +113,7 @@ class FakeBackendClient:
     put_calls = []
     patch_calls = []
     delete_calls = []
+    chat_status = 200
     chat_payload = {"answer": "", "citations": [], "trace": None}
     conversations = [
         {
@@ -199,6 +200,16 @@ class FakeBackendClient:
                 if key != "messages"
             })
             return FakeResponse(conversation)
+        if self.chat_status != 200:
+            return FakeResponse(
+                {
+                    "detail": {
+                        "code": "conversation_conflict",
+                        "message": "会话末尾已变化，请刷新后重试",
+                    }
+                },
+                self.chat_status,
+            )
         payload = {
             **self.chat_payload,
             "conversation_id": json["conversation_id"],
@@ -323,6 +334,7 @@ def _reset_backend():
     FakeBackendClient.put_calls = []
     FakeBackendClient.patch_calls = []
     FakeBackendClient.delete_calls = []
+    FakeBackendClient.chat_status = 200
     FakeBackendClient.conversation_messages = []
 
 
@@ -582,6 +594,30 @@ def test_delete_tag_requires_confirmation(monkeypatch):
     ]
     assert FakeBackendClient.tags == []
     assert app.session_state["_confirm_delete_tag"] is None
+
+
+def test_chat_409_conflict_resyncs_conversation_without_crash(monkeypatch):
+    _reset_backend()
+    monkeypatch.setattr(FakeBackendClient, "chat_status", 409)
+    FakeBackendClient.documents = [
+        {
+            "document_id": "doc-1",
+            "original_name": "doc.txt",
+            "status": "ready",
+            "chunk_count": 1,
+        }
+    ]
+    monkeypatch.setattr(httpx, "Client", FakeBackendClient)
+
+    app = AppTest.from_file("frontend/app.py", default_timeout=10)
+    app.run()
+    app.chat_input[0].set_value("问题")
+    app.run()
+
+    assert not app.exception
+    # 409 后自动重同步：本地消息与服务端一致，且不抛出原始错误
+    assert app.session_state.messages == []
+    assert any("会话已在服务端更新" in warning.value for warning in app.warning)
 
 
 def test_trace_panel_is_present_and_collapsed_after_chat(monkeypatch):
