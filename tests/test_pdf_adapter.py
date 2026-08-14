@@ -143,6 +143,9 @@ def _image_pdf(path, pages=1):
 
 @pytest.fixture
 def ocr_enabled(monkeypatch, temp_dir):
+    from backend.services.parsers.ocr import clear_failure_memo
+
+    clear_failure_memo()  # 用例间隔离进程级失败记忆
     monkeypatch.setattr(settings, "OCR_ENABLED", True)
     monkeypatch.setattr(settings, "OCR_PDF_SCANNED", True)
     monkeypatch.setattr(settings, "OCR_PDF_PAGE_IMAGES", False)

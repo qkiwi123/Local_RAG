@@ -29,7 +29,27 @@ DESCRIBE_PROMPT = (
 )
 
 
-def _data_url(image_bytes: bytes) -> str:
+def normalize_image_bytes(image_bytes: bytes) -> bytes | None:
+    """把任意图像字节统一转为 JPEG（RGB）字节，供视觉模型读取。
+
+    EMF/WMF 等 Pillow 不支持的矢量格式或损坏图片返回 None，调用方应跳过。
+    """
+    from io import BytesIO
+
+    from PIL import Image, UnidentifiedImageError
+
+    try:
+        with Image.open(BytesIO(image_bytes)) as image:
+            converted = image.convert("RGB")
+            buffer = BytesIO()
+            converted.save(buffer, format="JPEG", quality=90)
+            return buffer.getvalue()
+    except (UnidentifiedImageError, OSError, ValueError):
+        return None
+
+
+def encode_image_data_url(image_bytes: bytes) -> str:
+    """把（已规范化为 JPEG 的）字节编码为 data URL。"""
     encoded = base64.b64encode(image_bytes).decode("ascii")
     return f"data:image/jpeg;base64,{encoded}"
 
@@ -52,7 +72,7 @@ def _complete(image_bytes: bytes, prompt: str, max_tokens: int) -> str:
                 "content": [
                     {
                         "type": "image_url",
-                        "image_url": {"url": _data_url(image_bytes)},
+                        "image_url": {"url": encode_image_data_url(image_bytes)},
                     },
                     {"type": "text", "text": prompt},
                 ],

@@ -4,7 +4,12 @@ import pytest
 
 from backend.config import settings
 from backend.services import vision
-from backend.services.vision import VisionError, describe_image, recognize_text
+from backend.services.vision import (
+    VisionError,
+    describe_image,
+    normalize_image_bytes,
+    recognize_text,
+)
 
 
 class _FakeMessage:
@@ -116,3 +121,31 @@ def test_validate_rejects_ocr_enabled_without_credentials(monkeypatch):
     monkeypatch.setattr(settings, "VISION_API_KEY", "test-key")
     monkeypatch.setattr(settings, "VISION_BASE_URL", "https://vision.example/v1")
     settings._validate()
+
+
+# ─── 图片格式规范化 ──────────────────────────────────────────────
+
+def test_normalize_image_bytes_converts_png_to_jpeg():
+    from io import BytesIO
+
+    from PIL import Image
+
+    buffer = BytesIO()
+    Image.new("RGB", (20, 20), (255, 0, 0)).save(buffer, format="PNG")
+
+    normalized = normalize_image_bytes(buffer.getvalue())
+
+    assert normalized is not None
+    assert normalized[:2] == b"\xff\xd8"  # JPEG magic
+    from io import BytesIO as _BytesIO
+    from PIL import Image as _Image
+
+    with _Image.open(_BytesIO(normalized)) as image:
+        assert image.format == "JPEG"
+
+
+def test_normalize_image_bytes_rejects_unsupported_formats():
+    # EMF 文件头（Pillow 无法打开）
+    emf_like = b"\x01\x00\x00\x00" + b"\x00" * 60
+    assert normalize_image_bytes(emf_like) is None
+    assert normalize_image_bytes(b"not an image at all") is None

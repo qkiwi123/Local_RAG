@@ -34,7 +34,7 @@ from backend.services.parsers.ocr import (
 from backend.services.parsers.office_zip import validate_office_package
 from backend.services.parsers.tables import render_table_markdown
 from backend.services.parsers.text import normalize_text
-from backend.services.vision import recognize_text
+from backend.services.vision import normalize_image_bytes, recognize_text
 from backend.services.vision_cache import VisionBudget
 
 
@@ -253,10 +253,14 @@ def parse_docx_document(
                         )
 
             for _relationship_id, blob in image_blobs:
+                # EMF/WMF 等视觉模型不支持的格式先规范化；失败直接跳过。
+                normalized = normalize_image_bytes(blob)
+                if not normalized:
+                    continue
                 recognized = run_vision(
                     file_hash,
                     f"docx-img:{image_blob_sha256(blob)[:16]}",
-                    blob,
+                    normalized,
                     recognize_text,
                     budget=budget,
                     warnings=warnings,

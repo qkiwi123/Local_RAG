@@ -142,6 +142,9 @@ def _image_docx(path):
 
 @pytest.fixture
 def embedded_ocr_enabled(monkeypatch, temp_dir):
+    from backend.services.parsers.ocr import clear_failure_memo
+
+    clear_failure_memo()  # 用例间隔离进程级失败记忆
     monkeypatch.setattr(settings, "OCR_ENABLED", True)
     monkeypatch.setattr(settings, "OCR_EMBEDDED_IMAGES", True)
     monkeypatch.setattr(settings, "VISION_CACHE_DIR", f"{temp_dir}/vision_cache")
