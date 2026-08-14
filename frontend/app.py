@@ -67,6 +67,10 @@ if "_staged_failed" not in st.session_state:
 if "upload_tag_selection" not in st.session_state:
     # 本次上传将携带的标签路径列表（与上传区 multiselect 共用此 key）。
     st.session_state["upload_tag_selection"] = []
+if "_pending_upload_tags" not in st.session_state:
+    # 新建标签成功后先入队，在下一次 rerun 的多选框实例化之前应用选中。
+    # 直接改 upload_tag_selection 会触发 Streamlit 的 widget 实例化后禁止修改异常。
+    st.session_state["_pending_upload_tags"] = []
 if "_edit_tags_for" not in st.session_state:
     # 正在编辑标签的文档（document_id 或展示名）；None 表示未展开编辑区。
     st.session_state["_edit_tags_for"] = None
@@ -272,10 +276,9 @@ def create_tag_and_select(raw_path: str) -> None:
             )
         if resp.status_code == 200:
             created = resp.json()["tag_path"]
-            selection = list(st.session_state["upload_tag_selection"])
-            if created not in selection:
-                selection.append(created)
-                st.session_state["upload_tag_selection"] = selection
+            pending = set(st.session_state["_pending_upload_tags"])
+            pending.add(created)
+            st.session_state["_pending_upload_tags"] = sorted(pending)
             refresh_tag_tree()
             st.toast(f"标签「{created}」已创建并选中", icon="🏷")
             st.rerun()
@@ -480,19 +483,30 @@ with st.sidebar:
     for upload_key, file in current_files.items():
         staged.setdefault(upload_key, file)
 
-    # 标签选择 + 上传时新建标签（创建后自动选入本次上传）
-    tag_paths = sorted(tag["tag_path"] for tag in st.session_state.tag_tree)
-    st.multiselect(
-        "本次上传的标签（可选，可多选）",
-        options=tag_paths,
-        key="upload_tag_selection",
-    )
+    # 上传时新建标签（创建后自动选入本次上传）。
+    # 注意：按钮必须渲染在标签多选框之前——Streamlit 中位于 widget 之后的
+    # 代码修改其 session_state 会被拒绝，且 rerun 时旧 widget 值会覆盖预写入值。
     upload_new_tag = st.text_input(
         "上传时新建标签路径（创建后自动选中）",
         key="upload_new_tag_input",
     )
     if st.button("➕ 新建并选中", key="upload_create_tag"):
         create_tag_and_select(upload_new_tag)
+
+    # 标签选择（新建成功后通过待选队列在多选框实例化之前写入）
+    tag_paths = sorted(tag["tag_path"] for tag in st.session_state.tag_tree)
+    pending_tags = st.session_state.pop("_pending_upload_tags", [])
+    if pending_tags:
+        merged_selection = sorted(
+            set(st.session_state["upload_tag_selection"]) | set(pending_tags)
+        )
+        # 必须在 multiselect 实例化之前写入，否则 Streamlit 会拒绝修改。
+        st.session_state["upload_tag_selection"] = merged_selection
+    st.multiselect(
+        "本次上传的标签（可选，可多选）",
+        options=tag_paths,
+        key="upload_tag_selection",
+    )
 
     # 暂存区与确认上传
     if staged:

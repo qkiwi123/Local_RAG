@@ -370,6 +370,29 @@ def test_creating_tag_auto_selects_it_for_upload(monkeypatch):
     )
 
 
+def test_upload_area_create_tag_auto_selects_without_widget_error(monkeypatch):
+    """上传区的「新建并选中」位于 multiselect 之后，创建后仍应自动选中且不报错。"""
+    _reset_backend()
+    monkeypatch.setattr(httpx, "Client", FakeBackendClient)
+
+    app = AppTest.from_file("frontend/app.py", default_timeout=10)
+    app.run()
+
+    next(
+        item for item in app.text_input if item.label.startswith("上传时新建标签")
+    ).set_value("课程课件/数据结构")
+    next(button for button in app.button if button.label == "➕ 新建并选中").click()
+    app.run()
+
+    assert not app.exception
+    assert any(
+        tag["tag_path"] == "课程课件/数据结构"
+        for tag in FakeBackendClient.tags
+    )
+    assert "课程课件/数据结构" in app.session_state["upload_tag_selection"]
+    assert "课程课件/数据结构" in app.multiselect(key="upload_tag_selection").value
+
+
 def test_editing_existing_document_tags(monkeypatch):
     _reset_backend()
     FakeBackendClient.documents = [
