@@ -55,10 +55,23 @@
 
 ### 2.5 知识库管理页
 
-- 内容：上传（多文件、带标签多选、进度、失败重试、解析/OCR 警告展示）；标签树管理
-  （增删改、路径校验、删除确认、文档数展示）；文档列表（按标签分组/筛选、删除确认、
-  详情）；分类树与文档双向挂标签。
+- 内容：上传（多文件、带标签多选、暂存 + 确认、进度、失败重试、解析/OCR 警告展示）；
+  标签树管理（增删改、新建空标签、路径校验、删除确认、文档数展示）；文档列表
+  （按标签分组/筛选、删除确认、详情）；分类树与文档双向挂标签；
 - 配套后端小改：`UploadResponse` 增加 `warnings` 字段（阶段 2 已预留解析警告来源）。
+
+### 2.5a 文档库预览与列表筛选（2026-08-13 验收反馈确认的需求）
+
+- 后端新端点 `GET /api/documents/id/{document_id}/preview`：
+  - 复用 `unit_store.list_document_units` 返回整份文档的结构化 units
+    （`StructuredPreviewUnit` 列表 + 文档名/标签/位置摘要）；文档不存在或非 ready 404；
+  - 不返回文件系统路径、不加载原文件；结构 JSON 读取时继续过 Pydantic 校验；
+  - 测试先行：mock 与真实 DB 两条路径、404、空 units、schema 校验失败拒绝返回；
+- 后端 `GET /api/documents` 增加可选 `tags` 查询参数：复用
+  `expand_tag_paths`/`resolve_document_ids`（父级含子孙、多选取并集），返回命中文档；
+  不含标签时返回全部（向后兼容）；测试覆盖展开语义与并集；
+- SPA 文档库：标签树筛选列表（调用带 `tags` 的列表接口）、点击文档打开结构化预览
+  （与引用预览共用 block 渲染组件，预留 OCR 徽标）。
 
 ### 2.6 部署与启动
 
@@ -80,13 +93,15 @@
 ```text
 A  web/                       （React SPA，含 package.json、src/**、vitest）
 M  backend/routers/chat.py    （新增 /api/chat/stream）
-M  backend/models/schemas.py  （UploadResponse.warnings、流式相关模型）
+M  backend/routers/upload.py  （新增 /api/documents/id/{id}/preview、列表 tags 查询参数）
+M  backend/models/schemas.py  （UploadResponse.warnings、流式/预览相关模型）
 M  backend/main.py            （静态托管）
 M  scripts/start.ps1
 M  .gitignore                 （node_modules、dist）
 D  frontend/                  （对齐验收后移除，连同其测试）
 M  README.md                  （启动与前端说明，阶段 4 完成）
 A  web/src/__tests__/         （api client、SSE 解析、store 单测）
+A  tests/test_document_preview.py
 ```
 
 ## 4. 阶段验收标准
@@ -94,9 +109,10 @@ A  web/src/__tests__/         （api client、SSE 解析、store 单测）
 1. 流式回答逐字渲染，失败/重试/重放行为与持久化协议一致；
 2. 功能对齐清单全过，Streamlit 已移除；
 3. 标签筛选、标签管理、上传警告在 SPA 中可用；
-4. 生产构建可由 FastAPI 单服务托管，`scripts/start.ps1` 一键可用；
-5. 全量 pytest 绿色（含流式端点测试）；vitest 绿色；
-6. 提交主题清晰（脚手架 / 流式端点 / 对话页 / 知识库页 / 移除 Streamlit）。
+4. 文档库可按标签筛选，点击文档可查看结构化预览；
+5. 生产构建可由 FastAPI 单服务托管，`scripts/start.ps1` 一键可用；
+6. 全量 pytest 绿色（含流式端点与预览端点测试）；vitest 绿色；
+7. 提交主题清晰（脚手架 / 流式端点 / 对话页 / 知识库页 / 移除 Streamlit）。
 
 ## 5. 风险与备注
 

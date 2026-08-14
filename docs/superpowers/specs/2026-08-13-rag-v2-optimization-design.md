@@ -172,16 +172,32 @@ CREATE TABLE document_tags (
 - `GET /api/tags`：返回标签树 + 每标签文档数；
 - `PUT /api/documents/{id}/tags`：整体替换文档标签集；
 - `POST /api/upload`：表单增加可选 `tags` 字段；
-- `GET /api/documents`：返回项增加 `tags`；
+- `GET /api/documents`：返回项增加 `tags`；支持可选 `tags` 查询参数（与检索筛选复用
+  `expand_tag_paths`/`resolve_document_ids` 的「父级含子孙、多选取并集」语义，阶段 3
+  随文档库筛选实现）；
 - `ChatRequest`：增加可选 `tags: list[str]`，缺省 = 全库检索（完全向后兼容）；
 - 标签重命名/删除端点（含级联与确认语义）。
 
 ### 5.4 前端与过渡件
 
-- 新 SPA：知识库管理页标签树（增删改、文档挂标签）、上传时多选标签、对话页筛选器
-  （多选、父级联动子级、当前筛选徽标）；
-- 过渡期：给 Streamlit 上传区加最小标签选择器（读 `/api/tags`），保证功能在 SPA 完成前
-  即可用；该部件属临时件，随 Streamlit 一起移除。
+**过渡件（Streamlit，2026-08-13 验收反馈确认的形态）**：
+
+- 上传采用**三段式暂存 + 确认**：选择文件仅暂存（不自动入库）→ 选择/新建标签 →
+  点击「确认上传」才提交；失败文件保留在暂存区可重试；
+- 侧栏独立「标签管理」区：输入路径 + 按钮**新建空标签**（`POST /api/tags`），并展示
+  现有标签与文档数；
+- 上传区同样提供新建标签按钮，**创建成功后自动选入本次上传的标签**；
+- 已上传文档列表提供「编辑标签」入口（复用 `PUT /api/documents/id/{id}/tags`）；
+- 以上部件均为临时件，随 Streamlit 一起移除。
+
+**新 SPA（阶段 3）**：
+
+- 知识库管理页：标签树（增删改、文档挂标签）、上传（带标签与确认）、文档列表/删除、
+  解析与 OCR 警告展示；
+- 文档库：列表按标签筛选（服务端 `tags` 查询参数，与检索筛选同一套展开/并集语义）、
+  点击文档打开**结构化内容预览**（新端点 `GET /api/documents/id/{document_id}/preview`
+  返回整份文档的结构化 units，与引用预览共用渲染组件）；
+- 对话页：标签筛选器（多选、父级联动子级、当前筛选徽标）。
 
 ## 6. 第三部分：前端重写与流式回答
 
@@ -191,12 +207,25 @@ CREATE TABLE document_tags (
   react-router + zustand + axios；vitest 单测；ESLint / Prettier；
 - 目录 `web/`，两个页面：
   - 「💬 对话」：会话列表、聊天流、引用预览弹窗（含 OCR 徽标）、检索 Trace 抽屉、
-    失败重试；
-  - 「📚 知识库管理」：上传（带标签）、标签树管理、文档列表/删除、解析与 OCR 警告展示；
+    失败重试、标签筛选器；
+  - 「📚 知识库管理」：上传（带标签、暂存 + 确认）、标签树管理（含新建空标签）、
+    文档列表/删除、**按标签筛选文档、点击文档打开结构化预览**、解析与 OCR 警告展示；
 - dev 模式 Vite 代理 `/api` → `127.0.0.1:8000`；生产构建产物由 FastAPI 静态托管，
   `scripts/start.ps1` 适配。
 
-### 6.2 流式回答
+### 6.2 文档库预览与筛选（后端）
+
+- 新端点 `GET /api/documents/id/{document_id}/preview`：复用
+  `unit_store.list_document_units` 返回整份文档的结构化 units
+  （`StructuredPreviewUnit` 列表 + 文档名/标签/locator 摘要），渲染与引用预览共用
+  组件（标题/段落/列表/表格/代码块，安全转义，OCR 徽标预留）；文档不存在或非 ready
+  返回 404；不返回文件系统路径、不加载原文件；
+- `GET /api/documents` 增加可选 `tags` 查询参数：服务端复用
+  `expand_tag_paths`/`resolve_document_ids`（父级含子孙、多选取并集），返回命中文档
+  （不含任何标签时返回全部）；文档库筛选与问答检索筛选共享同一套标签语义，不写
+  第二套逻辑。
+
+### 6.3 流式回答
 
 - 后端新增 `POST /api/chat/stream`（POST + fetch 流式读取；事件序列：
   `meta`（conversation_id / request_id / user_message_id）→ `delta`*（token 片段）→
@@ -205,7 +234,7 @@ CREATE TABLE document_tags (
   `expected_last_message_id` 并发守卫；重放请求以单帧 `done` 返回已存回答；
 - 前端 Ant Design X 气泡逐字渲染，完成后就地渲染引用与 Trace。
 
-### 6.3 功能对齐清单（Streamlit 移除的验收门槛）
+### 6.4 功能对齐清单（Streamlit 移除的验收门槛）
 
 新 SPA 必须逐项对齐并通过后才移除 `frontend/`（Streamlit）：
 
@@ -213,9 +242,11 @@ CREATE TABLE document_tags (
 2. 问答：提问、流式输出、失败重试、空检索提示、标签筛选；
 3. 引用：来源列表、预览弹窗、结构化渲染、高亮、OCR 徽标、已删除来源提示；
 4. Trace：受控开启时的检索链路面板；
-5. 文档：上传（含标签）、失败重试、列表分组、删除确认、解析/OCR 警告展示。
+5. 文档：上传（暂存 + 确认、带标签）、失败重试、列表分组、删除确认、
+   解析/OCR 警告展示、**按标签筛选列表、点击预览结构化内容**；
+6. 标签：新建空标签、树形管理、文档挂/改标签。
 
-### 6.4 配套后端小改
+### 6.5 配套后端小改
 
 - `UploadResponse` 增加 `warnings` 字段（透出解析与 OCR 警告）；
 - 静态托管与启动脚本适配；不新增认证（继续本地单用户定位）。
@@ -225,9 +256,9 @@ CREATE TABLE document_tags (
 | 阶段 | 内容 | 独立验收 | 依赖 |
 |---|---|---|---|
 | 0 准备 | 本设计与阶段计划落盘；创建 `feature/rag-v2-optimization`；全量测试基线存档 | 基线可复现 | — |
-| 1 标签体系 | schema v2 迁移、标签 CRUD API、三模式检索过滤、上传带标签、Streamlit 最小选择器 | 标签筛选端到端；全库检索回归不劣化 | 阶段 0 |
+| 1 标签体系 | schema v2 迁移、标签 CRUD API、三模式检索过滤、上传带标签、Streamlit 过渡件（2026-08-13 验收反馈修正：暂存+确认上传、独立新建空标签、已上传文档改标签） | 标签筛选端到端；过渡件交互验收；全库检索回归不劣化 | 阶段 0 |
 | 2 OCR/多模态 | `vision.py`（MiMo）、A/B/C 三层、`structured-v2`、rebuild 工具适配、隔离验收、生产重建 | 真实扫描件可检索可引用；OCR 关闭时与 v1 行为一致 | 阶段 1 |
-| 3 前端重写 + 流式 | SPA 骨架 → 对话页 → 知识库管理页 → SSE 流式 → 功能对齐 | 对齐清单全过，Streamlit 移除 | 阶段 1/2 API |
+| 3 前端重写 + 流式 | SPA 骨架 → 对话页 → 知识库管理页（文档库预览与标签筛选）→ SSE 流式 → 功能对齐 | 对齐清单全过，Streamlit 移除 | 阶段 1/2 API |
 | 4 回归与文档 | 全量 pytest、eval v3 preflight、legacy 回归、README 更新 | 全部证据存档 | 全部 |
 
 顺序理由：标签改动面最小、无新外部依赖与费用、收益直接（缩小检索范围即降低开销与噪声），
