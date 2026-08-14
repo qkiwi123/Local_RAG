@@ -347,9 +347,14 @@ def test_upload_carries_selected_tags(monkeypatch):
 
 def test_creating_tag_auto_selects_it_for_upload(monkeypatch):
     _reset_backend()
+    FakeBackendClient.tags = [
+        {"tag_path": "已有标签", "name": "已有标签", "document_count": 0}
+    ]
     monkeypatch.setattr(httpx, "Client", FakeBackendClient)
 
     app = AppTest.from_file("frontend/app.py", default_timeout=10)
+    app.run()
+    app.multiselect(key="upload_tag_selection").set_value(["已有标签"])
     app.run()
 
     next(
@@ -363,19 +368,31 @@ def test_creating_tag_auto_selects_it_for_upload(monkeypatch):
         tag["tag_path"] == "课程课件/数据结构"
         for tag in FakeBackendClient.tags
     )
-    assert "课程课件/数据结构" in app.session_state["upload_tag_selection"]
-    assert any(
-        option == "课程课件/数据结构"
-        for option in app.multiselect(key="upload_tag_selection").options
-    )
+    # 新建后应合并保留已有选择，而不是覆盖
+    assert app.session_state["upload_tag_selection"] == [
+        "已有标签",
+        "课程课件/数据结构",
+    ]
+    assert app.multiselect(key="upload_tag_selection").value == [
+        "已有标签",
+        "课程课件/数据结构",
+    ]
 
 
 def test_upload_area_create_tag_auto_selects_without_widget_error(monkeypatch):
     """上传区的「新建并选中」位于 multiselect 之后，创建后仍应自动选中且不报错。"""
     _reset_backend()
+    FakeBackendClient.tags = [
+        {"tag_path": "已有标签A", "name": "已有标签A", "document_count": 0},
+        {"tag_path": "已有标签B", "name": "已有标签B", "document_count": 0},
+    ]
     monkeypatch.setattr(httpx, "Client", FakeBackendClient)
 
     app = AppTest.from_file("frontend/app.py", default_timeout=10)
+    app.run()
+    app.multiselect(key="upload_tag_selection").set_value(
+        ["已有标签A", "已有标签B"]
+    )
     app.run()
 
     next(
@@ -389,8 +406,17 @@ def test_upload_area_create_tag_auto_selects_without_widget_error(monkeypatch):
         tag["tag_path"] == "课程课件/数据结构"
         for tag in FakeBackendClient.tags
     )
-    assert "课程课件/数据结构" in app.session_state["upload_tag_selection"]
-    assert "课程课件/数据结构" in app.multiselect(key="upload_tag_selection").value
+    # 已有选择必须保留，新标签追加进选中集
+    assert app.session_state["upload_tag_selection"] == [
+        "已有标签A",
+        "已有标签B",
+        "课程课件/数据结构",
+    ]
+    assert app.multiselect(key="upload_tag_selection").value == [
+        "已有标签A",
+        "已有标签B",
+        "课程课件/数据结构",
+    ]
 
 
 def test_editing_existing_document_tags(monkeypatch):

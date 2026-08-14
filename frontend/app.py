@@ -276,9 +276,12 @@ def create_tag_and_select(raw_path: str) -> None:
             )
         if resp.status_code == 200:
             created = resp.json()["tag_path"]
-            pending = set(st.session_state["_pending_upload_tags"])
-            pending.add(created)
-            st.session_state["_pending_upload_tags"] = sorted(pending)
+            # 在 handler 内快照合并「当前已选 + 新标签」入队：点击这一轮
+            # 多选框未渲染，Streamlit 会在本轮结束时清理其 session 值，
+            # 因此必须在旧值仍在时合并，rerun 时整体替换选中集。
+            current = list(st.session_state.get("upload_tag_selection") or [])
+            pending = sorted(set(current) | {created})
+            st.session_state["_pending_upload_tags"] = pending
             refresh_tag_tree()
             st.toast(f"标签「{created}」已创建并选中", icon="🏷")
             st.rerun()
@@ -493,15 +496,13 @@ with st.sidebar:
     if st.button("➕ 新建并选中", key="upload_create_tag"):
         create_tag_and_select(upload_new_tag)
 
-    # 标签选择（新建成功后通过待选队列在多选框实例化之前写入）
+    # 标签选择（新建成功后通过待选队列在多选框实例化之前整体替换选中集）
     tag_paths = sorted(tag["tag_path"] for tag in st.session_state.tag_tree)
     pending_tags = st.session_state.pop("_pending_upload_tags", [])
     if pending_tags:
-        merged_selection = sorted(
-            set(st.session_state["upload_tag_selection"]) | set(pending_tags)
-        )
+        # 队列内已是「旧选择 + 新标签」的完整合并结果，直接替换。
         # 必须在 multiselect 实例化之前写入，否则 Streamlit 会拒绝修改。
-        st.session_state["upload_tag_selection"] = merged_selection
+        st.session_state["upload_tag_selection"] = pending_tags
     st.multiselect(
         "本次上传的标签（可选，可多选）",
         options=tag_paths,
