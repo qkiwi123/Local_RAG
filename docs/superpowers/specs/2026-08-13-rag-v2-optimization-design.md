@@ -35,6 +35,8 @@
 | 6 | Streamlit 去留 | 过渡保留，新前端功能对齐验收后移除 |
 | 7 | 流式回答 | 纳入（后端流式端点 + 前端增量渲染） |
 | 8 | 生产数据 | 接受 `structured-v2` 隔离验收后一次性重建 |
+| 9 | Trace 持久化 | 2026-08-14 用户确认：Trace 持久化到 SQLite（`message_traces` 表，schema v3），总量超过 `TRACE_STORAGE_MAX_BYTES`（默认 50MB）按创建时间淘汰最旧记录（LRU）；绑定助手消息，删除会话时级联清理；复用 `RETRIEVAL_TRACE_ENABLED` 同一开关（关了不计算也不存储）；重放恢复已存 Trace |
+| 10 | 模型预热 | 2026-08-14 用户确认：服务启动后后台预热 Embedding/Reranker（`PREWARM_MODELS=true`），把首次查询的模型加载耗时挪到启动期 |
 
 ## 3. 数据契约版本与数据策略
 
