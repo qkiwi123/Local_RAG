@@ -14,6 +14,7 @@ from io import BytesIO
 from pathlib import Path
 
 from PyPDF2 import PdfReader
+from PyPDF2.errors import PyPdfError
 
 from backend.config import settings
 from backend.models.document_structure import (
@@ -42,6 +43,31 @@ def _scanned_ocr_enabled() -> bool:
 
 def _page_images_enabled() -> bool:
     return settings.OCR_ENABLED and settings.OCR_PDF_PAGE_IMAGES
+
+
+def read_page_texts_pypdf2(file_path: str) -> list[str]:
+    """PyPDF2 提取各页文本；对畸形 xref 等结构会抛 PyPDF2Error。"""
+    reader = PdfReader(file_path)
+    return [
+        normalize_text(page.extract_text() or "") for page in reader.pages
+    ]
+
+
+def read_page_texts_pdfium(file_path: str) -> list[str]:
+    """pdfium（Chrome 同款引擎）提取各页文本，容忍多数真实世界的畸形 PDF。"""
+    import pypdfium2 as pdfium
+
+    pdf = pdfium.PdfDocument(file_path)
+    try:
+        texts = []
+        for page in pdf:
+            text_page = page.get_textpage()
+            texts.append(
+                normalize_text(text_page.get_text_range() or "")
+            )
+        return texts
+    finally:
+        pdf.close()
 
 
 def render_page_image(file_path: str, page_index: int) -> bytes:
@@ -101,9 +127,25 @@ def parse_pdf_document(
     document_id: str,
     document_name: str | None = None,
 ) -> ParsedDocument:
-    """按页解析 PDF；可选 A/B 层视觉识别，产出带标记的结构化 blocks。"""
+    """按页解析 PDF；可选 A/B 层视觉识别，产出带标记的结构化 blocks。
+
+    首选 PyPDF2（保持既有文本基线）；PyPDF2 无法解析的畸形 PDF 回退到
+    pdfium 引擎提取文本，并追加解析 warning。两个引擎都失败时抛 ValueError。
+    """
     name = document_name or Path(file_path).name
-    reader = PdfReader(file_path)
+    try:
+        page_texts = read_page_texts_pypdf2(file_path)
+        used_fallback = False
+    except PyPdfError as error:
+        try:
+            page_texts = read_page_texts_pdfium(file_path)
+        except Exception as pdfium_error:
+            raise ValueError(
+                f"PDF 无法解析（PyPDF2: {type(error).__name__}；"
+                f"备用引擎: {type(pdfium_error).__name__}）"
+            ) from pdfium_error
+        used_fallback = True
+
     # 仅 OCR 层开启时才需要文件哈希（缓存键）；关闭时保持零文件读取开销。
     file_hash = (
         file_sha256(file_path)
@@ -114,14 +156,25 @@ def parse_pdf_document(
     units: list[ParsedUnit] = []
     warnings: list[ParseWarning] = []
 
-    for index, page in enumerate(reader.pages, start=1):
+    for index, page_text in enumerate(page_texts, start=1):
         locator = SourceLocator(
             kind="page",
             unit_index=index - 1,
             location_label=f"第 {index} 页",
             page_number=index,
         )
-        text = normalize_text(page.extract_text() or "")
+        if used_fallback and index == 1:
+            warnings.append(
+                ParseWarning(
+                    code="pdf_reader_fallback",
+                    message=(
+                        "该 PDF 结构异常（PyPDF2 无法解析），"
+                        "已使用备用引擎提取文本"
+                    ),
+                    locator=locator,
+                )
+            )
+        text = page_text
         ocr_applied = False
 
         if not text and _scanned_ocr_enabled():

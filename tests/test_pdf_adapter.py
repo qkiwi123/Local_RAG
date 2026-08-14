@@ -310,3 +310,71 @@ def test_page_images_layer_skips_pages_without_images(
     )
 
     assert [block.text for block in result.units[0].blocks] == ["正文段落。"]
+
+
+# ─── 畸形 PDF 的 pdfium 兜底 ───────────────────────────────────────
+
+def test_reader_fallback_uses_pdfium_and_adds_warning(monkeypatch, tmp_path):
+    from PyPDF2.errors import PdfReadError
+
+    source = tmp_path / "broken.pdf"
+    source.write_bytes(b"%PDF-broken")
+    monkeypatch.setattr(
+        pdf_adapter,
+        "read_page_texts_pypdf2",
+        lambda _p: (_ for _ in ()).throw(
+            PdfReadError("Could not read Boolean object")
+        ),
+    )
+    monkeypatch.setattr(
+        pdf_adapter,
+        "read_page_texts_pdfium",
+        lambda _p: ["备用引擎提取的正文"],
+    )
+
+    result = pdf_adapter.parse_pdf_document(
+        str(source), document_id="doc-fallback"
+    )
+
+    assert result.units[0].canonical_text == "备用引擎提取的正文"
+    assert len(result.warnings) == 1
+    assert result.warnings[0].code == "pdf_reader_fallback"
+    assert "备用引擎" in result.warnings[0].message
+
+
+def test_both_engines_fail_raises_clear_value_error(monkeypatch, tmp_path):
+    from PyPDF2.errors import PdfReadError
+
+    source = tmp_path / "broken.pdf"
+    source.write_bytes(b"%PDF-broken")
+    monkeypatch.setattr(
+        pdf_adapter,
+        "read_page_texts_pypdf2",
+        lambda _p: (_ for _ in ()).throw(PdfReadError("坏 xref")),
+    )
+    monkeypatch.setattr(
+        pdf_adapter,
+        "read_page_texts_pdfium",
+        lambda _p: (_ for _ in ()).throw(RuntimeError("pdfium 也失败")),
+    )
+
+    with pytest.raises(ValueError, match="PDF 无法解析"):
+        pdf_adapter.parse_pdf_document(str(source), document_id="doc-both-fail")
+
+
+def test_pypdf2_success_adds_no_fallback_warning(monkeypatch):
+    _install_reader(monkeypatch, ["正常正文。"])
+
+    result = pdf_adapter.parse_pdf_document(
+        "/tmp/normal.pdf", document_id="doc-normal"
+    )
+
+    assert result.warnings == []
+    assert result.units[0].canonical_text == "正常正文。"
+
+
+def test_pdfium_engine_reads_real_pdf_fixture():
+    texts = pdf_adapter.read_page_texts_pdfium("tests/fixtures/sample.pdf")
+
+    assert texts
+    assert any(text.strip() for text in texts)

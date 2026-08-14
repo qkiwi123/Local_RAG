@@ -26,6 +26,14 @@ os.environ["RETRIEVAL_TRACE_ENABLED"] = "false"
 # 单元测试默认不加载约 2.2 GB 的 Reranker；专项测试会显式开启。
 os.environ["RERANKER_ENABLED"] = "false"
 os.environ["CITATION_PREVIEW_ENABLED"] = "false"
+# OCR 默认全部关闭，测试不受本地 .env 的真实开关影响；专项测试显式开启。
+os.environ["OCR_ENABLED"] = "false"
+os.environ["OCR_PDF_SCANNED"] = "false"
+os.environ["OCR_PDF_PAGE_IMAGES"] = "false"
+os.environ["OCR_EMBEDDED_IMAGES"] = "false"
+os.environ["VISION_API_KEY"] = ""
+os.environ["VISION_BASE_URL"] = ""
+os.environ["VISION_CACHE_DIR"] = str(_TEST_ROOT / "vision_cache")
 
 
 def pytest_addoption(parser):
