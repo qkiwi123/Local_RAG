@@ -128,15 +128,29 @@ def add_chunks(chunks: List[DocumentChunk]) -> int:
 
 
 def search_by_embedding(
-    query_embedding: List[float], top_k: int = 5
+    query_embedding: List[float],
+    top_k: int = 5,
+    allowed_document_ids: Optional[List[str]] = None,
 ) -> List[dict]:
-    """使用预计算查询向量执行 Chroma 检索，供 Trace 拆分计时。"""
+    """使用预计算查询向量执行 Chroma 检索，供 Trace 拆分计时。
+
+    allowed_document_ids:
+        None 表示全库检索；非 None 时只检索这些文档。空列表表示筛选范围
+        为空，直接返回空结果（与 Chroma 空 $in 语义一致）。
+    """
     if top_k <= 0:
         return []
+    if allowed_document_ids is not None and not allowed_document_ids:
+        return []
+
+    where = None
+    if allowed_document_ids:
+        where = {"document_id": {"$in": list(allowed_document_ids)}}
 
     results = _collection.query(
         query_embeddings=[query_embedding],
         n_results=top_k,
+        where=where,
         include=["documents", "metadatas", "distances"],
     )
 
@@ -158,7 +172,11 @@ def search_by_embedding(
     ]
 
 
-def search(query: str, top_k: int = 5) -> List[dict]:
+def search(
+    query: str,
+    top_k: int = 5,
+    allowed_document_ids: Optional[List[str]] = None,
+) -> List[dict]:
     """
     语义检索：在向量库中搜索与查询最相似的文本块。
 
@@ -172,6 +190,7 @@ def search(query: str, top_k: int = 5) -> List[dict]:
     Args:
         query: 用户搜索查询文本
         top_k: 返回数量上限
+        allowed_document_ids: 可选，仅在这些文档中检索；None 表示全库
 
     Returns:
         List[dict]，每个元素包含:
@@ -183,7 +202,11 @@ def search(query: str, top_k: int = 5) -> List[dict]:
     if top_k <= 0:
         return []
 
-    return search_by_embedding(embed_query(query), top_k=top_k)
+    return search_by_embedding(
+        embed_query(query),
+        top_k=top_k,
+        allowed_document_ids=allowed_document_ids,
+    )
 
 
 def delete_document(document_name: str) -> bool:

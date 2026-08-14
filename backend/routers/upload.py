@@ -9,10 +9,10 @@ import os
 from pathlib import Path
 from uuid import uuid4
 
-from fastapi import APIRouter, File, HTTPException, UploadFile
+from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 
 from backend.config import settings
-from backend.models.schemas import UploadResponse
+from backend.models.schemas import DocumentTagsUpdate, UploadResponse
 from backend.services.chunker import chunk_units
 from backend.services.document_store import (
     create_document,
@@ -27,6 +27,13 @@ from backend.services.parsers import (
     ADAPTERS,
     PARSER_VERSION,
     parse_document_structure,
+)
+from backend.services.tag_store import (
+    TagValidationError,
+    delete_document_tags,
+    get_document_tags,
+    normalize_tag_path,
+    set_document_tags,
 )
 from backend.services.unit_store import (
     delete_document_units,
@@ -83,6 +90,13 @@ def _cleanup_failed_ingest(
             )
         except Exception:
             pass
+        try:
+            delete_document_tags(
+                document_id,
+                db_path=settings.METADATA_DB_PATH,
+            )
+        except Exception:
+            pass
     for path in paths:
         _safe_unlink(path, upload_dir)
     if record_created:
@@ -92,9 +106,24 @@ def _cleanup_failed_ingest(
             pass
 
 
+def _normalize_tags(tags: list[str] | None) -> list[str]:
+    """规范化并去重标签列表；非法路径抛 422。"""
+    try:
+        return sorted({normalize_tag_path(tag) for tag in (tags or [])})
+    except TagValidationError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
+
+
 @router.post("/upload", response_model=UploadResponse)
-async def upload_document(file: UploadFile = File(...)):
-    """保存文件并完成 parse → chunk → embedding → vector store 入库。"""
+async def upload_document(
+    file: UploadFile = File(...),
+    tags: list[str] | None = Form(default=None),
+):
+    """保存文件并完成 parse → chunk → embedding → vector store 入库。
+
+    tags 为可选的标签路径列表；缺失的标签会自动创建（含父级节点）。
+    """
+    normalized_tags = _normalize_tags(tags)
     original_name = _validate_filename(file.filename or "")
     suffix = Path(original_name).suffix.lower()
     if suffix not in ALLOWED_EXTENSIONS:
@@ -165,6 +194,11 @@ async def upload_document(file: UploadFile = File(...)):
             db_path=settings.METADATA_DB_PATH,
         )
         chunk_count = add_chunks(chunks)
+        set_document_tags(
+            document_id,
+            normalized_tags,
+            db_path=settings.METADATA_DB_PATH,
+        )
         os.replace(temp_path, final_path)
         mark_ready(document_id, chunk_count)
 
@@ -203,11 +237,37 @@ async def upload_document(file: UploadFile = File(...)):
 
 @router.get("/documents")
 async def list_documents():
-    """只返回 structured-v1 登记且已就绪的文档。"""
+    """只返回 structured-v1 登记且已就绪的文档（含标签）。"""
     records = list_document_records(status="ready")
+    for record in records:
+        record["tags"] = get_document_tags(
+            record["document_id"],
+            db_path=settings.METADATA_DB_PATH,
+        )
     return {
         "documents": [item["original_name"] for item in records],
         "document_items": records,
+    }
+
+
+@router.put("/documents/id/{document_id}/tags")
+async def update_document_tags(document_id: str, payload: DocumentTagsUpdate):
+    """整体替换文档的标签集。"""
+    record = get_document(document_id)
+    if not record:
+        raise HTTPException(status_code=404, detail=f"文档不存在: {document_id}")
+    try:
+        normalized = set_document_tags(
+            document_id,
+            payload.tags,
+            db_path=settings.METADATA_DB_PATH,
+        )
+    except TagValidationError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
+    return {
+        "status": "success",
+        "document_id": document_id,
+        "tags": normalized,
     }
 
 

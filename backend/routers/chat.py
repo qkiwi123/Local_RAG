@@ -27,10 +27,23 @@ from backend.services.conversation_store import (
     complete_history,
     fail_chat,
 )
+from backend.services.tag_store import (
+    TagValidationError,
+    normalize_tag_path,
+    resolve_document_ids,
+)
 from backend.utils.citation import extract_citations
 
 router = APIRouter(tags=["chat"])
 logger = logging.getLogger(__name__)
+
+
+def _normalize_tag_filter(tags: list[str]) -> list[str]:
+    """规范化标签筛选列表；非法路径抛 422。"""
+    try:
+        return sorted({normalize_tag_path(tag) for tag in tags})
+    except TagValidationError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
 
 
 @router.post("/chat", response_model=ChatResponse)
@@ -52,6 +65,11 @@ async def chat(request: ChatRequest):
         raise HTTPException(status_code=422, detail="问题不能为空")
     if len(question) > settings.CONVERSATION_MESSAGE_MAX_CHARS:
         raise HTTPException(status_code=422, detail="问题超过最大长度")
+
+    tag_filter = _normalize_tag_filter(request.tags)
+    allowed_document_ids = (
+        resolve_document_ids(tag_filter) if tag_filter else None
+    )
 
     persistent = request.conversation_id is not None
     history_rows: list[dict] = []
@@ -92,7 +110,11 @@ async def chat(request: ChatRequest):
 
     # 1. 语义检索
     try:
-        retrieval = retrieve_with_trace(standalone_question)
+        retrieval = retrieve_with_trace(
+            standalone_question,
+            allowed_document_ids=allowed_document_ids,
+            tag_filter=tag_filter,
+        )
     except Exception as error:
         if persistent:
             fail_chat(request.request_id, "retrieval_error")
@@ -108,7 +130,16 @@ async def chat(request: ChatRequest):
             llm_generation_ms=0.0,
             total_ms=(perf_counter() - total_started) * 1000,
         )
-        answer = "未找到与您问题相关的文档内容。请确认已上传相关文档，或尝试换个问法。"
+        if tag_filter:
+            answer = (
+                "当前筛选范围内未找到与您问题相关的文档内容。"
+                "请尝试调整或清除标签筛选后重试。"
+            )
+        else:
+            answer = (
+                "未找到与您问题相关的文档内容。"
+                "请确认已上传相关文档，或尝试换个问法。"
+            )
         response_fields = {}
         if persistent:
             try:

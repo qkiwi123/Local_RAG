@@ -26,10 +26,20 @@ TIMING_FIELDS = (
 class TraceCollector:
     """按执行顺序收集阶段快照，并按 chunk_id 去重保存完整原文。"""
 
-    def __init__(self, *, enabled: bool, mode: str, reranker_enabled: bool):
+    def __init__(
+        self,
+        *,
+        enabled: bool,
+        mode: str,
+        reranker_enabled: bool,
+        tags: list[str] | None = None,
+        allowed_document_count: int | None = None,
+    ):
         self.enabled = enabled
         self.mode = mode
         self.reranker_enabled = reranker_enabled
+        self.tags = list(tags or [])
+        self.allowed_document_count = allowed_document_count
         self.chunks: dict[str, RetrievalTraceChunk] = {}
         self.stages: list[RetrievalTraceStage] = []
         self.timings = {field: 0.0 for field in TIMING_FIELDS}
@@ -114,6 +124,8 @@ class TraceCollector:
             selected_chunk_ids=selected_ids,
             context=RetrievalContextStats(chunk_count=len(selected_ids)),
             timings_ms=RetrievalTraceTimings(**self.timings),
+            tag_filter=self.tags,
+            filtered_document_count=self.allowed_document_count,
         )
 
 

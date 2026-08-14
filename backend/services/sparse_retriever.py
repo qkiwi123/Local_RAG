@@ -40,15 +40,34 @@ def clear_cache() -> None:
         _cache.update(key=None, chunks=[], model=None)
 
 
-def _get_index() -> tuple[list[dict], BM25Okapi | None]:
+def _get_index(
+    allowed_document_ids: list[str] | None = None,
+) -> tuple[list[dict], BM25Okapi | None]:
+    """按文档过滤集合构建 BM25 索引；不同过滤集各自缓存。
+
+    allowed_document_ids 为 None 表示全库；空列表表示筛选范围为空。
+    """
+    allowed_key = (
+        None
+        if allowed_document_ids is None
+        else tuple(sorted(set(allowed_document_ids)))
+    )
     key = (
         vector_store.get_index_revision(),
         settings.BM25_K1,
         settings.BM25_B,
+        allowed_key,
     )
     with _lock:
         if _cache["key"] != key:
             chunks = vector_store.get_all_chunks()
+            if allowed_document_ids is not None:
+                allowed = set(allowed_document_ids)
+                chunks = [
+                    row
+                    for row in chunks
+                    if (row.get("metadata") or {}).get("document_id") in allowed
+                ]
             corpus = [tokenize(row["content"]) for row in chunks]
             model = (
                 BM25Okapi(corpus, k1=settings.BM25_K1, b=settings.BM25_B)
@@ -59,12 +78,19 @@ def _get_index() -> tuple[list[dict], BM25Okapi | None]:
         return _cache["chunks"], _cache["model"]
 
 
-def search(query: str, top_k: int) -> list[dict]:
-    """返回 BM25 score 大于 0 的 Top K chunk，分数越大越相关。"""
+def search(
+    query: str,
+    top_k: int,
+    allowed_document_ids: list[str] | None = None,
+) -> list[dict]:
+    """返回 BM25 score 大于 0 的 Top K chunk，分数越大越相关。
+
+    allowed_document_ids 为 None 时全库检索，否则只检索这些文档。
+    """
     if top_k <= 0 or not query.strip():
         return []
 
-    chunks, model = _get_index()
+    chunks, model = _get_index(allowed_document_ids)
     if model is None:
         return []
 

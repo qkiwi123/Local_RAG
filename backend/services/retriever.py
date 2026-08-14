@@ -38,6 +38,7 @@ def _dense_candidates(
     question: str,
     candidate_k: int,
     collector: TraceCollector,
+    allowed_document_ids: List[str] | None,
 ) -> List[dict]:
     """生成 Dense 候选；Trace 开启时拆分向量化与 Chroma 耗时。"""
     if collector.enabled:
@@ -45,10 +46,18 @@ def _dense_candidates(
         query_embedding = embed_query(question)
         collector.set_timing("query_embedding", perf_counter() - started)
         started = perf_counter()
-        raw = vector_search_by_embedding(query_embedding, top_k=candidate_k)
+        raw = vector_search_by_embedding(
+            query_embedding,
+            top_k=candidate_k,
+            allowed_document_ids=allowed_document_ids,
+        )
         collector.set_timing("dense_retrieval", perf_counter() - started)
     else:
-        raw = vector_search(question, top_k=candidate_k)
+        raw = vector_search(
+            question,
+            top_k=candidate_k,
+            allowed_document_ids=allowed_document_ids,
+        )
 
     ranked = [
         {**row, "dense_rank": rank}
@@ -73,12 +82,14 @@ def _bm25_candidates(
     question: str,
     candidate_k: int,
     collector: TraceCollector,
+    allowed_document_ids: List[str] | None,
 ) -> List[dict]:
     """生成 BM25 候选；分支深度可独立配置，融合前截断到候选上限。"""
     started = perf_counter()
     rows = bm25_search(
         question,
         top_k=max(candidate_k, settings.BM25_TOP_K),
+        allowed_document_ids=allowed_document_ids,
     )[:candidate_k]
     collector.set_timing("sparse_retrieval", perf_counter() - started)
     collector.add_stage("bm25", rows)
@@ -89,15 +100,24 @@ def _generate_candidates(
     question: str,
     candidate_k: int,
     collector: TraceCollector,
+    allowed_document_ids: List[str] | None,
 ) -> List[dict]:
     """按配置生成单路或 RRF 融合候选。"""
     if settings.RETRIEVAL_MODE == "dense":
-        return _dense_candidates(question, candidate_k, collector)
+        return _dense_candidates(
+            question, candidate_k, collector, allowed_document_ids
+        )
     if settings.RETRIEVAL_MODE == "bm25":
-        return _bm25_candidates(question, candidate_k, collector)
+        return _bm25_candidates(
+            question, candidate_k, collector, allowed_document_ids
+        )
 
-    dense = _dense_candidates(question, candidate_k, collector)
-    sparse = _bm25_candidates(question, candidate_k, collector)
+    dense = _dense_candidates(
+        question, candidate_k, collector, allowed_document_ids
+    )
+    sparse = _bm25_candidates(
+        question, candidate_k, collector, allowed_document_ids
+    )
     started = perf_counter()
     fused = reciprocal_rank_fusion(
         dense,
@@ -132,17 +152,26 @@ def _retrieve_internal(
     question: str,
     top_k: int,
     include_trace: bool,
+    allowed_document_ids: List[str] | None = None,
+    tag_filter: List[str] | None = None,
 ) -> RetrievalResponse:
     """共享检索流水线；是否捕获 Trace 由调用方显式决定。"""
     collector = TraceCollector(
         enabled=include_trace,
         mode=settings.RETRIEVAL_MODE,
         reranker_enabled=settings.RERANKER_ENABLED,
+        tags=tag_filter,
+        allowed_document_count=(
+            len(allowed_document_ids)
+            if allowed_document_ids is not None
+            else None
+        ),
     )
     candidates = _generate_candidates(
         question,
         _candidate_k(top_k),
         collector,
+        allowed_document_ids,
     )
     if settings.RERANKER_ENABLED:
         started = perf_counter()
@@ -160,7 +189,12 @@ def _retrieve_internal(
     )
 
 
-def retrieve(question: str, top_k: int = None) -> List[dict]:
+def retrieve(
+    question: str,
+    top_k: int = None,
+    allowed_document_ids: List[str] | None = None,
+    tag_filter: List[str] | None = None,
+) -> List[dict]:
     """兼容入口：只返回业务结果，不因服务端开关构造 Trace。"""
     effective_top_k = (
         settings.RETRIEVAL_TOP_K if top_k is None else top_k
@@ -169,12 +203,16 @@ def retrieve(question: str, top_k: int = None) -> List[dict]:
         question,
         effective_top_k,
         include_trace=False,
+        allowed_document_ids=allowed_document_ids,
+        tag_filter=tag_filter,
     ).results
 
 
 def retrieve_with_trace(
     question: str,
     top_k: int = None,
+    allowed_document_ids: List[str] | None = None,
+    tag_filter: List[str] | None = None,
 ) -> RetrievalResponse:
     """聊天入口：服务端允许时同时返回结构化 Trace。"""
     effective_top_k = (
@@ -184,6 +222,8 @@ def retrieve_with_trace(
         question,
         effective_top_k,
         include_trace=settings.RETRIEVAL_TRACE_ENABLED,
+        allowed_document_ids=allowed_document_ids,
+        tag_filter=tag_filter,
     )
 
 

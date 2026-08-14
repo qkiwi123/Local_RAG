@@ -28,12 +28,13 @@ app.add_middleware(
 )
 
 # 注册路由
-from backend.routers import upload, chat, citations, conversations
+from backend.routers import upload, chat, citations, conversations, tags
 
 app.include_router(upload.router, prefix="/api")
 app.include_router(chat.router, prefix="/api")
 app.include_router(citations.router)
 app.include_router(conversations.router, prefix="/api")
+app.include_router(tags.router, prefix="/api")
 
 
 @app.get("/")

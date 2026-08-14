@@ -110,3 +110,66 @@ def test_bm25_rebuilds_when_vector_revision_changes(monkeypatch):
         ],
     )
     assert sparse_retriever.search("Qdrant", 5)[0]["chunk_id"] == "c4"
+
+
+def test_bm25_filters_by_allowed_documents(monkeypatch):
+    _install_snapshot(
+        monkeypatch,
+        [
+            _chunk("c1", "二叉树前序遍历"),
+            _chunk("c2", "进程调度算法"),
+            _chunk("c3", "数据库索引结构"),
+        ],
+    )
+
+    # 筛选后语料中查询词仍为少数（1/3），IDF 为正，命中 c1。
+    rows = sparse_retriever.search(
+        "二叉树", top_k=5, allowed_document_ids=["doc-c1", "doc-c2", "doc-c3"]
+    )
+    assert [row["chunk_id"] for row in rows] == ["c1"]
+
+    # 排除含查询词的文档后无结果。
+    rows = sparse_retriever.search(
+        "二叉树", top_k=5, allowed_document_ids=["doc-c2", "doc-c3"]
+    )
+    assert rows == []
+
+    # 不过滤时与全语料行为一致。
+    rows = sparse_retriever.search("二叉树", top_k=5)
+    assert [row["chunk_id"] for row in rows] == ["c1"]
+
+
+def test_bm25_empty_allowed_list_returns_nothing(monkeypatch):
+    _install_snapshot(monkeypatch, [_chunk("c1", "二叉树前序遍历")])
+
+    assert sparse_retriever.search("二叉树", 5, allowed_document_ids=[]) == []
+
+
+def test_bm25_filter_cache_is_keyed_by_allowed_set(monkeypatch):
+    state = {"fetches": 0}
+    chunks = [
+        _chunk("c1", "二叉树前序遍历"),
+        _chunk("c2", "进程调度算法"),
+    ]
+
+    def fake_all_chunks():
+        state["fetches"] += 1
+        return chunks
+
+    monkeypatch.setattr(
+        sparse_retriever.vector_store, "get_all_chunks", fake_all_chunks
+    )
+    monkeypatch.setattr(
+        sparse_retriever.vector_store, "get_index_revision", lambda: 7
+    )
+    sparse_retriever.clear_cache()
+
+    sparse_retriever.search("二叉树", 5, allowed_document_ids=["doc-c1"])
+    sparse_retriever.search("二叉树", 5, allowed_document_ids=["doc-c1"])
+    assert state["fetches"] == 1
+
+    sparse_retriever.search("二叉树", 5, allowed_document_ids=["doc-c2"])
+    assert state["fetches"] == 2
+
+    sparse_retriever.search("二叉树", 5)
+    assert state["fetches"] == 3

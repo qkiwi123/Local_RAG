@@ -162,6 +162,46 @@ class TestVectorStore:
         assert vector_store.add_chunks([chunk]) == 1
         assert captured["metadatas"][0]["content_type"] == "table"
 
+    def test_search_by_embedding_builds_document_filter(self, monkeypatch):
+        from backend.services import vector_store
+
+        captured = {}
+
+        class FakeCollection:
+            def query(self, **kwargs):
+                captured.update(kwargs)
+                return {
+                    "ids": [["c1"]],
+                    "documents": [["正文"]],
+                    "metadatas": [[{"document_name": "doc.txt", "page_number": 1}]],
+                    "distances": [[0.25]],
+                }
+
+        monkeypatch.setattr(vector_store, "_collection", FakeCollection())
+
+        assert (
+            vector_store.search_by_embedding(
+                [0.1], top_k=3, allowed_document_ids=["doc-a", "doc-b"]
+            )[0]["chunk_id"]
+            == "c1"
+        )
+        assert captured["where"] == {"document_id": {"$in": ["doc-a", "doc-b"]}}
+
+        assert (
+            vector_store.search_by_embedding([0.1], top_k=3)[0]["chunk_id"]
+            == "c1"
+        )
+        assert captured["where"] is None
+
+        assert (
+            vector_store.search_by_embedding(
+                [0.1], top_k=3, allowed_document_ids=[]
+            )
+            == []
+        )
+        # 空筛选直接短路，不再调用 collection.query
+        assert captured["where"] is None
+
     def test_add_chunks_uses_stable_chunk_id_and_persists_position_stats(self, monkeypatch):
         from backend.models.schemas import ChunkMetadata, DocumentChunk
         from backend.services import vector_store

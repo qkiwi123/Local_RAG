@@ -76,7 +76,7 @@ def test_retrieve_reranks_all_filtered_candidates_before_document_limit(monkeypa
     ]
     calls = []
 
-    def fake_search(question, top_k):
+    def fake_search(question, top_k, allowed_document_ids=None):
         calls.append((question, top_k))
         return raw
 
@@ -108,7 +108,7 @@ def test_retrieve_reranks_all_filtered_candidates_before_document_limit(monkeypa
 def test_retrieve_without_reranker_keeps_p1_4_candidate_behavior(monkeypatch):
     calls = []
 
-    def fake_search(question, top_k):
+    def fake_search(question, top_k, allowed_document_ids=None):
         calls.append((question, top_k))
         return [_result("a", 0.20)]
 

@@ -55,7 +55,9 @@ def client(monkeypatch, isolated_data_dir):
     monkeypatch.setattr(
         chat_router,
         "retrieve_with_trace",
-        lambda question: RetrievalResponse(results=retrieval, trace=None),
+        lambda question, **kwargs: RetrievalResponse(
+            results=retrieval, trace=None
+        ),
         raising=False,
     )
     monkeypatch.setattr(
@@ -305,7 +307,7 @@ class TestChatAPI:
         monkeypatch.setattr(
             chat_router,
             "retrieve_with_trace",
-            lambda question: RetrievalResponse(
+            lambda question, **kwargs: RetrievalResponse(
                 results=retrieval,
                 trace=trace,
             ),
@@ -560,3 +562,212 @@ class TestUploadStructuredUnits:
             PARSER_VERSION,
             db_path=settings.METADATA_DB_PATH,
         ) == []
+
+
+class TestTagAPI:
+    def test_create_tag_auto_creates_parents_and_is_idempotent(self, client):
+        first = client.post(
+            "/api/tags", json={"tag_path": "课程课件/数据结构"}
+        )
+        second = client.post(
+            "/api/tags", json={"tag_path": "课程课件/数据结构"}
+        )
+
+        assert first.status_code == 200, first.text
+        assert first.json()["tag_path"] == "课程课件/数据结构"
+        assert first.json()["name"] == "数据结构"
+        assert second.json()["tag_path"] == "课程课件/数据结构"
+
+        paths = {
+            tag["tag_path"] for tag in client.get("/api/tags").json()
+        }
+        assert {"课程课件", "课程课件/数据结构"} <= paths
+
+    def test_invalid_tag_path_returns_422(self, client):
+        for bad in ("", "  ", "课程/", "/课程", "课程//结构"):
+            response = client.post("/api/tags", json={"tag_path": bad})
+            assert response.status_code == 422, bad
+
+    def test_rename_and_delete_tree(self, client):
+        client.post("/api/tags", json={"tag_path": "旧分类/子类"})
+
+        renamed = client.patch(
+            "/api/tags/旧分类", json={"new_path": "新分类"}
+        )
+        assert renamed.status_code == 200, renamed.text
+        assert {
+            tag["tag_path"] for tag in client.get("/api/tags").json()
+        } >= {"新分类", "新分类/子类"}
+
+        deleted = client.delete("/api/tags/新分类")
+        assert deleted.status_code == 200
+        assert deleted.json()["removed_tag_count"] == 2
+        assert client.get("/api/tags").json() == []
+
+    def test_missing_tag_returns_404(self, client):
+        assert client.patch(
+            "/api/tags/不存在", json={"new_path": "新"}
+        ).status_code == 404
+        assert client.delete("/api/tags/不存在").status_code == 404
+
+    def test_upload_with_tags_lists_and_counts(self, client):
+        uploaded = _upload_path(client, Path("tests/fixtures/sample.txt"))
+        assert uploaded.status_code == 200, uploaded.text
+        document_id = uploaded.json()["document_id"]
+
+        response = client.post(
+            "/api/upload",
+            files={
+                "file": (
+                    "带标签.txt",
+                    Path("tests/fixtures/sample.txt").read_bytes(),
+                    "application/octet-stream",
+                )
+            },
+            data={"tags": ["课程课件/数据结构", "规章制度"]},
+        )
+        assert response.status_code == 200, response.text
+        tagged_id = response.json()["document_id"]
+        assert tagged_id != document_id
+
+        items = {
+            item["document_id"]: item
+            for item in client.get("/api/documents").json()["document_items"]
+        }
+        assert items[tagged_id]["tags"] == ["规章制度", "课程课件/数据结构"]
+        assert items[document_id]["tags"] == []
+
+        tree = {
+            tag["tag_path"]: tag["document_count"]
+            for tag in client.get("/api/tags").json()
+        }
+        assert tree["课程课件"] == 1
+        assert tree["规章制度"] == 1
+
+    def test_upload_with_invalid_tag_returns_422(self, client):
+        response = client.post(
+            "/api/upload",
+            files={
+                "file": (
+                    "bad.txt",
+                    Path("tests/fixtures/sample.txt").read_bytes(),
+                    "application/octet-stream",
+                )
+            },
+            data={"tags": ["坏/标签/"]},
+        )
+        assert response.status_code == 422
+
+    def test_update_document_tags_replaces_and_validates(self, client):
+        uploaded = _upload_fixture(client).json()
+        document_id = uploaded["document_id"]
+
+        replaced = client.put(
+            f"/api/documents/id/{document_id}/tags",
+            json={"tags": ["新分类/子类", "另一分类"]},
+        )
+        assert replaced.status_code == 200, replaced.text
+        assert replaced.json()["tags"] == ["另一分类", "新分类/子类"]
+
+        items = {
+            item["document_id"]: item
+            for item in client.get("/api/documents").json()["document_items"]
+        }
+        assert items[document_id]["tags"] == ["另一分类", "新分类/子类"]
+
+        assert client.put(
+            f"/api/documents/id/{document_id}/tags",
+            json={"tags": ["坏/标签/"]},
+        ).status_code == 422
+        assert client.put(
+            "/api/documents/id/missing-doc/tags",
+            json={"tags": ["A"]},
+        ).status_code == 404
+
+    def test_delete_document_cascades_tag_links(self, client):
+        uploaded = client.post(
+            "/api/upload",
+            files={
+                "file": (
+                    "临时.txt",
+                    Path("tests/fixtures/sample.txt").read_bytes(),
+                    "application/octet-stream",
+                )
+            },
+            data={"tags": ["课程课件"]},
+        ).json()
+        document_id = uploaded["document_id"]
+
+        assert client.delete(
+            f"/api/documents/id/{document_id}"
+        ).status_code == 200
+
+        tree = {
+            tag["tag_path"]: tag["document_count"]
+            for tag in client.get("/api/tags").json()
+        }
+        assert tree.get("课程课件", 0) == 0
+
+    def test_chat_passes_resolved_document_filter(self, client, monkeypatch):
+        from backend.models.schemas import RetrievalResponse
+        from backend.routers import chat as chat_router
+
+        uploaded = client.post(
+            "/api/upload",
+            files={
+                "file": (
+                    "筛选.txt",
+                    Path("tests/fixtures/sample.txt").read_bytes(),
+                    "application/octet-stream",
+                )
+            },
+            data={"tags": ["课程课件/数据结构"]},
+        ).json()
+        document_id = uploaded["document_id"]
+
+        captured = {}
+        monkeypatch.setattr(
+            chat_router,
+            "retrieve_with_trace",
+            lambda question, **kwargs: captured.update(kwargs)
+            or RetrievalResponse(results=[], trace=None),
+            raising=False,
+        )
+
+        response = client.post(
+            "/api/chat",
+            json={"question": "问题", "tags": ["课程课件"]},
+        )
+
+        assert response.status_code == 200, response.text
+        assert captured["allowed_document_ids"] == [document_id]
+        assert captured["tag_filter"] == ["课程课件"]
+        assert "当前筛选范围内未找到" in response.json()["answer"]
+
+    def test_chat_without_tags_searches_everything(self, client, monkeypatch):
+        from backend.models.schemas import RetrievalResponse
+        from backend.routers import chat as chat_router
+
+        captured = {}
+        monkeypatch.setattr(
+            chat_router,
+            "retrieve_with_trace",
+            lambda question, **kwargs: captured.update(kwargs)
+            or RetrievalResponse(results=[], trace=None),
+            raising=False,
+        )
+
+        response = client.post(
+            "/api/chat", json={"question": "问题"}
+        )
+
+        assert response.status_code == 200
+        assert captured["allowed_document_ids"] is None
+        assert captured["tag_filter"] == []
+        assert "未找到与您问题相关的文档内容" in response.json()["answer"]
+
+    def test_chat_with_invalid_tag_returns_422(self, client):
+        response = client.post(
+            "/api/chat", json={"question": "问题", "tags": ["坏/标签/"]}
+        )
+        assert response.status_code == 422

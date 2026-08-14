@@ -76,6 +76,10 @@ class ChatRequest(BaseModel):
     request_id: Optional[str] = None
     expected_last_message_id: Optional[str] = None
     retry_failed: bool = False
+    tags: list[str] = Field(
+        default_factory=list,
+        description="按标签筛选检索范围（含子孙标签，多选取并集）；空列表表示全库",
+    )
 
 
 class Citation(BaseModel):
@@ -234,6 +238,14 @@ class RetrievalTrace(BaseModel):
     selected_chunk_ids: list[str] = Field(default_factory=list)
     context: RetrievalContextStats = Field(default_factory=RetrievalContextStats)
     timings_ms: RetrievalTraceTimings = Field(default_factory=RetrievalTraceTimings)
+    tag_filter: list[str] = Field(
+        default_factory=list,
+        description="本次检索生效的标签筛选；空列表表示全库",
+    )
+    filtered_document_count: Optional[int] = Field(
+        default=None,
+        description="标签筛选换算出的 ready 文档数；未过滤时为 None",
+    )
 
 
 class RetrievalResponse(BaseModel):
@@ -285,3 +297,27 @@ class ConversationMessage(BaseModel):
 
 class ConversationDetail(ConversationSummary):
     messages: list[ConversationMessage] = Field(default_factory=list)
+
+
+# ─── 多级树形标签接口 ─────────────────────────────────
+
+class TagInfo(BaseModel):
+    """单个标签节点；树形结构由前端按 tag_path 前缀组装。"""
+    tag_path: str = Field(..., description="如 '课程课件/数据结构'")
+    name: str = Field(..., description="末段名称")
+    document_count: int = Field(
+        default=0,
+        description="该标签及其子孙标签命中的 ready 文档总数",
+    )
+
+
+class TagCreate(BaseModel):
+    tag_path: str = Field(..., min_length=1)
+
+
+class TagRename(BaseModel):
+    new_path: str = Field(..., min_length=1)
+
+
+class DocumentTagsUpdate(BaseModel):
+    tags: list[str] = Field(default_factory=list, description="整体替换文档的标签集")

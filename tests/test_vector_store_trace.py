@@ -36,9 +36,22 @@ def test_search_remains_a_compatible_wrapper(monkeypatch):
     monkeypatch.setattr(
         vector_store,
         "search_by_embedding",
-        lambda embedding, top_k: [{"embedding": embedding, "top_k": top_k}],
+        lambda embedding, top_k, allowed_document_ids=None: [
+            {
+                "embedding": embedding,
+                "top_k": top_k,
+                "allowed_document_ids": allowed_document_ids,
+            }
+        ],
     )
 
     assert vector_store.search("问题", top_k=4) == [
-        {"embedding": [0.3], "top_k": 4}
+        {"embedding": [0.3], "top_k": 4, "allowed_document_ids": None}
+    ]
+    assert vector_store.search("问题", top_k=4, allowed_document_ids=["doc-1"]) == [
+        {
+            "embedding": [0.3],
+            "top_k": 4,
+            "allowed_document_ids": ["doc-1"],
+        }
     ]

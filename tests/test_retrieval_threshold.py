@@ -27,7 +27,7 @@ def test_retrieve_uses_configured_distance_threshold(monkeypatch):
     raw = [_result(0.20), _result(0.68), _result(0.90)]
     calls = []
 
-    def fake_search(question, top_k):
+    def fake_search(question, top_k, allowed_document_ids=None):
         calls.append((question, top_k))
         return raw
 
