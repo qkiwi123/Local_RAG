@@ -149,7 +149,7 @@ class FakeBackendClient:
             )
         return FakeResponse({"status": "ok"})
 
-    def post(self, url, files=None, json=None):
+    def post(self, url, files=None, json=None, data=None):
         if url.endswith("/api/upload"):
             name = files["file"][0]
             self.uploaded_names.append(name)
@@ -159,6 +159,7 @@ class FakeBackendClient:
                     "original_name": name,
                     "status": "ready",
                     "chunk_count": 1,
+                    "tags": list((data or {}).get("tags") or []),
                 }
             )
             return FakeResponse({"status": "success"})

@@ -57,6 +57,12 @@ if "conversations" not in st.session_state:
     st.session_state.conversations = []
 if "current_conversation_id" not in st.session_state:
     st.session_state.current_conversation_id = None
+if "tag_tree" not in st.session_state:
+    # [{tag_path, name, document_count}, ...]；过渡期仅用于选择器与筛选器。
+    st.session_state.tag_tree = []
+if "chat_tag_filter" not in st.session_state:
+    # 当前生效的标签筛选（路径列表）；空列表 = 全库检索。
+    st.session_state.chat_tag_filter = []
 if "_uploaded_set" not in st.session_state:
     # 只记录本次 uploader 选择中已成功入库的文件指纹；失败项必须允许重试。
     st.session_state["_uploaded_set"] = set()
@@ -69,6 +75,19 @@ if "_uploader_generation" not in st.session_state:
 
 
 # ─── 工具函数 ────────────────────────────────────────
+def refresh_tag_tree():
+    """从后端获取标签树（含文档数），供上传选择器与检索筛选器使用。"""
+    try:
+        with httpx.Client(trust_env=False, timeout=5) as client:
+            resp = client.get(f"{BACKEND_URL}/api/tags")
+        if resp.status_code == 200:
+            payload = resp.json()
+            if isinstance(payload, list):
+                st.session_state.tag_tree = payload
+    except Exception:
+        pass
+
+
 def refresh_document_list():
     """从后端获取已上传文档列表。"""
     try:
@@ -106,13 +125,16 @@ def _delete_document(document: dict):
         st.toast("删除异常: " + str(e), icon="❌")
 
 
-def upload_file(uploaded_file) -> bool:
-    """上传文件到后端。成功返回 True。"""
+def upload_file(uploaded_file, tags=None) -> bool:
+    """上传文件到后端，可附带标签列表。成功返回 True。"""
     try:
         files = {"file": (uploaded_file.name, uploaded_file.getvalue(),
                           uploaded_file.type or "application/octet-stream")}
+        data = {"tags": list(tags or [])} if tags else None
         with httpx.Client(trust_env=False, timeout=300) as client:
-            resp = client.post(f"{BACKEND_URL}/api/upload", files=files)
+            resp = client.post(
+                f"{BACKEND_URL}/api/upload", files=files, data=data
+            )
         if resp.status_code == 200:
             return True
         else:
@@ -182,8 +204,9 @@ def ask_question(
     *,
     request_id: str | None = None,
     retry_failed: bool = False,
+    tags: list[str] | None = None,
 ) -> dict | None:
-    """向后端发送持久化问题。"""
+    """向后端发送持久化问题；tags 为可选的标签筛选（空列表 = 全库）。"""
     conversation_id = st.session_state.current_conversation_id
     complete_messages = [
         message
@@ -204,6 +227,7 @@ def ask_question(
                     "request_id": request_id or uuid4().hex,
                     "expected_last_message_id": expected_last,
                     "retry_failed": retry_failed,
+                    "tags": list(tags or []),
                 },
             )
         if resp.status_code == 200:
@@ -242,6 +266,7 @@ if "_initial_load_done" not in st.session_state:
     st.session_state["_initial_load_done"] = True
     refresh_document_list()
     refresh_conversations()
+    refresh_tag_tree()
     available_ids = {
         item["conversation_id"] for item in st.session_state.conversations
     }
@@ -321,6 +346,20 @@ with st.sidebar:
 
     st.divider()
 
+    # ── 检索范围筛选（过渡期最小实现） ──
+    st.header("🔍 检索范围")
+    tag_paths = sorted(tag["tag_path"] for tag in st.session_state.tag_tree)
+    selected_filter = st.multiselect(
+        "按标签筛选（可多选，含子标签；不选 = 全库）",
+        options=tag_paths,
+        key="chat_tag_filter",
+        help="选中父级标签会自动包含其全部子标签；多个标签取并集",
+    )
+    if selected_filter:
+        st.caption("当前筛选：" + "、".join(selected_filter))
+
+    st.divider()
+
     # ── 文档上传区 ──
     st.header("📤 上传文档")
     uploaded_files = st.file_uploader(
@@ -330,6 +369,27 @@ with st.sidebar:
         help="上传后系统将自动解析、切分、向量化并存入知识库",
         key=f"document_uploader_{st.session_state['_uploader_generation']}",
     )
+
+    # 上传标签选择（过渡期最小实现：既有标签多选 + 新标签路径输入）
+    tag_paths = sorted(tag["tag_path"] for tag in st.session_state.tag_tree)
+    upload_tag_selection = st.multiselect(
+        "标签（可选，可多选；父级标签会自动创建）",
+        options=tag_paths,
+        key=f"upload_tags_{st.session_state['_uploader_generation']}",
+    )
+    new_tag_text = st.text_input(
+        "新标签路径（多个用逗号分隔；如：课程课件/数据结构）",
+        key=f"new_tags_{st.session_state['_uploader_generation']}",
+    )
+
+    def combined_upload_tags():
+        """既有标签多选 + 手动输入的新标签路径合并去重。"""
+        extra = [
+            part.strip()
+            for part in (new_tag_text or "").replace("，", ",").split(",")
+            if part.strip()
+        ]
+        return sorted(set(list(upload_tag_selection) + extra))
 
     pending = pending_uploads(
         uploaded_files or [],
@@ -383,9 +443,10 @@ with st.sidebar:
     elif attempts:
         failed_names = []
         success_count = 0
+        upload_tags = combined_upload_tags()
         with st.spinner(f"正在处理 {len(attempts)} 个文件..."):
             for upload_key, uploaded_file in attempts:
-                if upload_file(uploaded_file):
+                if upload_file(uploaded_file, tags=upload_tags):
                     st.session_state["_uploaded_set"].add(upload_key)
                     failed_uploads.pop(upload_key, None)
                     success_count += 1
@@ -395,6 +456,7 @@ with st.sidebar:
 
         if success_count:
             refresh_document_list()
+            refresh_tag_tree()
 
         if upload_selection_complete(
             uploaded_files or [],
@@ -423,6 +485,7 @@ with st.sidebar:
     st.header("📋 已上传文档")
     if st.button("🔄 刷新列表"):
         refresh_document_list()
+        refresh_tag_tree()
         st.rerun()
 
     if st.session_state.documents:
@@ -437,12 +500,16 @@ with st.sidebar:
                     detail = f"ID: {doc_id[:8]}"
                     if chunks is not None:
                         detail += f" · {chunks} chunks"
+                    doc_tags = doc.get("tags") or []
+                    if doc_tags:
+                        detail += " · 🏷 " + "、".join(doc_tags)
                     st.caption(detail)
             with col2:
                 key = doc_id or doc_name
                 if st.button("🗑️", key=f"del_{key}", help=f"删除 {doc_name}"):
                     _delete_document(doc)
                     refresh_document_list()
+                    refresh_tag_tree()
                     st.rerun()
     else:
         st.caption("（暂无文档，请先上传）")
@@ -516,7 +583,10 @@ if question := st.chat_input(
 
     with st.chat_message("assistant"):
         with st.spinner("正在思考..."):
-            result = ask_question(question)
+            result = ask_question(
+                question,
+                tags=st.session_state.chat_tag_filter,
+            )
 
         if result is None:
             st.stop()
