@@ -305,6 +305,10 @@ class TagInfo(BaseModel):
     """单个标签节点；树形结构由前端按 tag_path 前缀组装。"""
     tag_path: str = Field(..., description="如 '课程课件/数据结构'")
     name: str = Field(..., description="末段名称")
+    direct_document_count: int = Field(
+        default=0,
+        description="直接挂在该标签上的 ready 文档数",
+    )
     document_count: int = Field(
         default=0,
         description="该标签及其子孙标签命中的 ready 文档总数",

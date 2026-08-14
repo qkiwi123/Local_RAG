@@ -130,7 +130,13 @@ class FakeBackendClient:
     def __exit__(self, exc_type, exc_value, traceback):
         return False
 
+    @staticmethod
+    def _assert_absolute(url):
+        if not (url.startswith("http://") or url.startswith("https://")):
+            raise AssertionError(f"前端请求必须使用绝对 URL，收到: {url}")
+
     def get(self, url):
+        self._assert_absolute(url)
         if url.endswith("/api/documents"):
             return FakeResponse(
                 {
@@ -154,6 +160,7 @@ class FakeBackendClient:
         return FakeResponse({"status": "ok"})
 
     def post(self, url, files=None, json=None, data=None):
+        self._assert_absolute(url)
         if url.endswith("/api/tags"):
             tag_path = json["tag_path"]
             item = {
@@ -223,6 +230,7 @@ class FakeBackendClient:
         return FakeResponse(payload)
 
     def put(self, url, json=None):
+        self._assert_absolute(url)
         self.put_calls.append((url, json))
         document_id = url.rstrip("/").split("/")[-2]
         for item in self.documents:
@@ -402,6 +410,35 @@ def test_editing_existing_document_tags(monkeypatch):
     ]
     assert FakeBackendClient.documents[0]["tags"] == ["新标签"]
     assert app.session_state["_edit_tags_for"] is None
+
+
+def test_cancelling_tag_edit_closes_without_requests(monkeypatch):
+    _reset_backend()
+    FakeBackendClient.documents = [
+        {
+            "document_id": "doc-1",
+            "original_name": "doc.txt",
+            "status": "ready",
+            "chunk_count": 1,
+            "tags": ["旧标签"],
+        }
+    ]
+    monkeypatch.setattr(httpx, "Client", FakeBackendClient)
+
+    app = AppTest.from_file("frontend/app.py", default_timeout=10)
+    app.run()
+
+    next(button for button in app.button if button.label == "🏷").click()
+    app.run()
+    assert app.session_state["_edit_tags_for"] == "doc-1"
+
+    next(button for button in app.button if button.label == "取消").click()
+    app.run()
+
+    assert not app.exception
+    assert app.session_state["_edit_tags_for"] is None
+    assert FakeBackendClient.put_calls == []
+    assert FakeBackendClient.documents[0]["tags"] == ["旧标签"]
 
 
 def test_trace_panel_is_present_and_collapsed_after_chat(monkeypatch):

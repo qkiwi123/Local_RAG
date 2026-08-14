@@ -88,8 +88,24 @@ class TestCreateAndTree:
         tree = {tag["tag_path"]: tag for tag in list_tag_tree(db_path)}
 
         assert tree["课程课件/数据结构"]["document_count"] == 1
+        assert tree["课程课件/数据结构"]["direct_document_count"] == 1
         assert tree["课程课件/操作系统"]["document_count"] == 1
+        # 父标签本层没有直接文档，但子标签命中 2 篇
         assert tree["课程课件"]["document_count"] == 2
+        assert tree["课程课件"]["direct_document_count"] == 0
+
+    def test_creating_tag_never_attaches_documents(self, db_path):
+        _ready_document(db_path, "doc-1")
+        set_document_tags("doc-1", ["其他标签"], db_path)
+
+        create_tag("课程课件", db_path)
+        create_tag("课程课件/数据结构", db_path)
+
+        tree = {tag["tag_path"]: tag for tag in list_tag_tree(db_path)}
+        assert tree["课程课件"]["direct_document_count"] == 0
+        assert tree["课程课件"]["document_count"] == 0
+        assert tree["课程课件/数据结构"]["document_count"] == 0
+        assert get_document_tags("doc-1", db_path) == ["其他标签"]
 
     def test_tree_ignores_failed_documents(self, db_path):
         create_document("doc-1", "坏.pdf", "doc-1.pdf", 1, db_path=db_path)

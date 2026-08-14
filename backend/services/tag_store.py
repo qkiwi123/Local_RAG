@@ -88,10 +88,12 @@ def create_tag(tag_path: str, db_path: Optional[str] = None) -> dict:
 
 
 def list_tag_tree(db_path: Optional[str] = None) -> list[dict]:
-    """返回全部标签及子树文档数（仅统计 ready 文档）。
+    """返回全部标签及两层文档计数（仅统计 ready 文档）。
 
-    每个元素为 {tag_path, name, document_count}；document_count 是该标签及其
-    全部子孙标签直接命中的 ready 文档总数（即选中该标签可检索到的文档数）。
+    每个元素为 {tag_path, name, direct_document_count, document_count}：
+    - direct_document_count：直接挂在该标签上的文档数；
+    - document_count：该标签及其全部子孙标签命中的文档总数（即选中该标签
+      可检索到的文档数）。
     树形结构由前端按 tag_path 前缀组装。
     """
     _ensure_schema(db_path)
@@ -115,6 +117,7 @@ def list_tag_tree(db_path: Optional[str] = None) -> list[dict]:
     for tag in tags:
         path = tag["tag_path"]
         prefix = path + "/"
+        tag["direct_document_count"] = counts.get(path, 0)
         tag["document_count"] = sum(
             count
             for tag_path, count in counts.items()

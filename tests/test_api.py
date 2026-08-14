@@ -638,11 +638,13 @@ class TestTagAPI:
         assert items[document_id]["tags"] == []
 
         tree = {
-            tag["tag_path"]: tag["document_count"]
+            tag["tag_path"]: tag
             for tag in client.get("/api/tags").json()
         }
-        assert tree["课程课件"] == 1
-        assert tree["规章制度"] == 1
+        assert tree["课程课件"]["document_count"] == 1
+        assert tree["课程课件"]["direct_document_count"] == 0
+        assert tree["规章制度"]["document_count"] == 1
+        assert tree["规章制度"]["direct_document_count"] == 1
 
     def test_upload_with_invalid_tag_returns_422(self, client):
         response = client.post(

@@ -267,7 +267,9 @@ def create_tag_and_select(raw_path: str) -> None:
         return
     try:
         with httpx.Client(trust_env=False, timeout=10) as client:
-            resp = client.post("/api/tags", json={"tag_path": cleaned})
+            resp = client.post(
+                f"{BACKEND_URL}/api/tags", json={"tag_path": cleaned}
+            )
         if resp.status_code == 200:
             created = resp.json()["tag_path"]
             selection = list(st.session_state["upload_tag_selection"])
@@ -443,9 +445,14 @@ with st.sidebar:
             for tag in sorted(
                 st.session_state.tag_tree, key=lambda item: item["tag_path"]
             ):
-                st.caption(
-                    f"{tag['tag_path']}（{tag['document_count']} 文档）"
-                )
+                direct = tag.get("direct_document_count", 0)
+                subtree = tag.get("document_count", 0)
+                if subtree == direct:
+                    st.caption(f"{tag['tag_path']}（{subtree} 文档）")
+                else:
+                    st.caption(
+                        f"{tag['tag_path']}（本层 {direct} · 含子级 {subtree}）"
+                    )
         else:
             st.caption("（暂无标签，可在此新建空标签）")
 
@@ -556,7 +563,7 @@ with st.sidebar:
                         key=select_key,
                     )
                     new_text = st.text_input(
-                        "新标签（多个用逗号分隔）",
+                        "新标签（多个用逗号分隔，保存后会挂到当前文档）",
                         key=f"edit_tags_new_{key}",
                     )
                     merged = sorted(
