@@ -122,6 +122,25 @@ class Settings:
         "EMBEDDING_QUERY_INSTRUCTION", ""
     )
 
+    # ─── 视觉 / OCR（多模态模型 API，独立于问答 LLM） ───
+    # MiMo 官方开放平台等 OpenAI 兼容端点；关闭总开关时完全不加载、不调用。
+    VISION_API_KEY: str = os.getenv("VISION_API_KEY", "")
+    VISION_BASE_URL: str = os.getenv("VISION_BASE_URL", "")
+    VISION_MODEL: str = os.getenv("VISION_MODEL", "mimo-v2.5")
+    OCR_ENABLED: bool = _env_bool("OCR_ENABLED", False)
+    # A 层：无文本 PDF 页整页 OCR。
+    OCR_PDF_SCANNED: bool = _env_bool("OCR_PDF_SCANNED", False)
+    # B 层：有文本但含图片/图表的 PDF 页整页描述。
+    OCR_PDF_PAGE_IMAGES: bool = _env_bool("OCR_PDF_PAGE_IMAGES", False)
+    # C 层：DOCX/PPTX 内嵌图片识别。
+    OCR_EMBEDDED_IMAGES: bool = _env_bool("OCR_EMBEDDED_IMAGES", False)
+    OCR_MAX_IMAGE_EDGE: int = int(os.getenv("OCR_MAX_IMAGE_EDGE", "1600"))
+    OCR_MAX_PER_DOCUMENT: int = int(os.getenv("OCR_MAX_PER_DOCUMENT", "20"))
+    OCR_TIMEOUT_SECONDS: float = float(os.getenv("OCR_TIMEOUT_SECONDS", "60"))
+    VISION_CACHE_DIR: str = os.getenv(
+        "VISION_CACHE_DIR", str(BASE_DIR / "data" / "vision_cache")
+    )
+
     def __init__(self):
         """初始化时校验必填项。"""
         self._validate()
@@ -162,6 +181,18 @@ class Settings:
             raise ValueError("RERANKER_MAX_LENGTH 必须大于 0")
         if self.CITATION_PREVIEW_MAX_PAGE_CHARS <= 0:
             raise ValueError("CITATION_PREVIEW_MAX_PAGE_CHARS 必须大于 0")
+        if self.OCR_MAX_IMAGE_EDGE <= 0:
+            raise ValueError("OCR_MAX_IMAGE_EDGE 必须大于 0")
+        if self.OCR_MAX_PER_DOCUMENT <= 0:
+            raise ValueError("OCR_MAX_PER_DOCUMENT 必须大于 0")
+        if self.OCR_TIMEOUT_SECONDS <= 0:
+            raise ValueError("OCR_TIMEOUT_SECONDS 必须大于 0")
+        if self.OCR_ENABLED and (
+            not self.VISION_API_KEY or not self.VISION_BASE_URL
+        ):
+            raise ValueError(
+                "OCR_ENABLED=true 时必须配置 VISION_API_KEY 与 VISION_BASE_URL"
+            )
         # 确保持久化目录存在
         Path(self.UPLOAD_DIR).mkdir(parents=True, exist_ok=True)
         Path(self.CHROMA_PERSIST_DIR).mkdir(parents=True, exist_ok=True)

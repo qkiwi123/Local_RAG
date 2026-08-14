@@ -21,6 +21,9 @@ PyPDF2==3.0.1
 python-docx==1.1.2
 markdown-it-py==4.0.0
 python-pptx==1.0.2
+# PDF 页渲染（OCR 用，BSD/Apache 许可）与图像处理
+pypdfium2==5.13.0
+Pillow==12.3.0
 
 # LLM API
 openai==2.45.0
