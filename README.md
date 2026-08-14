@@ -143,8 +143,18 @@ chunk 规则变化后，应使用 `scripts/rebuild_index.py` 在独立目录安�
 - 前端：http://localhost:8501
 - API 文档：http://localhost:8000/docs
 
-`start.ps1` 使用独立隐藏进程，并在后端健康检查通过后再启动前端。停止服务时优先使用
-启动输出中的 Backend/Frontend PID：
+`start.ps1` 使用独立隐藏进程，并在后端健康检查通过后再启动前端；启动成功后会记录 PID，
+再次启动前检测到服务仍在运行会拒绝执行（防双开）。一键停止服务：
+
+```powershell
+.\scripts\stop.ps1
+# 或等价地：
+.\scripts\start.ps1 -Stop
+```
+
+`stop.ps1` 会校验记录中的进程启动时间（防止 PID 被复用后误杀），并用 `taskkill /T /F`
+终止整个进程树（覆盖 `-Reload` 模式下 Uvicorn 的子进程）。服务异常退出或手动结束后，
+启动输出中的 Backend/Frontend PID 仍可作为兜底手段：
 
 ```powershell
 Stop-Process -Id <Backend PID>,<Frontend PID>
