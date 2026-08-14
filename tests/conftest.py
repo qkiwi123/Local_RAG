@@ -34,6 +34,8 @@ os.environ["OCR_EMBEDDED_IMAGES"] = "false"
 os.environ["VISION_API_KEY"] = ""
 os.environ["VISION_BASE_URL"] = ""
 os.environ["VISION_CACHE_DIR"] = str(_TEST_ROOT / "vision_cache")
+# 测试进程内不做模型预热，避免与集成测试争抢资源；预热逻辑单独测试。
+os.environ["PREWARM_MODELS"] = "false"
 
 
 def pytest_addoption(parser):

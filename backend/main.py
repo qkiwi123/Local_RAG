@@ -45,16 +45,18 @@ async def root():
 
 @app.on_event("startup")
 async def startup_event():
-    """启动前校验或创建 structured-v1 metadata schema。"""
+    """启动前校验或创建 metadata schema，并后台预热本地模型。"""
     from backend.config import settings
     from backend.services.metadata_schema import bootstrap_structured_database
     from backend.services.conversation_store import recover_interrupted_requests
+    from backend.services.warmup import start_background_warmup
 
     bootstrap_structured_database(
         settings.METADATA_DB_PATH,
         created_at=datetime.now(timezone.utc).isoformat(timespec="seconds"),
     )
     recover_interrupted_requests()
+    start_background_warmup()
     print(f"[启动] RAG Knowledge Base API v0.1.0")
     print(f"[启动] Embedding 模型: {settings.EMBEDDING_MODEL}")
     print(f"[启动] LLM 模型: {settings.DEEPSEEK_MODEL}")
