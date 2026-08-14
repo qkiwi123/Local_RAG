@@ -1,4 +1,4 @@
-"""从 structured-v1 SQLite 登记的 ready 文档安全重建独立 Chroma 索引。"""
+"""从结构化 SQLite 登记的 ready 文档安全重建独立 Chroma 索引。"""
 
 from __future__ import annotations
 
@@ -86,7 +86,7 @@ def _validate_chunks_against_units(
         if unit.canonical_text[start:end] != chunk.content:
             raise ValueError("chunk 与 unit canonical_text 切片不一致")
         if metadata.chunk_id != f"{unit.unit_id}_s{start}_e{end}":
-            raise ValueError("chunk_id 不符合 structured-v1 稳定位置规则")
+            raise ValueError("chunk_id 不符合结构化稳定位置规则")
 
 
 def prepare_documents(
@@ -102,7 +102,7 @@ def prepare_documents(
     token_counter: Callable[[str], int] | None = None,
     enforce_registered_counts: bool = True,
 ) -> list[PreparedDocument]:
-    """重新解析 ready 文档，并在写入前验证 structured-v1 强不变量。"""
+    """重新解析 ready 文档，并在写入前验证结构化强不变量。"""
     records = list(records)
     upload_dir = Path(upload_dir)
     missing = [
@@ -241,7 +241,7 @@ def _checked_write_document_units(
     expected_dimension: int,
     _fake_collection: Any | None = None,
 ) -> None:
-    """仅在目标 Chroma 全量校验成功后替换 structured-v1 来源单元。"""
+    """仅在目标 Chroma 全量校验成功后替换结构化来源单元。"""
     if _fake_collection is not None:
         verify_collection(
             _fake_collection,
@@ -264,7 +264,7 @@ def _checked_write_document_units(
 
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="从 structured-v1 SQLite ready 文档重建独立 Chroma 索引。"
+        description="从结构化 SQLite ready 文档重建独立 Chroma 索引。"
     )
     parser.add_argument("--target-dir", required=True, help="新 Chroma 索引目录")
     parser.add_argument("--source-index-dir", help="源索引目录；默认读取 .env")

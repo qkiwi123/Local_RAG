@@ -17,6 +17,7 @@ def client(monkeypatch, isolated_data_dir):
     from backend.routers import chat as chat_router
     from backend.routers import upload as upload_router
     from backend.main import app
+    from backend.services.parsers import PARSER_VERSION
 
     db_path = Path(settings.METADATA_DB_PATH)
     if db_path.exists():
@@ -44,7 +45,7 @@ def client(monkeypatch, isolated_data_dir):
                 "page_number": 1,
                 "heading_path": "[]",
                 "chunk_index": 0,
-                "parser_version": "structured-v1",
+                "parser_version": PARSER_VERSION,
                 "content_type": "paragraph",
                 "start_char": 0,
                 "end_char": 49,
@@ -212,6 +213,8 @@ class TestUploadAPI:
 
 class TestChatAPI:
     def test_chat_uses_mocked_llm_and_returns_grounded_citation(self, client):
+        from backend.services.parsers import PARSER_VERSION
+
         response = client.post(
             "/api/chat",
             json={"question": "How many days of annual leave do employees get?"},
@@ -234,7 +237,7 @@ class TestChatAPI:
                 "heading_path": [],
                 "excerpt": "Employees receive 5 days of annual leave.",
                 "document_id": "doc-1",
-                "parser_version": "structured-v1",
+                "parser_version": PARSER_VERSION,
                 "content_type": "paragraph",
                 "start_char": 0,
                 "end_char": 49,
@@ -257,6 +260,7 @@ class TestChatAPI:
             RetrievalTraceStage,
         )
         from backend.routers import chat as chat_router
+        from backend.services.parsers import PARSER_VERSION
 
         retrieval = [
             {
@@ -271,7 +275,7 @@ class TestChatAPI:
                     "location_label": "第 1 页",
                     "page_number": 1,
                     "heading_path": "[]",
-                    "parser_version": "structured-v1",
+                    "parser_version": PARSER_VERSION,
                     "start_char": 0,
                     "end_char": 49,
                 },
@@ -452,6 +456,7 @@ class TestStructuredCitationPreviewAPI:
         from backend.config import settings
         from backend.routers import upload as upload_router
         from backend.services import structured_citation_preview
+        from backend.services.parsers import PARSER_VERSION
 
         captured_chunks = []
 
@@ -484,7 +489,7 @@ class TestStructuredCitationPreviewAPI:
 
         assert response.status_code == 200, response.text
         payload = response.json()
-        assert payload["parser_version"] == "structured-v1"
+        assert payload["parser_version"] == PARSER_VERSION
         assert payload["location"]["kind"] == "section"
         assert payload["target_unit_id"]
         assert payload["units"]
