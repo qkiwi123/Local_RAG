@@ -123,10 +123,11 @@ class Settings:
     )
 
     # ─── 视觉 / OCR（多模态模型 API，独立于问答 LLM） ───
-    # MiMo 官方开放平台等 OpenAI 兼容端点；关闭总开关时完全不加载、不调用。
+    # 智谱 GLM-4.6V-Flash 等 OpenAI 兼容端点；密钥一律放 .env，
+    # 关闭总开关时完全不加载、不调用。
     VISION_API_KEY: str = os.getenv("VISION_API_KEY", "")
     VISION_BASE_URL: str = os.getenv("VISION_BASE_URL", "")
-    VISION_MODEL: str = os.getenv("VISION_MODEL", "mimo-v2.5")
+    VISION_MODEL: str = os.getenv("VISION_MODEL", "glm-4.6v-flash")
     OCR_ENABLED: bool = _env_bool("OCR_ENABLED", False)
     # A 层：无文本 PDF 页整页 OCR。
     OCR_PDF_SCANNED: bool = _env_bool("OCR_PDF_SCANNED", False)
