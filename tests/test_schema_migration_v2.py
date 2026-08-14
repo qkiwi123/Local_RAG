@@ -213,3 +213,88 @@ def test_incomplete_v1_database_is_rejected_without_migration(temp_dir):
 
     with pytest.raises(UnsupportedSchemaError, match="不完整"):
         bootstrap_structured_database(db_path, created_at=CREATED_AT)
+
+
+_V2_EXTRA_TABLES = {
+    "tags": """
+        CREATE TABLE tags (
+            tag_path TEXT PRIMARY KEY,
+            name TEXT NOT NULL,
+            created_at TEXT NOT NULL
+        )
+    """,
+    "document_tags": """
+        CREATE TABLE document_tags (
+            document_id TEXT NOT NULL,
+            tag_path TEXT NOT NULL,
+            PRIMARY KEY (document_id, tag_path),
+            FOREIGN KEY (document_id)
+                REFERENCES documents(document_id) ON DELETE CASCADE,
+            FOREIGN KEY (tag_path)
+                REFERENCES tags(tag_path) ON DELETE CASCADE
+        )
+    """,
+}
+
+
+def _create_v2_database(db_path: str) -> None:
+    """按 v2 schema 建库并写入会话数据，模拟升级前的生产库。"""
+    _create_v1_database(db_path)
+    connection = sqlite3.connect(db_path)
+    try:
+        for schema in _V2_EXTRA_TABLES.values():
+            connection.execute(schema)
+        connection.execute(
+            "UPDATE schema_meta SET schema_version = 2 WHERE schema_version = 1"
+        )
+        connection.execute(
+            """
+            INSERT INTO conversations (conversation_id, title, created_at, updated_at)
+            VALUES ('conv-1', '旧会话', ?, ?)
+            """,
+            (CREATED_AT, CREATED_AT),
+        )
+        connection.commit()
+    finally:
+        connection.close()
+
+
+def test_bootstrap_migrates_v2_to_v3_and_preserves_rows(temp_dir):
+    db_path = f"{temp_dir}/metadata.db"
+    _create_v2_database(db_path)
+
+    bootstrap_structured_database(db_path, created_at="new timestamp")
+
+    connection = sqlite3.connect(db_path)
+    try:
+        assert connection.execute(
+            "SELECT schema_version FROM schema_meta"
+        ).fetchone()[0] == SCHEMA_VERSION
+        assert connection.execute(
+            "SELECT title FROM conversations WHERE conversation_id = 'conv-1'"
+        ).fetchone()[0] == "旧会话"
+        tables = {
+            row[0]
+            for row in connection.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'"
+            )
+        }
+        assert "message_traces" in tables
+    finally:
+        connection.close()
+
+
+def test_v2_migration_is_idempotent(temp_dir):
+    db_path = f"{temp_dir}/metadata.db"
+    _create_v2_database(db_path)
+
+    bootstrap_structured_database(db_path, created_at=CREATED_AT)
+    bootstrap_structured_database(db_path, created_at="later")
+
+    connection = sqlite3.connect(db_path)
+    try:
+        assert connection.execute(
+            "SELECT schema_version FROM schema_meta"
+        ).fetchone()[0] == SCHEMA_VERSION
+    finally:
+        connection.close()

@@ -426,6 +426,107 @@ class TestPersistentConversationAPI:
         assert response.status_code == 409
         assert response.json()["detail"]["code"] == "conversation_conflict"
 
+    def test_persistent_chat_saves_trace_and_restores_on_reload(
+        self, client, monkeypatch
+    ):
+        from backend.models.schemas import (
+            RetrievalResponse,
+            RetrievalTrace,
+            RetrievalTraceCandidate,
+            RetrievalTraceChunk,
+            RetrievalTraceStage,
+        )
+        from backend.routers import chat as chat_router
+        from backend.services.parsers import PARSER_VERSION
+
+        trace = RetrievalTrace(
+            retrieval_mode="dense",
+            reranker_enabled=False,
+            chunks={
+                "c1": RetrievalTraceChunk(
+                    chunk_id="c1",
+                    document_name="handbook.pdf",
+                    page_number=1,
+                    content="Employees receive 5 days of annual leave.",
+                )
+            },
+            stages=[
+                RetrievalTraceStage(
+                    name="dense",
+                    candidates=[
+                        RetrievalTraceCandidate(
+                            chunk_id="c1", rank=1, distance=0.2, selected=True
+                        )
+                    ],
+                )
+            ],
+            selected_chunk_ids=["c1"],
+        )
+        retrieval = [
+            {
+                "chunk_id": "c1",
+                "content": "Employees receive 5 days of annual leave.",
+                "metadata": {
+                    "document_id": "doc-1",
+                    "document_name": "handbook.pdf",
+                    "unit_id": "unit-1",
+                    "unit_index": 0,
+                    "locator_kind": "page",
+                    "location_label": "第 1 页",
+                    "page_number": 1,
+                    "heading_path": "[]",
+                    "parser_version": PARSER_VERSION,
+                    "start_char": 0,
+                    "end_char": 49,
+                },
+                "distance": 0.2,
+            }
+        ]
+        monkeypatch.setattr(
+            chat_router,
+            "retrieve_with_trace",
+            lambda question, **kwargs: RetrievalResponse(
+                results=retrieval, trace=trace
+            ),
+            raising=False,
+        )
+        monkeypatch.setattr(
+            chat_router,
+            "ask_with_history",
+            lambda question, standalone, context, history: "回答【来源1】",
+        )
+
+        conversation_id = client.post("/api/conversations", json={}).json()[
+            "conversation_id"
+        ]
+        payload = {
+            "question": "annual leave?",
+            "conversation_id": conversation_id,
+            "request_id": "request-trace-1",
+            "expected_last_message_id": None,
+        }
+        first = client.post("/api/chat", json=payload)
+        assert first.status_code == 200, first.text
+        assert first.json()["trace"]["retrieval_mode"] == "dense"
+
+        detail = client.get(f"/api/conversations/{conversation_id}").json()
+        assistant = detail["messages"][1]
+        assert assistant["trace"]["retrieval_mode"] == "dense"
+
+        replay = client.post("/api/chat", json=payload)
+        assert replay.status_code == 200
+        assert replay.json()["trace"]["retrieval_mode"] == "dense"
+
+        deleted = client.delete(f"/api/conversations/{conversation_id}")
+        assert deleted.status_code == 200
+        from backend.services.conversation_store import load_trace
+        from backend.config import settings as app_settings
+
+        assert load_trace(
+            assistant["message_id"],
+            db_path=app_settings.METADATA_DB_PATH,
+        ) is None
+
     def test_conversation_crud_and_cascade_delete(self, client):
         created = client.post(
             "/api/conversations",

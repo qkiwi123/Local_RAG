@@ -42,6 +42,7 @@ def test_empty_database_bootstraps_complete_versioned_schema(temp_dir):
         "chat_requests",
         "tags",
         "document_tags",
+        "message_traces",
     }
     connection = sqlite3.connect(db_path)
     try:

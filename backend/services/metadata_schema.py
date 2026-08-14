@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Optional
 
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 SCHEMA_META = """
 CREATE TABLE schema_meta (
@@ -115,6 +115,19 @@ CREATE TABLE document_tags (
 )
 """
 
+# v3：检索 Trace 持久化。绑定助手消息，随会话删除级联清理；
+# 总量由 TRACE_STORAGE_MAX_BYTES 限制，超限按创建时间淘汰最旧记录。
+MESSAGE_TRACES_SCHEMA = """
+CREATE TABLE message_traces (
+    message_id TEXT PRIMARY KEY,
+    trace_json TEXT NOT NULL,
+    size_bytes INTEGER NOT NULL,
+    created_at TEXT NOT NULL,
+    FOREIGN KEY (message_id)
+        REFERENCES messages(message_id) ON DELETE CASCADE
+)
+"""
+
 _SCHEMAS = (
     SCHEMA_META,
     DOCUMENTS_SCHEMA,
@@ -124,6 +137,7 @@ _SCHEMAS = (
     CHAT_REQUESTS_SCHEMA,
     TAGS_SCHEMA,
     DOCUMENT_TAGS_SCHEMA,
+    MESSAGE_TRACES_SCHEMA,
 )
 _REQUIRED_TABLES = {
     "schema_meta",
@@ -134,6 +148,7 @@ _REQUIRED_TABLES = {
     "chat_requests",
     "tags",
     "document_tags",
+    "message_traces",
 }
 _V1_REQUIRED_TABLES = {
     "schema_meta",
@@ -142,6 +157,16 @@ _V1_REQUIRED_TABLES = {
     "conversations",
     "messages",
     "chat_requests",
+}
+_V2_REQUIRED_TABLES = {
+    "schema_meta",
+    "documents",
+    "document_units",
+    "conversations",
+    "messages",
+    "chat_requests",
+    "tags",
+    "document_tags",
 }
 
 
@@ -179,6 +204,8 @@ def _read_schema_version(connection: sqlite3.Connection) -> int:
 def _required_tables_for(version: int) -> set[str]:
     if version == 1:
         return _V1_REQUIRED_TABLES
+    if version == 2:
+        return _V2_REQUIRED_TABLES
     if version == SCHEMA_VERSION:
         return _REQUIRED_TABLES
     raise UnsupportedSchemaError(
@@ -193,6 +220,12 @@ def _apply_migration(connection: sqlite3.Connection, from_version: int) -> None:
         connection.execute(DOCUMENT_TAGS_SCHEMA)
         connection.execute(
             "UPDATE schema_meta SET schema_version = 2 WHERE schema_version = 1"
+        )
+        return
+    if from_version == 2:
+        connection.execute(MESSAGE_TRACES_SCHEMA)
+        connection.execute(
+            "UPDATE schema_meta SET schema_version = 3 WHERE schema_version = 2"
         )
         return
     raise UnsupportedSchemaError(

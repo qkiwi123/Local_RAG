@@ -56,6 +56,62 @@ def _decode_message(row) -> dict:
     return item
 
 
+def save_trace(
+    message_id: str,
+    trace: dict,
+    *,
+    db_path=None,
+) -> None:
+    """保存检索 Trace；总量超过上限时按创建时间淘汰最旧记录（LRU）。
+
+    trace 为已序列化的 RetrievalTrace 字典；由调用方保证消息已 complete。
+    """
+    raw = json.dumps(trace, ensure_ascii=False, separators=(",", ":"))
+    size = len(raw.encode("utf-8"))
+    with _connection(_db_path(db_path)) as connection:
+        connection.execute(
+            """
+            INSERT INTO message_traces (message_id, trace_json, size_bytes, created_at)
+            VALUES (?, ?, ?, ?)
+            ON CONFLICT(message_id) DO UPDATE SET
+                trace_json = excluded.trace_json,
+                size_bytes = excluded.size_bytes,
+                created_at = excluded.created_at
+            """,
+            (message_id, raw, size, _now()),
+        )
+        while True:
+            total = connection.execute(
+                "SELECT coalesce(sum(size_bytes), 0) FROM message_traces"
+            ).fetchone()[0]
+            if total <= settings.TRACE_STORAGE_MAX_BYTES:
+                break
+            connection.execute(
+                """
+                DELETE FROM message_traces
+                WHERE message_id = (
+                    SELECT message_id FROM message_traces
+                    ORDER BY created_at ASC, message_id ASC
+                    LIMIT 1
+                )
+                """
+            )
+
+
+def load_trace(message_id: str, *, db_path=None) -> dict | None:
+    with _connection(_db_path(db_path)) as connection:
+        row = connection.execute(
+            "SELECT trace_json FROM message_traces WHERE message_id = ?",
+            (message_id,),
+        ).fetchone()
+    if not row:
+        return None
+    try:
+        return json.loads(row["trace_json"])
+    except ValueError:
+        return None
+
+
 def get_conversation(conversation_id: str, *, db_path=None) -> dict | None:
     with _connection(_db_path(db_path)) as connection:
         row = connection.execute(
@@ -72,8 +128,31 @@ def get_conversation(conversation_id: str, *, db_path=None) -> dict | None:
             """,
             (conversation_id,),
         ).fetchall()
+        trace_rows = connection.execute(
+            """
+            SELECT message_id, trace_json FROM message_traces
+            WHERE message_id IN (
+                SELECT message_id FROM messages WHERE conversation_id = ?
+            )
+            """,
+            (conversation_id,),
+        ).fetchall()
+    traces = {
+        trace_row["message_id"]: trace_row["trace_json"]
+        for trace_row in trace_rows
+    }
     result = dict(row)
-    result["messages"] = [_decode_message(item) for item in messages]
+    decoded = []
+    for item in messages:
+        message = _decode_message(item)
+        if message["role"] == "assistant":
+            raw_trace = traces.get(message["message_id"])
+            try:
+                message["trace"] = json.loads(raw_trace) if raw_trace else None
+            except ValueError:
+                message["trace"] = None
+        decoded.append(message)
+    result["messages"] = decoded
     return result
 
 
@@ -112,6 +191,16 @@ def _saved_response(connection, request_id: str) -> dict:
     user = next(row for row in rows if row["role"] == "user")
     assistant = next(row for row in rows if row["role"] == "assistant")
     citations = json.loads(assistant["citations_json"] or "[]")
+    trace_row = connection.execute(
+        "SELECT trace_json FROM message_traces WHERE message_id = ?",
+        (assistant["message_id"],),
+    ).fetchone()
+    trace = None
+    if trace_row:
+        try:
+            trace = json.loads(trace_row["trace_json"])
+        except ValueError:
+            trace = None
     return {
         "conversation_id": user["conversation_id"],
         "user_message_id": user["message_id"],
@@ -119,6 +208,7 @@ def _saved_response(connection, request_id: str) -> dict:
         "standalone_question": user["standalone_question"] or user["content"],
         "answer": assistant["content"],
         "citations": citations,
+        "trace": trace,
     }
 
 

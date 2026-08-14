@@ -26,6 +26,7 @@ from backend.services.conversation_store import (
     complete_chat,
     complete_history,
     fail_chat,
+    save_trace,
 )
 from backend.services.tag_store import (
     TagValidationError,
@@ -44,6 +45,24 @@ def _normalize_tag_filter(tags: list[str]) -> list[str]:
         return sorted({normalize_tag_path(tag) for tag in tags})
     except TagValidationError as error:
         raise HTTPException(status_code=422, detail=str(error)) from error
+
+
+def save_persistent_trace(response_fields: dict, trace) -> None:
+    """把 Trace 持久化到助手消息；失败只告警，不影响回答结果。"""
+    assistant_message_id = response_fields.get("assistant_message_id")
+    if not assistant_message_id or trace is None:
+        return
+    try:
+        save_trace(
+            assistant_message_id,
+            trace.model_dump(mode="json"),
+        )
+    except Exception as error:
+        logger.warning(
+            "Trace persist failed: message_id=%s error=%s",
+            assistant_message_id,
+            type(error).__name__,
+        )
 
 
 @router.post("/chat", response_model=ChatResponse)
@@ -92,7 +111,9 @@ async def chat(request: ChatRequest):
                 detail={"code": error.code, "message": str(error)},
             ) from error
         if "replay" in started:
-            return ChatResponse(**started["replay"], trace=None)
+            replay = started["replay"]
+            persisted_trace = replay.pop("trace", None)
+            return ChatResponse(**replay, trace=persisted_trace)
         user_message_id = started["user_message_id"]
         history_rows = complete_history(request.conversation_id)
         if history_rows:
@@ -149,6 +170,7 @@ async def chat(request: ChatRequest):
                     answer=answer,
                     citations=[],
                 )
+                save_persistent_trace(response_fields, trace)
             except Exception as error:
                 fail_chat(request.request_id, "persistence_error")
                 raise HTTPException(
@@ -212,6 +234,7 @@ async def chat(request: ChatRequest):
                 answer=answer,
                 citations=citations,
             )
+            save_persistent_trace(response_fields, trace)
         except Exception as error:
             fail_chat(request.request_id, "persistence_error")
             raise HTTPException(status_code=500, detail="对话保存失败") from error

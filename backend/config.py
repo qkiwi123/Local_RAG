@@ -142,6 +142,15 @@ class Settings:
         "VISION_CACHE_DIR", str(BASE_DIR / "data" / "vision_cache")
     )
 
+    # ─── Trace 持久化与模型预热 ────────────────────────
+    # Trace 仅在 RETRIEVAL_TRACE_ENABLED=true 时计算并持久化；总量超过
+    # 上限时按创建时间淘汰最旧记录（LRU）。会话删除时级联清理。
+    TRACE_STORAGE_MAX_BYTES: int = int(
+        os.getenv("TRACE_STORAGE_MAX_BYTES", str(50 * 1024 * 1024))
+    )
+    # 服务启动后后台预热 Embedding/Reranker，把冷启动成本挪到启动期。
+    PREWARM_MODELS: bool = _env_bool("PREWARM_MODELS", True)
+
     def __init__(self):
         """初始化时校验必填项。"""
         self._validate()
@@ -194,6 +203,8 @@ class Settings:
             raise ValueError(
                 "OCR_ENABLED=true 时必须配置 VISION_API_KEY 与 VISION_BASE_URL"
             )
+        if self.TRACE_STORAGE_MAX_BYTES <= 0:
+            raise ValueError("TRACE_STORAGE_MAX_BYTES 必须大于 0")
         # 确保持久化目录存在
         Path(self.UPLOAD_DIR).mkdir(parents=True, exist_ok=True)
         Path(self.CHROMA_PERSIST_DIR).mkdir(parents=True, exist_ok=True)

@@ -292,6 +292,10 @@ class ConversationMessage(BaseModel):
     status: str
     standalone_question: Optional[str] = None
     citations: list[Citation] = Field(default_factory=list)
+    trace: Optional[RetrievalTrace] = Field(
+        default=None,
+        description="助手消息的持久化检索 Trace；未开启或已淘汰时为 null",
+    )
     created_at: str
 
 
