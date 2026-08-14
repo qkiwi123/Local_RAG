@@ -1,8 +1,11 @@
+import pytest
 from docx import Document
 
+from backend.config import settings
 from backend.services.parsers import PARSER_VERSION
 from backend.services.parsers.docx import (
     PARAGRAPHS_PER_VIRTUAL_PAGE,
+    parse_docx_document,
     parse_docx_units,
 )
 
@@ -113,4 +116,95 @@ def test_docx_ids_are_deterministic(tmp_path):
     ] == [
         [block.block_id for block in unit.blocks]
         for unit in second
+    ]
+
+
+# ─── C 层：内嵌图片识别（mock 视觉调用） ───────────────────────────
+
+def _image_docx(path):
+    """生成含「文字段落 + 内嵌图片」的 DOCX fixture。"""
+    from io import BytesIO
+
+    from PIL import Image
+
+    image = Image.new("RGB", (60, 60), (0, 0, 255))
+    buffer = BytesIO()
+    image.save(buffer, format="JPEG")
+    buffer.seek(0)
+
+    document = Document()
+    document.add_paragraph("图片前面的段落。")
+    document.add_picture(buffer, width=2 * 914400 // 1440)
+    document.add_paragraph("图片后面的段落。")
+    document.save(path)
+    return path
+
+
+@pytest.fixture
+def embedded_ocr_enabled(monkeypatch, temp_dir):
+    monkeypatch.setattr(settings, "OCR_ENABLED", True)
+    monkeypatch.setattr(settings, "OCR_EMBEDDED_IMAGES", True)
+    monkeypatch.setattr(settings, "VISION_CACHE_DIR", f"{temp_dir}/vision_cache")
+
+
+def test_docx_embedded_image_inserts_ocr_block_in_place(
+    tmp_path, monkeypatch, embedded_ocr_enabled
+):
+    from backend.services.parsers import docx as docx_adapter
+
+    source = _image_docx(tmp_path / "with-image.docx")
+    monkeypatch.setattr(
+        docx_adapter, "recognize_text", lambda blob: "图片中的文字"
+    )
+
+    result = parse_docx_document(str(source), document_id="doc-img")
+
+    assert result.warnings == []
+    assert [block.text for block in result.units[0].blocks] == [
+        "图片前面的段落。",
+        "图片中的文字",
+        "图片后面的段落。",
+    ]
+    ocr_block = result.units[0].blocks[1]
+    assert ocr_block.attributes == {
+        "ocr": True,
+        "vision_model": settings.VISION_MODEL,
+        "vision_kind": "embedded_image",
+    }
+
+
+def test_docx_embedded_ocr_disabled_skips_images(tmp_path):
+    source = _image_docx(tmp_path / "with-image.docx")
+
+    result = parse_docx_document(str(source), document_id="doc-off")
+
+    assert result.warnings == []
+    assert [block.text for block in result.units[0].blocks] == [
+        "图片前面的段落。",
+        "图片后面的段落。",
+    ]
+    assert all(not block.attributes.get("ocr") for block in result.units[0].blocks)
+
+
+def test_docx_embedded_ocr_failure_adds_warning(
+    tmp_path, monkeypatch, embedded_ocr_enabled
+):
+    from backend.services.parsers import docx as docx_adapter
+    from backend.services.vision import VisionError
+
+    source = _image_docx(tmp_path / "with-image.docx")
+    monkeypatch.setattr(
+        docx_adapter,
+        "recognize_text",
+        lambda blob: (_ for _ in ()).throw(VisionError("识别失败")),
+    )
+
+    result = parse_docx_document(str(source), document_id="doc-fail")
+
+    assert len(result.warnings) == 1
+    assert result.warnings[0].code == "ocr_embedded_image_failed"
+    assert "识别失败" in result.warnings[0].message
+    assert [block.text for block in result.units[0].blocks] == [
+        "图片前面的段落。",
+        "图片后面的段落。",
     ]

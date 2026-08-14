@@ -1,12 +1,18 @@
-"""PPTX adapter: python-pptx -> ParsedDocument。"""
+"""PPTX adapter: python-pptx -> ParsedDocument。
+
+C 层（OCR_EMBEDDED_IMAGES）：图片 shape 按阅读顺序原位插入识别文本块；
+视觉产出带 ocr 属性标记，失败/超预算只产生 warning。
+"""
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from pathlib import Path
 
 from pptx import Presentation
 from pptx.enum.shapes import MSO_SHAPE_TYPE, PP_PLACEHOLDER
 
+from backend.config import settings
 from backend.models.document_structure import (
     ParsedDocument,
     ParsedUnit,
@@ -14,9 +20,17 @@ from backend.models.document_structure import (
     SourceLocator,
 )
 from backend.services.parsers.assembler import BlockDraft, assemble_unit_from_drafts
+from backend.services.parsers.ocr import (
+    file_sha256,
+    image_blob_sha256,
+    ocr_attributes,
+    run_vision,
+)
 from backend.services.parsers.office_zip import validate_office_package
 from backend.services.parsers.tables import render_table_markdown
 from backend.services.parsers.text import normalize_text
+from backend.services.vision import recognize_text
+from backend.services.vision_cache import VisionBudget
 
 
 _LIST_PLACEHOLDER_TYPES = {
@@ -65,11 +79,26 @@ def _table_rows(table) -> list[list[str]]:
     return [row for row in rows if any(row)]
 
 
+def _embedded_ocr_enabled() -> bool:
+    return settings.OCR_ENABLED and settings.OCR_EMBEDDED_IMAGES
+
+
+@dataclass
+class _SlideVisionContext:
+    """单张幻灯片内的视觉识别上下文（预算与 warning 通道）。"""
+
+    file_hash: str
+    budget: VisionBudget
+    warnings: list[ParseWarning]
+    locator: SourceLocator
+
+
 def _append_shape_drafts(
     shape,
     drafts: list[BlockDraft],
     *,
     group_path: tuple[str, ...] = (),
+    vision: _SlideVisionContext | None = None,
 ) -> None:
     """递归提取 shape；PPTX 的关键正文经常位于组合形状中。"""
     if shape.shape_type == MSO_SHAPE_TYPE.GROUP:
@@ -79,12 +108,49 @@ def _append_shape_drafts(
             key=lambda item: _shape_position(item[1], item[0]),
         )
         for _index, child in positioned_children:
-            _append_shape_drafts(child, drafts, group_path=child_path)
+            _append_shape_drafts(
+                child,
+                drafts,
+                group_path=child_path,
+                vision=vision,
+            )
         return
 
     attributes: dict[str, str | int | bool] = {"shape_name": shape.name}
     if group_path:
         attributes["group_path"] = " / ".join(group_path)
+
+    if shape.shape_type == MSO_SHAPE_TYPE.PICTURE:
+        if vision is None or not _embedded_ocr_enabled():
+            return
+        try:
+            blob = shape.image.blob
+        except (AttributeError, ValueError):
+            return
+        if not blob:
+            return
+        recognized = run_vision(
+            vision.file_hash,
+            f"pptx-img:{image_blob_sha256(blob)[:16]}",
+            blob,
+            recognize_text,
+            budget=vision.budget,
+            warnings=vision.warnings,
+            locator=vision.locator,
+            code="ocr_embedded_image_failed",
+        )
+        if recognized:
+            drafts.append(
+                BlockDraft(
+                    block_type="paragraph",
+                    text=recognized,
+                    attributes={
+                        **attributes,
+                        **ocr_attributes("embedded_image"),
+                    },
+                )
+            )
+        return
 
     if getattr(shape, "has_table", False):
         rows = _table_rows(shape.table)
@@ -130,10 +196,13 @@ def parse_pptx_document(
     document_id: str,
     document_name: str | None = None,
 ) -> ParsedDocument:
-    """解析原生文本和表格；无原生文字 slide 只产生 warning，不伪造正文。"""
+    """解析原生文本和表格；可选识别内嵌图片；无原生文字 slide 只产生 warning。"""
     name = document_name or Path(file_path).name
     validate_office_package(file_path)
     presentation = Presentation(file_path)
+    # 仅 C 层开启时才需要文件哈希（缓存键）。
+    file_hash = file_sha256(file_path) if _embedded_ocr_enabled() else ""
+    budget = VisionBudget()
     units: list[ParsedUnit] = []
     warnings: list[ParseWarning] = []
 
@@ -159,6 +228,12 @@ def parse_pptx_document(
                 )
             )
 
+        vision = _SlideVisionContext(
+            file_hash=file_hash,
+            budget=budget,
+            warnings=warnings,
+            locator=locator,
+        )
         positioned_shapes = sorted(
             [
                 (shape, index)
@@ -168,7 +243,7 @@ def parse_pptx_document(
             key=lambda item: _shape_position(item[0], item[1]),
         )
         for shape, _original_index in positioned_shapes:
-            _append_shape_drafts(shape, drafts)
+            _append_shape_drafts(shape, drafts, vision=vision)
 
         if not drafts:
             warnings.append(

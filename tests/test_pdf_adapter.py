@@ -1,7 +1,9 @@
+import pytest
+
+from backend.config import settings
 from backend.models.document_structure import ParsedUnit
 from backend.services.parsers import PARSER_VERSION
 from backend.services.parsers import pdf as pdf_adapter
-
 
 class _FakePage:
     def __init__(self, text):
@@ -122,3 +124,189 @@ def test_pdf_document_name_defaults_to_source_filename(monkeypatch):
     )[0]
 
     assert unit.document_name == "source-name.pdf"
+
+
+# ─── A/B 层 OCR 行为（mock 视觉调用，不访问网络） ───────────────────
+
+def _image_pdf(path, pages=1):
+    """用 Pillow 生成无文本层的图片型 PDF fixture。"""
+    from PIL import Image
+
+    first = Image.new("RGB", (120, 120), (255, 0, 0))
+    if pages == 1:
+        first.save(path, "PDF")
+        return path
+    rest = [Image.new("RGB", (120, 120), (0, 255, 0)) for _ in range(pages - 1)]
+    first.save(path, "PDF", save_all=True, append_images=rest)
+    return path
+
+
+@pytest.fixture
+def ocr_enabled(monkeypatch, temp_dir):
+    monkeypatch.setattr(settings, "OCR_ENABLED", True)
+    monkeypatch.setattr(settings, "OCR_PDF_SCANNED", True)
+    monkeypatch.setattr(settings, "OCR_PDF_PAGE_IMAGES", False)
+    monkeypatch.setattr(settings, "VISION_CACHE_DIR", f"{temp_dir}/vision_cache")
+    monkeypatch.setattr(pdf_adapter, "render_page_image", lambda _p, _i: b"fake")
+    return
+
+
+def test_scanned_page_ocr_replaces_placeholder(monkeypatch, tmp_path, ocr_enabled):
+    from backend.config import settings
+
+    source = _image_pdf(tmp_path / "scanned.pdf")
+    monkeypatch.setattr(
+        pdf_adapter, "recognize_text", lambda image_bytes: "识别到的正文文字"
+    )
+
+    result = pdf_adapter.parse_pdf_document(
+        str(source), document_id="doc-ocr"
+    )
+
+    assert result.warnings == []
+    unit = result.units[0]
+    assert unit.canonical_text == "识别到的正文文字"
+    assert unit.blocks[0].attributes == {
+        "ocr": True,
+        "vision_model": settings.VISION_MODEL,
+        "vision_kind": "scanned_page",
+    }
+    assert unit.parser_version == PARSER_VERSION
+
+
+def test_ocr_disabled_keeps_placeholder(monkeypatch, tmp_path):
+    from backend.config import settings
+
+    source = _image_pdf(tmp_path / "scanned.pdf")
+    monkeypatch.setattr(settings, "OCR_ENABLED", False)
+    monkeypatch.setattr(
+        pdf_adapter,
+        "recognize_text",
+        lambda image_bytes: (_ for _ in ()).throw(AssertionError("不应调用")),
+    )
+
+    result = pdf_adapter.parse_pdf_document(
+        str(source), document_id="doc-off"
+    )
+
+    assert result.warnings == []
+    assert result.units[0].canonical_text == "[第1页无可提取文本]"
+    assert result.units[0].blocks[0].attributes == {}
+
+
+def test_ocr_failure_falls_back_to_placeholder_with_warning(
+    monkeypatch, tmp_path, ocr_enabled
+):
+    from backend.services.vision import VisionError
+
+    source = _image_pdf(tmp_path / "scanned.pdf")
+    monkeypatch.setattr(
+        pdf_adapter,
+        "recognize_text",
+        lambda image_bytes: (_ for _ in ()).throw(VisionError("模型不可用")),
+    )
+
+    result = pdf_adapter.parse_pdf_document(
+        str(source), document_id="doc-fail"
+    )
+
+    assert result.units[0].canonical_text == "[第1页无可提取文本]"
+    assert len(result.warnings) == 1
+    assert result.warnings[0].code == "ocr_page_failed"
+    assert "模型不可用" in result.warnings[0].message
+
+
+def test_ocr_budget_exceeded_keeps_later_pages_as_placeholder(
+    monkeypatch, tmp_path, ocr_enabled
+):
+    from backend.config import settings
+
+    source = _image_pdf(tmp_path / "scanned.pdf", pages=2)
+    monkeypatch.setattr(settings, "OCR_MAX_PER_DOCUMENT", 1)
+    monkeypatch.setattr(
+        pdf_adapter, "recognize_text", lambda image_bytes: "识别文字"
+    )
+
+    result = pdf_adapter.parse_pdf_document(
+        str(source), document_id="doc-budget"
+    )
+
+    assert result.units[0].canonical_text == "识别文字"
+    assert result.units[1].canonical_text == "[第2页无可提取文本]"
+    assert len(result.warnings) == 1
+    assert result.warnings[0].code == "ocr_page_failed"
+    assert "上限" in result.warnings[0].message
+
+
+def test_ocr_result_is_cached_across_parses(monkeypatch, tmp_path, ocr_enabled):
+    source = _image_pdf(tmp_path / "scanned.pdf")
+    calls = []
+
+    def fake_recognize(image_bytes):
+        calls.append(image_bytes)
+        return "缓存文本"
+
+    monkeypatch.setattr(pdf_adapter, "recognize_text", fake_recognize)
+
+    first = pdf_adapter.parse_pdf_document(str(source), document_id="doc-cache")
+    second = pdf_adapter.parse_pdf_document(str(source), document_id="doc-cache")
+
+    assert first.units[0].canonical_text == "缓存文本"
+    assert second.units[0].canonical_text == "缓存文本"
+    assert len(calls) == 1
+
+
+def test_page_images_layer_appends_description_block(
+    monkeypatch, tmp_path, ocr_enabled
+):
+    from backend.config import settings
+
+    source = tmp_path / "text-page.pdf"
+    source.write_bytes(b"placeholder")
+    _install_reader(monkeypatch, ["正文段落。"])
+    monkeypatch.setattr(settings, "OCR_PDF_SCANNED", False)
+    monkeypatch.setattr(settings, "OCR_PDF_PAGE_IMAGES", True)
+    monkeypatch.setattr(pdf_adapter, "page_has_images", lambda _p, _i: True)
+    monkeypatch.setattr(
+        pdf_adapter, "describe_image", lambda image_bytes: "图表：柱状图展示销售额"
+    )
+
+    result = pdf_adapter.parse_pdf_document(
+        str(source), document_id="doc-images"
+    )
+
+    unit = result.units[0]
+    assert [block.text for block in unit.blocks] == [
+        "正文段落。",
+        "图表：柱状图展示销售额",
+    ]
+    assert unit.blocks[1].attributes == {
+        "ocr": True,
+        "vision_model": settings.VISION_MODEL,
+        "vision_kind": "page_images",
+    }
+    assert result.warnings == []
+
+
+def test_page_images_layer_skips_pages_without_images(
+    monkeypatch, tmp_path, ocr_enabled
+):
+    from backend.config import settings
+
+    source = tmp_path / "text-page.pdf"
+    source.write_bytes(b"placeholder")
+    _install_reader(monkeypatch, ["正文段落。"])
+    monkeypatch.setattr(settings, "OCR_PDF_SCANNED", False)
+    monkeypatch.setattr(settings, "OCR_PDF_PAGE_IMAGES", True)
+    monkeypatch.setattr(pdf_adapter, "page_has_images", lambda _p, _i: False)
+    monkeypatch.setattr(
+        pdf_adapter,
+        "describe_image",
+        lambda image_bytes: (_ for _ in ()).throw(AssertionError("不应调用")),
+    )
+
+    result = pdf_adapter.parse_pdf_document(
+        str(source), document_id="doc-no-images"
+    )
+
+    assert [block.text for block in result.units[0].blocks] == ["正文段落。"]

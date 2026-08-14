@@ -1,7 +1,9 @@
+import pytest
 from pptx import Presentation
 from pptx.enum.shapes import MSO_SHAPE_TYPE
 from pptx.util import Inches
 
+from backend.config import settings
 from backend.services.parsers import PARSER_VERSION
 from backend.services.parsers.pptx import parse_pptx_document
 
@@ -143,3 +145,90 @@ def test_pptx_slide_unit_indexes_keep_original_gaps(tmp_path):
     assert len(result.units) == 1
     assert result.units[0].locator.unit_index == 1
     assert result.units[0].locator.slide_number == 2
+
+
+# ─── C 层：内嵌图片识别（mock 视觉调用） ───────────────────────────
+
+def _image_pptx(path, image_path):
+    """生成「标题 + 图片 + 正文」的 PPTX fixture。"""
+    from PIL import Image
+
+    Image.new("RGB", (60, 60), (0, 0, 255)).save(image_path)
+    presentation = Presentation()
+    slide = presentation.slides.add_slide(presentation.slide_layouts[5])
+    slide.shapes.title.text = "图片页"
+    slide.shapes.add_picture(str(image_path), Inches(1), Inches(1.5))
+    textbox = slide.shapes.add_textbox(
+        Inches(1), Inches(3), Inches(4), Inches(1)
+    )
+    textbox.text = "图片下方的正文"
+    presentation.save(path)
+    return path
+
+
+@pytest.fixture
+def embedded_ocr_enabled(monkeypatch, temp_dir):
+    monkeypatch.setattr(settings, "OCR_ENABLED", True)
+    monkeypatch.setattr(settings, "OCR_EMBEDDED_IMAGES", True)
+    monkeypatch.setattr(settings, "VISION_CACHE_DIR", f"{temp_dir}/vision_cache")
+
+
+def test_pptx_embedded_image_inserts_ocr_block_in_place(
+    tmp_path, monkeypatch, embedded_ocr_enabled
+):
+    from backend.services.parsers import pptx as pptx_adapter
+
+    source = _image_pptx(tmp_path / "with-image.pptx", tmp_path / "pixel.png")
+    monkeypatch.setattr(
+        pptx_adapter, "recognize_text", lambda blob: "图片中的文字"
+    )
+
+    result = parse_pptx_document(str(source), document_id="doc-img")
+
+    assert result.warnings == []
+    assert [block.text for block in result.units[0].blocks] == [
+        "图片页",
+        "图片中的文字",
+        "图片下方的正文",
+    ]
+    ocr_block = result.units[0].blocks[1]
+    assert ocr_block.attributes["ocr"] is True
+    assert ocr_block.attributes["vision_kind"] == "embedded_image"
+    assert ocr_block.attributes["vision_model"] == settings.VISION_MODEL
+    assert ocr_block.attributes["shape_name"]
+
+
+def test_pptx_embedded_ocr_disabled_skips_images(tmp_path):
+    source = _image_pptx(tmp_path / "with-image.pptx", tmp_path / "pixel.png")
+
+    result = parse_pptx_document(str(source), document_id="doc-off")
+
+    assert result.warnings == []
+    assert [block.text for block in result.units[0].blocks] == [
+        "图片页",
+        "图片下方的正文",
+    ]
+
+
+def test_pptx_embedded_ocr_failure_adds_warning(
+    tmp_path, monkeypatch, embedded_ocr_enabled
+):
+    from backend.services.parsers import pptx as pptx_adapter
+    from backend.services.vision import VisionError
+
+    source = _image_pptx(tmp_path / "with-image.pptx", tmp_path / "pixel.png")
+    monkeypatch.setattr(
+        pptx_adapter,
+        "recognize_text",
+        lambda blob: (_ for _ in ()).throw(VisionError("识别失败")),
+    )
+
+    result = parse_pptx_document(str(source), document_id="doc-fail")
+
+    assert len(result.warnings) == 1
+    assert result.warnings[0].code == "ocr_embedded_image_failed"
+    assert "识别失败" in result.warnings[0].message
+    assert [block.text for block in result.units[0].blocks] == [
+        "图片页",
+        "图片下方的正文",
+    ]
