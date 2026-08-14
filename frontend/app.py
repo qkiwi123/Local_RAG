@@ -29,12 +29,7 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from frontend.http_utils import (
-    pending_uploads,
-    response_error_detail,
-    upload_attempts,
-    upload_selection_complete,
-)
+from frontend.http_utils import response_error_detail, upload_identity
 from frontend.trace_view import render_retrieval_trace
 from frontend.citation_view import render_citations
 
@@ -63,14 +58,20 @@ if "tag_tree" not in st.session_state:
 if "chat_tag_filter" not in st.session_state:
     # 当前生效的标签筛选（路径列表）；空列表 = 全库检索。
     st.session_state.chat_tag_filter = []
-if "_uploaded_set" not in st.session_state:
-    # 只记录本次 uploader 选择中已成功入库的文件指纹；失败项必须允许重试。
-    st.session_state["_uploaded_set"] = set()
-if "_failed_uploads" not in st.session_state:
-    # key → 文件名。失败项在用户显式点击重试前不再自动提交。
-    st.session_state["_failed_uploads"] = {}
+if "_staged_files" not in st.session_state:
+    # 上传暂存区：upload_identity -> UploadedFile。选择文件只暂存，不自动入库。
+    st.session_state["_staged_files"] = {}
+if "_staged_failed" not in st.session_state:
+    # 暂存区内上传失败的 upload_identity 集合；确认上传时自动重试。
+    st.session_state["_staged_failed"] = set()
+if "upload_tag_selection" not in st.session_state:
+    # 本次上传将携带的标签路径列表（与上传区 multiselect 共用此 key）。
+    st.session_state["upload_tag_selection"] = []
+if "_edit_tags_for" not in st.session_state:
+    # 正在编辑标签的文档（document_id 或展示名）；None 表示未展开编辑区。
+    st.session_state["_edit_tags_for"] = None
 if "_uploader_generation" not in st.session_state:
-    # file_uploader 没有 clear API；轮换 key 可在全量成功后重建为空控件。
+    # file_uploader 没有 clear API；轮换 key 可在全部暂存文件处理完后重建为空控件。
     st.session_state["_uploader_generation"] = 0
 
 
@@ -254,10 +255,79 @@ def backend_is_ready() -> bool:
 
 
 def clear_completed_upload_selection() -> None:
-    """清理上传状态并在下次 rerun 使用一个全新的上传控件。"""
-    st.session_state["_uploaded_set"].clear()
-    st.session_state["_failed_uploads"].clear()
+    """上传区全部处理后轮换控件 key，重建为空上传框。"""
     st.session_state["_uploader_generation"] += 1
+
+
+def create_tag_and_select(raw_path: str) -> None:
+    """新建空标签；成功后自动选入本次上传标签并刷新标签树。"""
+    cleaned = (raw_path or "").strip()
+    if not cleaned:
+        st.warning("请输入标签路径")
+        return
+    try:
+        with httpx.Client(trust_env=False, timeout=10) as client:
+            resp = client.post("/api/tags", json={"tag_path": cleaned})
+        if resp.status_code == 200:
+            created = resp.json()["tag_path"]
+            selection = list(st.session_state["upload_tag_selection"])
+            if created not in selection:
+                selection.append(created)
+                st.session_state["upload_tag_selection"] = selection
+            refresh_tag_tree()
+            st.toast(f"标签「{created}」已创建并选中", icon="🏷")
+            st.rerun()
+        else:
+            st.error("新建标签失败: " + response_error_detail(resp))
+    except Exception as error:
+        st.error("新建标签异常: " + str(error))
+
+
+def process_staged_uploads() -> None:
+    """把暂存区文件逐个提交（带当前标签选择）；成功移除，失败保留可重试。"""
+    staged = st.session_state["_staged_files"]
+    failed = st.session_state["_staged_failed"]
+    tags = list(st.session_state["upload_tag_selection"])
+    success_keys = []
+    with st.spinner(f"正在上传 {len(staged)} 个文件..."):
+        for key, uploaded_file in list(staged.items()):
+            if upload_file(uploaded_file, tags=tags):
+                success_keys.append(key)
+                failed.discard(key)
+            else:
+                failed.add(key)
+    for key in success_keys:
+        staged.pop(key, None)
+    if success_keys:
+        refresh_document_list()
+        refresh_tag_tree()
+    if not staged:
+        clear_completed_upload_selection()
+
+
+def save_document_tags(document: dict, paths: list[str]) -> bool:
+    """整体替换已上传文档的标签集；成功返回 True。"""
+    document_id = document.get("document_id")
+    if not document_id:
+        st.error("该文档缺少稳定 ID，无法修改标签")
+        return False
+    try:
+        with httpx.Client(trust_env=False, timeout=10) as client:
+            resp = client.put(
+                f"{BACKEND_URL}/api/documents/id/{document_id}/tags",
+                json={"tags": paths},
+            )
+        if resp.status_code == 200:
+            st.session_state["_edit_tags_for"] = None
+            refresh_document_list()
+            refresh_tag_tree()
+            st.toast(f"「{document['original_name']}」标签已更新", icon="🏷")
+            return True
+        st.error("保存标签失败: " + response_error_detail(resp))
+        return False
+    except Exception as error:
+        st.error("保存标签异常: " + str(error))
+        return False
 
 
 # ─── 页面首次加载时初始化文档列表 ──────────────────
@@ -360,124 +430,83 @@ with st.sidebar:
 
     st.divider()
 
-    # ── 文档上传区 ──
+    # ── 标签管理（独立新建空标签） ──
+    st.header("🏷 标签管理")
+    with st.expander("新建与查看标签", expanded=False):
+        st.text_input(
+            "新标签路径（如：课程课件/数据结构）",
+            key="tag_mgmt_new_input",
+        )
+        if st.button("➕ 新建标签", key="tag_mgmt_create"):
+            create_tag_and_select(st.session_state["tag_mgmt_new_input"])
+        if st.session_state.tag_tree:
+            for tag in sorted(
+                st.session_state.tag_tree, key=lambda item: item["tag_path"]
+            ):
+                st.caption(
+                    f"{tag['tag_path']}（{tag['document_count']} 文档）"
+                )
+        else:
+            st.caption("（暂无标签，可在此新建空标签）")
+
+    st.divider()
+
+    # ── 文档上传区（三段式：暂存 → 选标签 → 确认上传） ──
     st.header("📤 上传文档")
     uploaded_files = st.file_uploader(
         "支持 PDF / Word / TXT / Markdown / PPTX（可多选）",
         type=["pdf", "docx", "txt", "md", "pptx"],
         accept_multiple_files=True,
-        help="上传后系统将自动解析、切分、向量化并存入知识库",
+        help="选择文件只会暂存，需点击「确认上传」才会解析入库",
         key=f"document_uploader_{st.session_state['_uploader_generation']}",
     )
 
-    # 上传标签选择（过渡期最小实现：既有标签多选 + 新标签路径输入）
+    # 同步暂存区与当前选择：新选择的进入暂存区，取消选择的移出暂存区。
+    current_files = {
+        upload_identity(file): file for file in (uploaded_files or [])
+    }
+    staged = st.session_state["_staged_files"]
+    failed = st.session_state["_staged_failed"]
+    for stale_key in set(staged) - set(current_files):
+        staged.pop(stale_key, None)
+        failed.discard(stale_key)
+    for upload_key, file in current_files.items():
+        staged.setdefault(upload_key, file)
+
+    # 标签选择 + 上传时新建标签（创建后自动选入本次上传）
     tag_paths = sorted(tag["tag_path"] for tag in st.session_state.tag_tree)
-    upload_tag_selection = st.multiselect(
-        "标签（可选，可多选；父级标签会自动创建）",
+    st.multiselect(
+        "本次上传的标签（可选，可多选）",
         options=tag_paths,
-        key=f"upload_tags_{st.session_state['_uploader_generation']}",
+        key="upload_tag_selection",
     )
-    new_tag_text = st.text_input(
-        "新标签路径（多个用逗号分隔；如：课程课件/数据结构）",
-        key=f"new_tags_{st.session_state['_uploader_generation']}",
+    upload_new_tag = st.text_input(
+        "上传时新建标签路径（创建后自动选中）",
+        key="upload_new_tag_input",
     )
+    if st.button("➕ 新建并选中", key="upload_create_tag"):
+        create_tag_and_select(upload_new_tag)
 
-    def combined_upload_tags():
-        """既有标签多选 + 手动输入的新标签路径合并去重。"""
-        extra = [
-            part.strip()
-            for part in (new_tag_text or "").replace("，", ",").split(",")
-            if part.strip()
-        ]
-        return sorted(set(list(upload_tag_selection) + extra))
-
-    pending = pending_uploads(
-        uploaded_files or [],
-        st.session_state["_uploaded_set"],
-    )
-    pending_keys = {upload_key for upload_key, _ in pending}
-    selected_keys = pending_keys | st.session_state["_uploaded_set"]
-    failed_uploads = st.session_state["_failed_uploads"]
-    for stale_key in set(failed_uploads) - selected_keys:
-        failed_uploads.pop(stale_key, None)
-
-    # 兼容修复前已经成功但仍滞留在上传框中的选择。
-    if upload_selection_complete(
-        uploaded_files or [],
-        st.session_state["_uploaded_set"],
-    ):
-        clear_completed_upload_selection()
-        st.rerun()
-
-    retryable = [item for item in pending if item[0] in failed_uploads]
-    retry_requested = False
-    retry_button_rendered = False
-    if retryable:
-        st.warning(
-            "等待手动重试："
-            + "、".join(failed_uploads[key] for key, _ in retryable)
+    # 暂存区与确认上传
+    if staged:
+        staged_names = [file.name for file in staged.values()]
+        st.info("暂存 " + "、".join(staged_names))
+        failed_count = len(set(staged) & failed)
+        if failed_count:
+            st.warning("有文件上传失败，点击下方按钮重试（失败的仅保留在暂存区）")
+        confirm_label = (
+            f"🔁 重试失败文件（{failed_count}）"
+            if failed_count
+            else f"✅ 确认上传（{len(staged)} 个文件）"
         )
-        retry_requested = st.button(
-            "重试失败文件",
-            type="primary",
-            key="retry_failed_uploads",
-        )
-        retry_button_rendered = True
-
-    attempts = upload_attempts(
-        pending,
-        set(failed_uploads),
-        retry_failed=retry_requested,
-    )
-
-    if attempts and not backend_is_ready():
-        for upload_key, uploaded_file in attempts:
-            failed_uploads[upload_key] = uploaded_file.name
-        st.error("后端尚未就绪，未提交文件。请稍后点击“重试失败文件”。")
-        if not retry_button_rendered:
-            st.button(
-                "重试失败文件",
-                type="primary",
-                key="retry_failed_uploads",
-            )
-    elif attempts:
-        failed_names = []
-        success_count = 0
-        upload_tags = combined_upload_tags()
-        with st.spinner(f"正在处理 {len(attempts)} 个文件..."):
-            for upload_key, uploaded_file in attempts:
-                if upload_file(uploaded_file, tags=upload_tags):
-                    st.session_state["_uploaded_set"].add(upload_key)
-                    failed_uploads.pop(upload_key, None)
-                    success_count += 1
-                else:
-                    failed_uploads[upload_key] = uploaded_file.name
-                    failed_names.append(uploaded_file.name)
-
-        if success_count:
-            refresh_document_list()
-            refresh_tag_tree()
-
-        if upload_selection_complete(
-            uploaded_files or [],
-            st.session_state["_uploaded_set"],
-        ):
-            clear_completed_upload_selection()
-            st.rerun()
-
-        if failed_names:
-            st.warning(
-                "失败文件尚未标记为已处理，可直接重试："
-                + "、".join(failed_names)
-            )
-            if not retry_button_rendered:
-                st.button(
-                    "重试失败文件",
-                    type="primary",
-                    key="retry_failed_uploads",
-                )
-        elif success_count:
-            st.rerun()
+        if st.button(confirm_label, type="primary", key="confirm_staged_upload"):
+            if backend_is_ready():
+                process_staged_uploads()
+                st.rerun()
+            else:
+                st.error("后端尚未就绪，暂存文件未提交，请稍后重试")
+    else:
+        st.caption("选择文件后暂存于此，点击确认上传才会解析入库")
 
     st.divider()
 
@@ -488,6 +517,7 @@ with st.sidebar:
         refresh_tag_tree()
         st.rerun()
 
+    tag_paths = sorted(tag["tag_path"] for tag in st.session_state.tag_tree)
     if st.session_state.documents:
         for doc in st.session_state.documents:
             doc_name = doc["original_name"]
@@ -506,11 +536,44 @@ with st.sidebar:
                     st.caption(detail)
             with col2:
                 key = doc_id or doc_name
+                if st.button("🏷", key=f"tagbtn_{key}", help=f"编辑 {doc_name} 的标签"):
+                    st.session_state["_edit_tags_for"] = key
+                    st.rerun()
                 if st.button("🗑️", key=f"del_{key}", help=f"删除 {doc_name}"):
                     _delete_document(doc)
                     refresh_document_list()
                     refresh_tag_tree()
                     st.rerun()
+
+            if doc_id and st.session_state["_edit_tags_for"] == key:
+                with st.expander("编辑标签", expanded=True):
+                    select_key = f"edit_tags_select_{key}"
+                    if select_key not in st.session_state:
+                        st.session_state[select_key] = doc.get("tags") or []
+                    selected = st.multiselect(
+                        "标签",
+                        options=tag_paths,
+                        key=select_key,
+                    )
+                    new_text = st.text_input(
+                        "新标签（多个用逗号分隔）",
+                        key=f"edit_tags_new_{key}",
+                    )
+                    merged = sorted(
+                        set(selected)
+                        | {
+                            part.strip()
+                            for part in new_text.replace("，", ",").split(",")
+                            if part.strip()
+                        }
+                    )
+                    save_col, cancel_col = st.columns(2)
+                    if save_col.button("保存标签", key=f"edit_tags_save_{key}"):
+                        if save_document_tags(doc, merged):
+                            st.rerun()
+                    if cancel_col.button("取消", key=f"edit_tags_cancel_{key}"):
+                        st.session_state["_edit_tags_for"] = None
+                        st.rerun()
     else:
         st.caption("（暂无文档，请先上传）")
 

@@ -108,6 +108,8 @@ class FakeResponse:
 class FakeBackendClient:
     uploaded_names = []
     documents = []
+    tags = []
+    put_calls = []
     chat_payload = {"answer": "", "citations": [], "trace": None}
     conversations = [
         {
@@ -136,6 +138,8 @@ class FakeBackendClient:
                     "document_items": list(self.documents),
                 }
             )
+        if url.endswith("/api/tags"):
+            return FakeResponse(list(self.tags))
         if url.endswith("/api/conversations"):
             return FakeResponse(list(self.conversations))
         if "/api/conversations/" in url:
@@ -150,6 +154,15 @@ class FakeBackendClient:
         return FakeResponse({"status": "ok"})
 
     def post(self, url, files=None, json=None, data=None):
+        if url.endswith("/api/tags"):
+            tag_path = json["tag_path"]
+            item = {
+                "tag_path": tag_path,
+                "name": tag_path.rsplit("/", 1)[-1],
+                "document_count": 0,
+            }
+            self.tags.append(item)
+            return FakeResponse(item)
         if url.endswith("/api/upload"):
             name = files["file"][0]
             self.uploaded_names.append(name)
@@ -209,6 +222,16 @@ class FakeBackendClient:
         ])
         return FakeResponse(payload)
 
+    def put(self, url, json=None):
+        self.put_calls.append((url, json))
+        document_id = url.rstrip("/").split("/")[-2]
+        for item in self.documents:
+            if item.get("document_id") == document_id:
+                item["tags"] = list(json["tags"])
+        return FakeResponse(
+            {"status": "success", "document_id": document_id, "tags": json["tags"]}
+        )
+
 
 def test_candidate_rows_join_full_chunk_catalog_and_make_preview():
     rows = candidate_rows(TRACE_PAYLOAD, "dense")
@@ -256,10 +279,20 @@ def test_selected_candidate_is_recovered_before_trace_panel_renders():
     ) is False
 
 
-def test_successful_upload_clears_file_uploader(monkeypatch):
+def _reset_backend():
     FakeBackendClient.uploaded_names = []
     FakeBackendClient.documents = []
+    FakeBackendClient.tags = []
+    FakeBackendClient.put_calls = []
     FakeBackendClient.conversation_messages = []
+
+
+def _find_button(app, label_part):
+    return next(button for button in app.button if label_part in button.label)
+
+
+def test_upload_requires_explicit_confirm_button(monkeypatch):
+    _reset_backend()
     monkeypatch.setattr(httpx, "Client", FakeBackendClient)
 
     app = AppTest.from_file("frontend/app.py", default_timeout=10)
@@ -268,10 +301,107 @@ def test_successful_upload_clears_file_uploader(monkeypatch):
 
     app.run()
 
+    # 选择文件只暂存，不自动上传
     assert not app.exception
+    assert FakeBackendClient.uploaded_names == []
+    assert len(app.session_state["_staged_files"]) == 1
+    assert app.session_state["_uploader_generation"] == 0
+
+    _find_button(app, "确认上传").click()
+    app.run()
+
+    # 确认后才提交；成功后清空暂存并轮换上传控件
     assert FakeBackendClient.uploaded_names == ["sample.txt"]
+    assert not app.session_state["_staged_files"]
     assert app.file_uploader[0].value == []
     assert app.session_state["_uploader_generation"] == 1
+
+
+def test_upload_carries_selected_tags(monkeypatch):
+    _reset_backend()
+    FakeBackendClient.tags = [
+        {"tag_path": "课程课件", "name": "课程课件", "document_count": 0}
+    ]
+    monkeypatch.setattr(httpx, "Client", FakeBackendClient)
+
+    app = AppTest.from_file("frontend/app.py", default_timeout=10)
+    app.run()
+    app.file_uploader[0].set_value(("sample.txt", b"hello", "text/plain"))
+    app.run()
+    app.multiselect(key="upload_tag_selection").set_value(["课程课件"])
+    app.run()
+
+    _find_button(app, "确认上传").click()
+    app.run()
+
+    assert FakeBackendClient.documents[0]["tags"] == ["课程课件"]
+
+
+def test_creating_tag_auto_selects_it_for_upload(monkeypatch):
+    _reset_backend()
+    monkeypatch.setattr(httpx, "Client", FakeBackendClient)
+
+    app = AppTest.from_file("frontend/app.py", default_timeout=10)
+    app.run()
+
+    next(
+        item for item in app.text_input if item.label.startswith("新标签路径")
+    ).set_value("课程课件/数据结构")
+    next(button for button in app.button if button.label == "➕ 新建标签").click()
+    app.run()
+
+    assert not app.exception
+    assert any(
+        tag["tag_path"] == "课程课件/数据结构"
+        for tag in FakeBackendClient.tags
+    )
+    assert "课程课件/数据结构" in app.session_state["upload_tag_selection"]
+    assert any(
+        option == "课程课件/数据结构"
+        for option in app.multiselect(key="upload_tag_selection").options
+    )
+
+
+def test_editing_existing_document_tags(monkeypatch):
+    _reset_backend()
+    FakeBackendClient.documents = [
+        {
+            "document_id": "doc-1",
+            "original_name": "doc.txt",
+            "status": "ready",
+            "chunk_count": 1,
+            "tags": ["旧标签"],
+        }
+    ]
+    FakeBackendClient.tags = [
+        {"tag_path": "旧标签", "name": "旧标签", "document_count": 1},
+        {"tag_path": "新标签", "name": "新标签", "document_count": 0},
+    ]
+    monkeypatch.setattr(httpx, "Client", FakeBackendClient)
+
+    app = AppTest.from_file("frontend/app.py", default_timeout=10)
+    app.run()
+
+    next(button for button in app.button if button.label == "🏷").click()
+    app.run()
+
+    select = app.multiselect(key="edit_tags_select_doc-1")
+    assert select.value == ["旧标签"]
+    select.set_value(["新标签"])
+    next(
+        button for button in app.button if button.label == "保存标签"
+    ).click()
+    app.run()
+
+    assert not app.exception
+    assert FakeBackendClient.put_calls == [
+        (
+            "http://127.0.0.1:8000/api/documents/id/doc-1/tags",
+            {"tags": ["新标签"]},
+        )
+    ]
+    assert FakeBackendClient.documents[0]["tags"] == ["新标签"]
+    assert app.session_state["_edit_tags_for"] is None
 
 
 def test_trace_panel_is_present_and_collapsed_after_chat(monkeypatch):
