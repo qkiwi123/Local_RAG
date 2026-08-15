@@ -1,6 +1,10 @@
 # 数据目录（不提交 git）
 data/
 
+# 前端构建产物与依赖
+web/node_modules/
+web/dist/
+
 # 评估运行输出（报告、隔离向量库；基线报告手动挑选提交）
 eval/runs/
 
