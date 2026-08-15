@@ -53,6 +53,22 @@ $frontendStdout = Join-Path $logsDir "frontend.out.log"
 $frontendStderr = Join-Path $logsDir "frontend.error.log"
 $env:PYTHONIOENCODING = "utf-8"
 
+# React SPA：未构建时自动构建一次，产物由后端静态托管。
+$webDistIndex = Join-Path $repoRoot "web\dist\index.html"
+if (-not (Test-Path -LiteralPath $webDistIndex)) {
+    Write-Host "[前端] 未找到构建产物，正在构建 web/（npm run build）..."
+    Push-Location (Join-Path $repoRoot "web")
+    try {
+        & npm.cmd run build | Out-Null
+        if ($LASTEXITCODE -ne 0) {
+            throw "前端构建失败，请检查 npm 环境或手动执行 cd web; npm install; npm run build"
+        }
+    }
+    finally {
+        Pop-Location
+    }
+}
+
 $backendArgs = @("-m", "uvicorn", "backend.main:app")
 if ($Reload) {
     $backendArgs += @("--reload", "--reload-dir", "backend")
