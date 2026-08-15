@@ -58,6 +58,13 @@ class DocumentChunk(BaseModel):
 
 # ─── 上传接口 ────────────────────────────────────────
 
+class UploadWarning(BaseModel):
+    """非致命解析/OCR 警告摘要。"""
+    code: str = Field(..., description="警告码，如 ocr_page_failed")
+    message: str = Field(..., description="面向用户的警告说明")
+    location_label: str = Field(default="", description="关联来源位置标签")
+
+
 class UploadResponse(BaseModel):
     """POST /api/upload 的返回体。"""
     message: str = Field(..., description="上传结果描述")
@@ -65,6 +72,10 @@ class UploadResponse(BaseModel):
     document_name: str = Field(..., description="文档文件名")
     chunk_count: int = Field(..., description="切分出的文本块数量")
     status: str = Field(default="success", description="处理状态：success / error")
+    warnings: list[UploadWarning] = Field(
+        default_factory=list,
+        description="非致命解析/OCR 警告（如无文本页、OCR 失败）",
+    )
 
 
 # ─── 问答接口 ────────────────────────────────────────
@@ -329,3 +340,13 @@ class TagRename(BaseModel):
 
 class DocumentTagsUpdate(BaseModel):
     tags: list[str] = Field(default_factory=list, description="整体替换文档的标签集")
+
+
+class DocumentPreview(BaseModel):
+    """整份文档的结构化内容预览（知识库管理页）。"""
+    document_id: str
+    document_name: str
+    tags: list[str] = Field(default_factory=list)
+    parser_version: str
+    unit_count: int = Field(..., ge=0)
+    units: list[StructuredPreviewUnit] = Field(default_factory=list)

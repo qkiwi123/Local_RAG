@@ -146,6 +146,43 @@ def ask_with_history(
     return response.choices[0].message.content
 
 
+def ask_with_history_stream(
+    question: str,
+    standalone_question: str,
+    context: str,
+    history: str,
+) -> Generator[str, None, None]:
+    """流式版 ask_with_history：逐 token 产出，历史只用于连贯不作文档证据。"""
+    stream = _get_client().chat.completions.create(
+        model=settings.DEEPSEEK_MODEL,
+        messages=[
+            {
+                "role": "system",
+                "content": SYSTEM_PROMPT + (
+                    "\n7. 对话历史只用于理解指代和保持表达连贯，不能作为事实证据；"
+                    "事实仍必须由本轮文档内容支持。"
+                ),
+            },
+            {
+                "role": "user",
+                "content": (
+                    f"对话历史：\n{history or '（无）'}\n\n"
+                    f"本轮检索问题：{standalone_question}\n\n"
+                    f"本轮文档内容：\n{context}\n\n"
+                    f"用户当前原始问题：{question}"
+                ),
+            },
+        ],
+        temperature=0.3,
+        max_tokens=2000,
+        stream=True,
+    )
+
+    for chunk in stream:
+        if chunk.choices[0].delta.content is not None:
+            yield chunk.choices[0].delta.content
+
+
 def ask_stream(question: str, context: str) -> Generator[str, None, None]:
     """
     流式向 LLM 提问，逐 token 返回生成的文本。

@@ -879,3 +879,107 @@ class TestTagAPI:
             "/api/chat", json={"question": "问题", "tags": ["坏/标签/"]}
         )
         assert response.status_code == 422
+
+
+class TestDocumentAPI:
+    def test_upload_response_includes_parse_warnings(self, client, monkeypatch):
+        from backend.models.document_structure import ParseWarning
+        from backend.routers import upload as upload_router
+
+        real_parse = upload_router.parse_document_structure
+
+        def parse_with_warning(path, *, document_id, document_name=None):
+            parsed = real_parse(
+                path, document_id=document_id, document_name=document_name
+            )
+            warnings = list(parsed.warnings) + [
+                ParseWarning(
+                    code="ocr_page_failed",
+                    message="第 1 页 OCR 失败：模型不可用",
+                    locator=parsed.units[0].locator,
+                )
+            ]
+            return parsed.model_copy(update={"warnings": warnings})
+
+        monkeypatch.setattr(upload_router, "parse_document_structure", parse_with_warning)
+
+        response = _upload_fixture(client)
+
+        assert response.status_code == 200, response.text
+        warnings = response.json()["warnings"]
+        assert warnings[0]["code"] == "ocr_page_failed"
+        assert warnings[0]["message"] == "第 1 页 OCR 失败：模型不可用"
+        assert warnings[0]["location_label"]
+
+    def test_documents_list_filters_by_tags(self, client):
+        def upload_with_tags(name, tags):
+            return client.post(
+                "/api/upload",
+                files={
+                    "file": (
+                        name,
+                        Path("tests/fixtures/sample.txt").read_bytes(),
+                        "application/octet-stream",
+                    )
+                },
+                data={"tags": tags},
+            )
+
+        course = upload_with_tags("课程.txt", ["课程课件/数据结构"]).json()
+        policy = upload_with_tags("制度.txt", ["规章制度"]).json()
+
+        all_items = client.get("/api/documents").json()["document_items"]
+        assert len(all_items) >= 2
+
+        filtered = client.get(
+            "/api/documents", params={"tags": ["课程课件"]}
+        ).json()["document_items"]
+        assert [item["document_id"] for item in filtered] == [course["document_id"]]
+
+        union = client.get(
+            "/api/documents",
+            params={"tags": ["课程课件", "规章制度"]},
+        ).json()["document_items"]
+        assert {item["document_id"] for item in union} == {
+            course["document_id"],
+            policy["document_id"],
+        }
+
+        invalid = client.get(
+            "/api/documents", params={"tags": ["坏/标签/"]}
+        )
+        assert invalid.status_code == 422
+
+    def test_document_preview_returns_structured_units(self, client):
+        uploaded = _upload_path(
+            client,
+            Path("eval/corpus/会议纪要（测试文档）.md"),
+        ).json()
+
+        response = client.get(
+            f"/api/documents/id/{uploaded['document_id']}/preview"
+        )
+
+        assert response.status_code == 200, response.text
+        payload = response.json()
+        assert payload["document_id"] == uploaded["document_id"]
+        assert payload["parser_version"]
+        assert payload["unit_count"] == len(payload["units"])
+        assert payload["units"]
+        unit = payload["units"][0]
+        assert unit["location"]
+        assert unit["canonical_text"]
+        assert unit["blocks"]
+
+    def test_document_preview_missing_or_deleted_returns_404(self, client):
+        assert client.get(
+            "/api/documents/id/missing-doc/preview"
+        ).status_code == 404
+
+        uploaded = _upload_fixture(client).json()
+        assert client.delete(
+            f"/api/documents/id/{uploaded['document_id']}"
+        ).status_code == 200
+        assert client.get(
+            f"/api/documents/id/{uploaded['document_id']}/preview"
+        ).status_code == 404

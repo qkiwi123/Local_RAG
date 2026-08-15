@@ -9,10 +9,15 @@ import os
 from pathlib import Path
 from uuid import uuid4
 
-from fastapi import APIRouter, File, Form, HTTPException, UploadFile
+from fastapi import APIRouter, File, Form, HTTPException, Query, UploadFile
 
 from backend.config import settings
-from backend.models.schemas import DocumentTagsUpdate, UploadResponse
+from backend.models.schemas import (
+    DocumentPreview,
+    DocumentTagsUpdate,
+    StructuredPreviewUnit,
+    UploadResponse,
+)
 from backend.services.chunker import chunk_units
 from backend.services.document_store import (
     create_document,
@@ -33,10 +38,12 @@ from backend.services.tag_store import (
     delete_document_tags,
     get_document_tags,
     normalize_tag_path,
+    resolve_document_ids,
     set_document_tags,
 )
 from backend.services.unit_store import (
     delete_document_units,
+    list_document_units,
     replace_document_units,
 )
 from backend.services.vector_store import (
@@ -168,12 +175,20 @@ async def upload_document(
         units = parsed_document.units
         if not units:
             raise ValueError("文档解析失败：未能提取到任何文本内容")
+        upload_warnings = []
         for warning in parsed_document.warnings:
             logger.warning(
                 "Document parse warning: document_id=%s code=%s message=%s",
                 document_id,
                 warning.code,
                 warning.message,
+            )
+            upload_warnings.append(
+                {
+                    "code": warning.code,
+                    "message": warning.message,
+                    "location_label": warning.locator.location_label,
+                }
             )
 
         chunks = chunk_units(
@@ -208,6 +223,7 @@ async def upload_document(
             document_name=original_name,
             chunk_count=chunk_count,
             status="success",
+            warnings=upload_warnings,
         )
     except HTTPException as error:
         _cleanup_failed_ingest(
@@ -236,9 +252,28 @@ async def upload_document(
 
 
 @router.get("/documents")
-async def list_documents():
-    """只返回 structured-v1 登记且已就绪的文档（含标签）。"""
+async def list_documents(
+    tags: list[str] | None = Query(default=None),
+):
+    """返回结构化登记且已就绪的文档（含标签）。
+
+    tags 为可选筛选：与问答检索共享同一套「父级含子孙、多选取并集」语义；
+    不传则返回全部（向后兼容）。非法标签路径返回 422。
+    """
     records = list_document_records(status="ready")
+    if tags:
+        try:
+            allowed = set(
+                resolve_document_ids(
+                    tags,
+                    db_path=settings.METADATA_DB_PATH,
+                )
+            )
+        except TagValidationError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
+        records = [
+            record for record in records if record["document_id"] in allowed
+        ]
     for record in records:
         record["tags"] = get_document_tags(
             record["document_id"],
@@ -269,6 +304,43 @@ async def update_document_tags(document_id: str, payload: DocumentTagsUpdate):
         "document_id": document_id,
         "tags": normalized,
     }
+
+
+@router.get("/documents/id/{document_id}/preview", response_model=DocumentPreview)
+async def preview_document(document_id: str):
+    """返回整份文档的结构化内容预览（知识库管理页）。
+
+    不返回文件系统路径、不加载原文件；文档不存在或非 ready 返回 404。
+    """
+    record = get_document(document_id)
+    if not record or record["status"] != "ready":
+        raise HTTPException(status_code=404, detail=f"文档不存在或未就绪: {document_id}")
+    units = list_document_units(
+        document_id,
+        PARSER_VERSION,
+        db_path=settings.METADATA_DB_PATH,
+    )
+    if not units:
+        raise HTTPException(status_code=404, detail="文档没有可预览的结构化内容")
+    return DocumentPreview(
+        document_id=document_id,
+        document_name=record["original_name"],
+        tags=get_document_tags(
+            document_id,
+            db_path=settings.METADATA_DB_PATH,
+        ),
+        parser_version=PARSER_VERSION,
+        unit_count=len(units),
+        units=[
+            StructuredPreviewUnit(
+                unit_id=unit.unit_id,
+                location=unit.locator,
+                canonical_text=unit.canonical_text,
+                blocks=unit.blocks,
+            )
+            for unit in units
+        ],
+    )
 
 
 def _delete_registered_document(document_id: str) -> dict:
