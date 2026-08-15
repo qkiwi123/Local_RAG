@@ -37,18 +37,20 @@
 | 8 | 生产数据 | 接受 `structured-v2` 隔离验收后一次性重建 |
 | 9 | Trace 持久化 | 2026-08-14 用户确认：Trace 持久化到 SQLite（`message_traces` 表，schema v3），总量超过 `TRACE_STORAGE_MAX_BYTES`（默认 50MB）按创建时间淘汰最旧记录（LRU）；绑定助手消息，删除会话时级联清理；复用 `RETRIEVAL_TRACE_ENABLED` 同一开关（关了不计算也不存储）；重放恢复已存 Trace |
 | 10 | 模型预热 | 2026-08-14 用户确认：服务启动后后台预热 Embedding/Reranker（`PREWARM_MODELS=true`），把首次查询的模型加载耗时挪到启动期 |
+| 11 | 流式中断语义 | 2026-08-15 用户确认**方案甲**：流式生成被中断时按失败处理（复用 `fail_chat`，不保存半截答案），用户可重试重新生成；无需新增数据状态 |
+| 12 | 阶段 3 清单增补 | 2026-08-15 用户确认：A 类（4 个后端前置接口独立任务组）、B 类（过渡期功能：409 自动重同步、上传三段式、标签管理完整形态、筛选语义统一、🏷 编辑、Trace 持久化行为）、C 类（OCR 徽标来源、删除确认统一、文档详情字段、预览边界、测试项）全部采纳 |
 
 ## 3. 数据契约版本与数据策略
 
-### 3.1 本次涉及的两处版本升级
+### 3.1 版本升级记录
 
 1. **`PARSER_VERSION`：`structured-v1` → `structured-v2`**（`backend/services/parsers/constants.py`）。
    OCR 文本与图表说明会进入 canonical text，改变 offset 与 chunk。按项目既定规则
    「canonical text 语义变化必须升版本并重建索引」，版本升级是全局的：不启用 OCR 的
    文档输出与 v1 一致，但不会出现「部分文档 v1、部分文档 v2」的混写。
-2. **`SCHEMA_VERSION`：`1` → `2`**（`backend/services/metadata_schema.py`）。新增标签相关表，
-   编写显式 v1→v2 迁移；业务数据（文档登记、会话、消息）全部保留。未版本化的旧库仍按
-   现行策略拒绝读写。
+2. **`SCHEMA_VERSION` 演进**（`backend/services/metadata_schema.py`），业务数据全程保留：
+   - v1→v2：新增 `tags` / `document_tags` 表（多级树形标签）；
+   - v2→v3：新增 `message_traces` 表（检索 Trace 持久化 + LRU 总量限制）。
 
 ### 3.2 数据策略：派生数据重建，业务数据迁移
 
@@ -219,34 +221,46 @@ CREATE TABLE document_tags (
 
 - 新端点 `GET /api/documents/id/{document_id}/preview`：复用
   `unit_store.list_document_units` 返回整份文档的结构化 units
-  （`StructuredPreviewUnit` 列表 + 文档名/标签/locator 摘要），渲染与引用预览共用
-  组件（标题/段落/列表/表格/代码块，安全转义，OCR 徽标预留）；文档不存在或非 ready
-  返回 404；不返回文件系统路径、不加载原文件；
+  （`StructuredPreviewUnit` 列表 + 文档名/标签/locator 摘要；blocks 保留
+  `attributes` 供 OCR 徽标），渲染与引用预览共用组件（标题/段落/列表/表格/代码块，
+  安全转义）；文档不存在或非 ready 返回 404；不返回文件系统路径、不加载原文件；
 - `GET /api/documents` 增加可选 `tags` 查询参数：服务端复用
   `expand_tag_paths`/`resolve_document_ids`（父级含子孙、多选取并集），返回命中文档
   （不含任何标签时返回全部）；文档库筛选与问答检索筛选共享同一套标签语义，不写
   第二套逻辑。
 
-### 6.3 流式回答
+### 6.3 流式回答（含中断语义甲）
 
 - 后端新增 `POST /api/chat/stream`（POST + fetch 流式读取；事件序列：
-  `meta`（conversation_id / request_id / user_message_id）→ `delta`*（token 片段）→
-  `citations` → `done`（assistant_message_id）/ `error`（错误码））；
+  `meta`（conversation_id / request_id / user_message_id / standalone_question）→
+  `delta`*（token 片段）→ `citations` → `done`（assistant_message_id）/
+  `error`（错误码））；
 - 复用现有 `conversation_store` 的 begin/complete/fail、request_id 幂等重放、
-  `expected_last_message_id` 并发守卫；重放请求以单帧 `done` 返回已存回答；
-- 前端 Ant Design X 气泡逐字渲染，完成后就地渲染引用与 Trace。
+  `expected_last_message_id` 并发守卫；重放已 complete 请求以单帧 `done` 返回；
+- **中断语义甲**（用户 2026-08-15 确认）：客户端断开（「停止生成」按钮或连接中断）时
+  **按失败处理**——复用 `fail_chat`（error_code 如 `interrupted`），不保存半截答案；
+  前端显示失败态并提供重试（重新生成）；
+- 前端 Ant Design X 气泡逐字渲染 + 「停止生成」按钮，完成后就地渲染引用与 Trace。
 
 ### 6.4 功能对齐清单（Streamlit 移除的验收门槛）
 
 新 SPA 必须逐项对齐并通过后才移除 `frontend/`（Streamlit）：
 
-1. 会话：新建/切换/重命名/删除（含确认）、刷新恢复；
-2. 问答：提问、流式输出、失败重试、空检索提示、标签筛选；
-3. 引用：来源列表、预览弹窗、结构化渲染、高亮、OCR 徽标、已删除来源提示；
-4. Trace：受控开启时的检索链路面板；
-5. 文档：上传（暂存 + 确认、带标签）、失败重试、列表分组、删除确认、
-   解析/OCR 警告展示、**按标签筛选列表、点击预览结构化内容**；
-6. 标签：新建空标签、树形管理、文档挂/改标签。
+1. 会话：新建/切换/重命名/删除（含确认）、刷新恢复、**409 会话冲突自动重同步并提示重发**；
+2. 问答：提问、**流式逐字输出 + 停止生成（中断语义甲：按失败处理、可重试）**、
+   失败重试、空检索提示（区分全库/标签筛选）、标签筛选（多选树、父级联动子级、
+   筛选徽标 + 一键清除）；
+3. 引用：来源列表、预览弹窗、结构化渲染（标题/段落/列表/表格/代码）、高亮、
+   **OCR 徽标**（`attributes.ocr=True` → 「AI 识别，可能存在误差」）、已删除来源提示；
+4. Trace：受控开启时的检索链路面板（阶段表、候选行、完整 chunk、耗时条含
+   「其他阶段」口径说明）；**持久化行为**：跨会话/刷新/重启可查，null 或被 LRU
+   淘汰时不渲染；
+5. 文档：上传（**暂存 + 确认**、带标签、上传时新建标签并自动选中、进度、失败重试、
+   **解析/OCR 警告展示**）、列表（**详情字段：大小/上传时间/chunk 数/标签**、
+   **按标签筛选**、**删除确认**）、**点击预览整份文档**（按 unit 顺序、位置标签、
+   无高亮浏览模式）、文档「🏷 编辑标签」入口；
+6. 标签：新建空标签、**树形管理（双层计数「本层 N · 含子级 M」）**、重命名
+   （子树联动提示）、删除（确认：「文档保留，仅解除关联」）、文档挂/改标签。
 
 ### 6.5 配套后端小改
 
@@ -260,7 +274,7 @@ CREATE TABLE document_tags (
 | 0 准备 | 本设计与阶段计划落盘；创建 `feature/rag-v2-optimization`；全量测试基线存档 | 基线可复现 | — |
 | 1 标签体系 | schema v2 迁移、标签 CRUD API、三模式检索过滤、上传带标签、Streamlit 过渡件（2026-08-13 验收反馈修正：暂存+确认上传、独立新建空标签、已上传文档改标签） | 标签筛选端到端；过渡件交互验收；全库检索回归不劣化 | 阶段 0 |
 | 2 OCR/多模态 | `vision.py`（MiMo）、A/B/C 三层、`structured-v2`、rebuild 工具适配、隔离验收、生产重建 | 真实扫描件可检索可引用；OCR 关闭时与 v1 行为一致 | 阶段 1 |
-| 3 前端重写 + 流式 | SPA 骨架 → 对话页 → 知识库管理页（文档库预览与标签筛选）→ SSE 流式 → 功能对齐 | 对齐清单全过，Streamlit 移除 | 阶段 1/2 API |
+| 3 前端重写 + 流式 | **后端前置**（4 接口：stream/preview/tags 筛选/warnings）→ SPA 骨架 → 对话页 → 知识库管理页 → 功能对齐 | 对齐清单全过，Streamlit 移除 | 阶段 1/2 API |
 | 4 回归与文档 | 全量 pytest、eval v3 preflight、legacy 回归、README 更新 | 全部证据存档 | 全部 |
 
 顺序理由：标签改动面最小、无新外部依赖与费用、收益直接（缩小检索范围即降低开销与噪声），
@@ -296,7 +310,7 @@ CREATE TABLE document_tags (
 - 扫描件、PDF 页内图表、DOCX/PPTX 内嵌图片可被检索并定位到正确来源，预览带 OCR 徽标；
 - 标签树多级、多标签，父级筛选含子孙、多选取并集，全库检索（不带标签）行为不变；
 - 新 React 前端通过功能对齐清单，流式回答可用，Streamlit 已移除；
-- 生产数据为纯 `structured-v2`，schema 为 v2，切换过程证据存档；
+- 生产数据为纯 `structured-v2`，schema 为当前版本（v2 标签 / v3 Trace），切换过程证据存档；
 - 全量测试、真实文档验收、评测回归均有保存证据；
 - 不宣称未经评测证明的质量提升。
 
