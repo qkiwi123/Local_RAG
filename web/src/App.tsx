@@ -1,4 +1,5 @@
-import { Layout, Menu } from "antd";
+import { useEffect, useState } from "react";
+import { Alert, Layout, Menu } from "antd";
 import { CommentOutlined, DatabaseOutlined } from "@ant-design/icons";
 import { Link, Navigate, Route, Routes, useLocation } from "react-router-dom";
 import ChatPage from "./pages/chat/ChatPage";
@@ -10,6 +11,21 @@ export default function App() {
   const location = useLocation();
   const selected =
     location.pathname.startsWith("/knowledge") ? "knowledge" : "chat";
+  const [backendDown, setBackendDown] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    fetch("/api/health")
+      .then((response) => {
+        if (!cancelled) setBackendDown(!response.ok);
+      })
+      .catch(() => {
+        if (!cancelled) setBackendDown(true);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   return (
     <Layout style={{ minHeight: "100vh" }}>
@@ -41,6 +57,14 @@ export default function App() {
         />
       </Sider>
       <Layout>
+        {backendDown && (
+          <Alert
+            type="error"
+            showIcon
+            banner
+            message="无法连接后端服务，请确认后端已启动（scripts/start.ps1）"
+          />
+        )}
         <Content style={{ padding: 16, overflow: "auto", height: "100vh" }}>
           <Routes>
             <Route path="/" element={<ChatPage />} />

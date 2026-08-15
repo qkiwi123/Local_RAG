@@ -7,6 +7,7 @@ import {
   Input,
   List,
   Modal,
+  Popconfirm,
   Row,
   Spin,
   Tag,
@@ -255,6 +256,26 @@ export default function ChatPage() {
                 }}
                 onClick={() => void loadConversation(item.conversation_id)}
                 actions={[
+                  <Popconfirm
+                    key="delete"
+                    title={`删除会话「${item.title}」？`}
+                    description="删除后无法恢复。"
+                    okText="确定删除"
+                    cancelText="取消"
+                    okButtonProps={{ danger: true }}
+                    onConfirm={(e) => {
+                      e?.stopPropagation();
+                      void deleteConversation(item.conversation_id);
+                    }}
+                  >
+                    <Button
+                      size="small"
+                      type="text"
+                      danger
+                      icon={<DeleteOutlined />}
+                      onClick={(e) => e.stopPropagation()}
+                    />
+                  </Popconfirm>,
                   <Dropdown
                     key="actions"
                     menu={{
@@ -268,18 +289,11 @@ export default function ChatPage() {
                             setRenameValue(item.title);
                           },
                         },
-                        {
-                          key: "delete",
-                          icon: <DeleteOutlined />,
-                          danger: true,
-                          label: "删除",
-                          onClick: () => void deleteConversation(item.conversation_id),
-                        },
                       ],
                     }}
                   >
                     <Button size="small" type="text" onClick={(e) => e.stopPropagation()}>
-                      ⋯
+                      ✏️
                     </Button>
                   </Dropdown>,
                 ]}

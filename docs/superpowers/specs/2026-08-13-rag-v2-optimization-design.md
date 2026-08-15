@@ -207,8 +207,9 @@ CREATE TABLE document_tags (
 
 ### 6.1 技术栈与结构
 
-- React 18 + Vite + TypeScript + Ant Design 5 + Ant Design X（聊天组件）+
-  react-router + zustand + axios；vitest 单测；ESLint / Prettier；
+- React + Vite + TypeScript + Ant Design（含 Ant Design X）+ react-router + zustand +
+  axios/fetch；vitest 单测；oxlint；实际锁定版本以 `web/package.json` 为准
+  （脚手架安装为 React 19 / AntD 6 / @ant-design/x 2.9 / react-router 7，功能已验证）；
 - 目录 `web/`，两个页面：
   - 「💬 对话」：会话列表、聊天流、引用预览弹窗（含 OCR 徽标）、检索 Trace 抽屉、
     失败重试、标签筛选器；
