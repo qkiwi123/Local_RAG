@@ -29,9 +29,11 @@ function CitationPreviewModal({
           setLoading(false);
         }
       })
-      .catch((err: Error) => {
+      .catch((err: { status?: number; message?: string }) => {
         if (!cancelled) {
-          setError(err.message || "预览加载失败");
+          const deleted =
+            err.status === 404 ? "历史引用来源已删除，无法查看原文" : null;
+          setError(deleted || err.message || "预览加载失败");
           setLoading(false);
         }
       });
