@@ -1,5 +1,6 @@
 # 阶段 3：React 前端重写与流式回答实施计划
 
+> 状态：**核心实现与 F0-F4 工程验收已于 2026-08-15 完成；旧 Streamlit 按用户边界保留，删除需另行确认。**
 > 依赖：阶段 1（标签 API）、阶段 2（OCR 与 `UploadResponse.warnings` 预留）。
 > 设计依据：`docs/superpowers/specs/2026-08-13-rag-v2-optimization-design.md` 第 6 节。
 > 2026-08-15 按用户确认增补：后端前置任务组（4 个待实现接口）、过渡期功能
@@ -15,7 +16,7 @@
 
 ## 2. 任务分解（按顺序执行）
 
-### 2.1 后端前置（四个接口，全部尚未实现，SPA 之前必须完成）
+### 2.1 后端前置（四个接口，已完成）
 
 #### 2.1.1 `POST /api/chat/stream`（SSE 流式 + 中断语义甲）
 
@@ -99,13 +100,13 @@
 - `scripts/start.ps1` 适配：构建前端（或检测 dist）+ 启动后端；
 - 开发模式说明（前后端分开启动，Vite 代理）；不改变现有 API 路径。
 
-### 2.7 功能对齐验收与 Streamlit 移除
+### 2.7 功能对齐验收与 Streamlit 后续处理
 
 - 按总设计 6.4 对齐清单逐项验收（含刷新恢复、重启恢复、删除来源文档后的
-  历史引用行为、trace 跨会话查看、流式中断语义乙）；
-- 验收通过后移除 `frontend/`（Streamlit）及对应测试（`tests/test_frontend_app.py`、
-  `tests/test_citation_view.py`、`tests/test_frontend_http_utils.py`），更新
-  `README.md` 的启动说明。
+  历史引用行为、trace 跨会话查看、流式中断语义甲）；
+- 功能对齐验收通过后，只有获得用户另行确认才移除 `frontend/`（Streamlit）及对应测试
+  （`tests/test_frontend_app.py`、`tests/test_citation_view.py`、
+  `tests/test_frontend_http_utils.py`）；当前验收不自动删除旧前端。
 
 ## 3. 文件改动清单（预期）
 
@@ -130,11 +131,12 @@ A  web/src/__tests__/         （api client、SSE 解析、store 单测）
 1. 流式回答逐字渲染；**中断按失败处理（不保存半截），前端可重试**；
    失败/重试/重放行为与持久化协议一致；
 2. 四个后端前置接口全部测试通过；
-3. 功能对齐清单（总设计 6.4）全过，Streamlit 已移除；
+3. 功能对齐清单（总设计 6.4）全过；Streamlit 是否移除由用户在验收后另行决定；
 4. 标签筛选、标签管理、上传警告、文档库预览与筛选在 SPA 中可用；
 5. 生产构建可由 FastAPI 单服务托管，`scripts/start.ps1` 一键可用；
 6. 全量 pytest 绿色；vitest 绿色；
-7. 提交主题清晰（后端前置 / 脚手架 / 对话页 / 知识库页 / 移除 Streamlit）。
+7. 未经用户要求不自动提交或推送；若后续提交，按后端前置、脚手架、对话页、
+   知识库页和旧前端处理拆分清晰主题。
 
 ## 5. 风险与备注
 
@@ -145,3 +147,21 @@ A  web/src/__tests__/         （api client、SSE 解析、store 单测）
 - 静态托管路径与 API 前缀冲突：SPA fallback 仅作用于非 `/api` 路径，需集成测试；
 - `.env` 只做逐键写入/追加，禁止整文件重写（见测试反馈 #18）；
 - 生产 `data/` 全程不动。
+
+## 6. 实际执行结果（2026-08-15）
+
+- 四个后端前置能力已经落地：NDJSON 流式聊天、整文档结构化预览、文档 tags 服务端
+  筛选和上传 warnings；Trace 进一步实现 SQLite 持久化与容量淘汰；
+- 主前端实际采用 React 19、TypeScript、Ant Design 6 和 Vite 8，由 FastAPI 8000
+  静态托管；`/knowledge` 刷新回退和 JavaScript MIME 均有后端集成测试；
+- 对话页覆盖会话、流式/停止/失败重试、409 重同步、标签检索范围、引用预览和 Trace；
+  知识库覆盖暂存确认、逐文件结果、失败保留/重试、OCR warning、标签树、文档筛选、
+  标签编辑、删除确认和整文档预览；
+- 重新规划按 F0-F4 执行。最终前端 7 个文件、27/27 测试通过；后端 423 项无模型/
+  无外部 API 回归和 38 项本地模型集成测试通过；完整 pytest 为 461 passed、3 skipped，
+  跳过项均为未调用的 external DeepSeek 测试；
+- FastAPI 8000 在 1920×1080、1536×864、1280×720、1024×768、768×1024、
+  390×844 完成真实浏览器只读验收；标签筛选、OCR 预览、Trace、任务抽屉和移动卡片
+  均通过，控制台无 error；
+- 生产数据、`.env` 和检索算法未改动；旧 Streamlit、对应测试和 8501 启动项仍保留，
+  未提交或推送。

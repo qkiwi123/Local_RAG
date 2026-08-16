@@ -9,6 +9,7 @@ interface TagTreeSelectProps {
   onChange: (value: string[]) => void;
   placeholder?: string;
   allowClear?: boolean;
+  ariaLabel?: string;
 }
 
 export function TagTreeSelect({
@@ -17,6 +18,7 @@ export function TagTreeSelect({
   onChange,
   placeholder,
   allowClear = true,
+  ariaLabel = "标签选择器",
 }: TagTreeSelectProps) {
   const treeData = useMemo(() => buildTagTree(tags), [tags]);
   return (
@@ -29,7 +31,14 @@ export function TagTreeSelect({
       showCheckedStrategy={TreeSelect.SHOW_PARENT}
       placeholder={placeholder ?? "按标签筛选（可多选，含子标签；不选 = 全部）"}
       allowClear={allowClear}
-      style={{ width: "100%" }}
+      aria-label={ariaLabel}
+      className="tag-tree-picker"
+      maxTagCount="responsive"
+      maxTagPlaceholder={(omitted) => `+${omitted.length}`}
+      showSearch
+      treeNodeFilterProp="title"
+      treeDefaultExpandAll
+      notFoundContent="暂无匹配标签"
     />
   );
 }

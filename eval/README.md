@@ -168,7 +168,7 @@ PYTHONIOENCODING=utf-8 ./.venv/Scripts/python.exe -m eval.eval compare \
 ```
 
 - v3 的 `run`、`retrieval-sweep` 和 `hybrid-ablation` 会自动启用五格式
-  `structured-v1` 解析、校验 corpus manifest，并把 dialogue turn 展平；下游检索使用 gold
+  `structured-v2` 解析、校验 corpus manifest，并把 dialogue turn 展平；下游检索使用 gold
   `standalone_question`。正式运行要求 strict review 全部通过，未冻结时只能显式传
   `--allow-draft-v3` 做 preflight：
 

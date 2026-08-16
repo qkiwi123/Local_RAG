@@ -9,6 +9,7 @@ FastAPI 应用入口 — 创建应用实例、注册路由、配置中间件。
 fallback 到 index.html）；开发模式用 Vite dev server（代理 /api）。
 """
 
+import mimetypes
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -16,6 +17,10 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from starlette.exceptions import HTTPException as StarletteHTTPException
+
+# Windows 会从注册表初始化 mimetypes；部分机器把 .js 映射为 text/plain。
+# 浏览器会拒绝以 text/plain 返回的 ES module，导致 SPA 的 #root 保持空白。
+mimetypes.add_type("text/javascript", ".js")
 
 app = FastAPI(
     title="RAG Knowledge Base API",

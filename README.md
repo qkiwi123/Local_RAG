@@ -6,17 +6,23 @@ PDF、DOCX、TXT、Markdown 和 PPTX，完成解析、切分、向量检索、Cr
 
 ## 当前状态
 
-截至 2026-07-30，以下链路已经贯通：
+截至 2026-08-15，以下链路已经贯通：
 
 - 五种文档格式统一输出 `ParsedBlock`、`ParsedUnit` 和 `SourceLocator`；
 - 公共 Assembler 负责稳定 ID、连续 sequence、canonical text 和字符 offset；
-- 生产上传和索引重建均使用 `structured-v1`，不再以旧 page-dict 作为最终数据结构；
-- Chroma 保存检索所需的轻量定位 metadata，SQLite 保存文档、结构化 unit 和会话；
+- 生产上传和索引重建均使用 `structured-v2`；可选 OCR/图片理解产出进入 canonical text，
+  并以 `attributes.ocr` 标记来源；
+- Chroma 保存检索所需的轻量定位 metadata，SQLite schema v3 保存文档、结构化 unit、
+  标签、会话和受容量限制的持久化 Trace；
 - Dense 检索使用 `BAAI/bge-large-zh-v1.5`，可选
   `BAAI/bge-reranker-v2-m3` 进行 Cross-encoder 重排；
 - 引用预览按 unit 原序恢复整份文档结构并高亮命中区间；
-- 支持持久化多轮对话、追问改写、有界历史、幂等重放和并发冲突检测；
-- 检索 Trace 可在受控环境展示 Dense、BM25、RRF、Reranker 和最终上下文阶段。
+- 支持持久化多轮对话、NDJSON 流式回答、停止/失败重试、追问改写、有界历史、
+  幂等重放和 409 并发冲突重同步；
+- 标签支持父子路径、父级含子孙和多标签并集，可同时用于问答检索范围与文档管理；
+- React SPA 已成为 8000 端口的主前端，覆盖会话、检索范围、引用/OCR 预览、Trace、
+  文档上传、标签管理和文档维护，并通过桌面、缩放等效视口与移动端验收；
+- 检索 Trace 可持久化并展示 Dense、BM25、RRF、Reranker、最终上下文和阶段耗时。
 
 当前仍未完成的正式验收项：
 
@@ -28,28 +34,32 @@ PDF、DOCX、TXT、Markdown 和 PPTX，完成解析、切分、向量检索、Cr
 ## 当前架构
 
 ```text
-Streamlit
-   │ HTTP
+React SPA（主前端，FastAPI 托管 web/dist）
+   │ /api
    ▼
 FastAPI
    ├── upload
    │     file
    │       → format adapter
+   │       → optional OCR / image understanding
    │       → ParsedUnit
    │       → structured chunker
    │       → BGE embedding
    │       → Chroma
-   │       └── SQLite documents / document_units
+   │       └── SQLite documents / document_units / tags
    │
    ├── chat
-   │     question + bounded conversation history
+   │     question + tag scope + bounded conversation history
    │       → standalone question rewrite
    │       → Dense / BM25 / Hybrid retrieval
    │       → optional Reranker
    │       → DeepSeek
-   │       → answer + source-ID citations
+   │       → NDJSON stream + source-ID citations
    │
-   └── citation preview / conversations / retrieval trace
+   └── citation/document preview / conversations / persistent retrieval trace
+
+legacy Streamlit（兼容对照，尚未删除）
+   └── HTTP → FastAPI
 
 eval
    └── isolated corpus + Chroma + SQLite
@@ -62,8 +72,9 @@ eval
 
 ```text
 backend/                  FastAPI、数据模型和 RAG 服务
-backend/services/parsers/ structured-v1 五格式 Adapter
-frontend/                 Streamlit 界面和引用预览
+backend/services/parsers/ structured-v2 五格式 Adapter 与可选 OCR
+web/                      React 19 + TypeScript + Ant Design 6 主前端
+frontend/                 兼容保留的旧 Streamlit 前端
 eval/                     数据集、隔离评测 CLI、历史结果
 tests/                    unit / integration / external 测试
 scripts/rebuild_index.py  安全索引重建
@@ -85,7 +96,9 @@ docs/                     设计、操作指南和项目说明
 前端统一使用 `location_label` 展示来源，不把逻辑页、幻灯片或章节错误地称为“页码”。
 SQLite 中保存的结构 JSON 在读取时会重新经过 Pydantic 校验；损坏或版本不兼容的数据会被拒绝。
 
-当前不支持 Excel、旧版 PowerPoint/Excel、扫描 PDF OCR、图表理解、SmartArt 和演讲者备注。
+可选 OCR 支持扫描 PDF、PDF 页内图片/图表以及 DOCX/PPTX 内嵌图片；各层默认关闭，
+失败只产生 warning，不阻塞其余内容入库。当前不支持 Excel、旧版 PowerPoint/Excel、
+Markdown 外部相对路径图片、SmartArt 和演讲者备注。
 
 ## 环境准备
 
@@ -105,7 +118,15 @@ DEEPSEEK_API_KEY=your_key
 DEEPSEEK_BASE_URL=https://api.deepseek.com
 DEEPSEEK_MODEL=deepseek-v4-flash
 RETRIEVAL_TRACE_ENABLED=false
+TRACE_STORAGE_MAX_BYTES=52428800
+OCR_ENABLED=false
+OCR_PDF_SCANNED=false
+OCR_PDF_PAGE_IMAGES=false
+OCR_EMBEDDED_IMAGES=false
 ```
+
+启用任一 OCR 层前，还必须配置 `VISION_API_KEY`、`VISION_BASE_URL` 和 `VISION_MODEL`；
+视觉接口只用于文档入库，不改变 DeepSeek 问答链路。
 
 Embedding 和 Reranker 都以 `local_files_only=True` 加载。运行前需要确保以下模型已在
 Hugging Face 本地缓存：
@@ -119,12 +140,22 @@ chunk 规则变化后，应使用 `scripts/rebuild_index.py` 在独立目录安�
 
 ## 启动
 
-开发时分别启动：
+开发时分别在两个终端启动 FastAPI 与 Vite。后端终端从仓库根目录运行：
 
 ```powershell
 .\.venv\Scripts\python.exe -m uvicorn backend.main:app --reload --reload-dir backend
-.\.venv\Scripts\python.exe -m streamlit run frontend/app.py
 ```
+
+前端终端运行：
+
+```powershell
+Set-Location web
+npm.cmd run dev
+```
+
+Vite 默认通过 `http://localhost:5173/` 提供开发页面，并把 `/api` 代理到 8000。
+只有需要与旧界面对照时，才从仓库根目录另行运行
+`.\.venv\Scripts\python.exe -m streamlit run frontend/app.py`。
 
 或使用一键脚本：
 
@@ -140,11 +171,14 @@ chunk 规则变化后，应使用 `scripts/rebuild_index.py` 在独立目录安�
 
 访问地址：
 
-- 前端：http://localhost:8501
+- React SPA（主入口）：http://localhost:8000/
 - API 文档：http://localhost:8000/docs
+- 兼容保留的旧 Streamlit：http://localhost:8501
 
-`start.ps1` 使用独立隐藏进程，并在后端健康检查通过后再启动前端；启动成功后会记录 PID，
-再次启动前检测到服务仍在运行会拒绝执行（防双开）。一键停止服务：
+`start.ps1` 会在缺少 `web/dist` 时先构建 React SPA，由 FastAPI 静态托管；同时暂时启动
+旧 Streamlit 供功能对照。阶段 3 工程验收已经通过，但删除旧前端仍需用户另行确认。
+脚本使用独立隐藏进程，启动成功后会记录 PID，再次启动前检测到服务仍在运行会拒绝执行
+（防双开）。一键停止服务：
 
 ```powershell
 .\scripts\stop.ps1
@@ -152,9 +186,11 @@ chunk 规则变化后，应使用 `scripts/rebuild_index.py` 在独立目录安�
 .\scripts\start.ps1 -Stop
 ```
 
-`stop.ps1` 会校验记录中的进程启动时间（防止 PID 被复用后误杀），并用 `taskkill /T /F`
-终止整个进程树（覆盖 `-Reload` 模式下 Uvicorn 的子进程）。服务异常退出或手动结束后，
-启动输出中的 Backend/Frontend PID 仍可作为兜底手段：
+`stop.ps1` 会校验记录中的进程启动时间（防止 PID 被复用后误杀），优先用 `taskkill /T /F`
+终止整个进程树（覆盖 `-Reload` 模式下 Uvicorn 的子进程）；若隐藏窗口的 `conhost` 令
+`taskkill` 失败，则回退终止已验证的主进程，并清理当前启动日志中经过身份校验的 Uvicorn
+worker；确认全部退出后才清理 PID 文件。服务异常退出或手动结束后，启动输出中的
+Backend/Frontend PID 仍可作为兜底手段：
 
 ```powershell
 Stop-Process -Id <Backend PID>,<Frontend PID>
@@ -170,7 +206,7 @@ Stop-Process -Id <Backend PID>,<Frontend PID>
 ```text
 临时文件
   → SQLite processing 记录
-  → structured-v1 parse
+  → structured-v2 parse（可选 OCR）
   → document_units
   → chunk / embed
   → Chroma
@@ -191,19 +227,35 @@ Stop-Process -Id <Backend PID>,<Frontend PID>
 .\.venv\Scripts\python.exe -m pytest -q
 ```
 
-2026-07-30 在 `phase1/unified-structure-model` 上的结果：
+2026-08-15 阶段 3 F4 的隔离验收结果：
 
 ```text
-344 passed, 3 skipped, 0 failed
+423 passed（不依赖本地模型权重、不调用外部 API）
+38 passed（本地 Embedding/Reranker integration）
+3 external tests 未调用
 ```
 
-其中包含 29 项使用本地 Embedding/Reranker 和隔离向量库的 integration 测试。
+两组已运行后端测试合计 461 项通过；测试使用隔离临时目录，不写入生产 `data/`。
+完整 `pytest -q` 复验结果为 `461 passed, 3 skipped`，跳过项均为需要
+`--run-external` 才会执行的真实 DeepSeek 测试。
 
 不依赖本地模型权重的 CI 测试：
 
 ```powershell
 .\.venv\Scripts\python.exe -m pytest -m "not integration and not external" -q
 ```
+
+React 前端检查：
+
+```powershell
+Set-Location web
+npm.cmd test -- --reporter=dot
+npm.cmd run lint
+npm.cmd run build
+```
+
+F4 结果为 7 个测试文件、27/27 测试通过，lint、TypeScript 和生产构建通过；构建仍有
+单个 JavaScript chunk 超过 500 kB 的体积警告。
 
 ### 真实 DeepSeek 测试
 
@@ -219,7 +271,7 @@ Stop-Process -Id <Backend PID>,<Frontend PID>
 
 ## Dataset v3
 
-Dataset v3 使用单一顶层 JSON、独立 corpus manifest 和 `structured-v1` parser。当前包括：
+Dataset v3 使用单一顶层 JSON、独立 corpus manifest 和 `structured-v2` parser。当前包括：
 
 - 35 道单题；
 - 6 组对话、17 个 dialogue turn；
@@ -251,8 +303,9 @@ Dataset v3 使用单一顶层 JSON、独立 corpus manifest 和 `structured-v1` 
 
 ## v3 完整预检结果
 
-2026-07-30 运行了完整 structured-v1 预检。该运行创建隔离 Chroma、SQLite 和上传目录，
-并在用户明确授权后，将每题检索到的 Top-K 片段发送给 DeepSeek：
+2026-07-30 曾运行完整 structured-v1 预检。以下结果作为升级前历史基线保留，不代表当前
+structured-v2 评测结果。该运行创建隔离 Chroma、SQLite 和上传目录，并在用户明确授权后，
+将每题检索到的 Top-K 片段发送给 DeepSeek：
 
 ```powershell
 $env:PYTHONIOENCODING='utf-8'
@@ -331,7 +384,7 @@ $env:TRANSFORMERS_OFFLINE='1'
 ## 历史评测证据
 
 旧 Dataset v1/v2 和 P1/P2 实验结果继续保留，用于追溯历史决策，不作为当前
-structured-v1 的主验收集，也不应与 Dataset v3 指标直接比较。
+structured-v2 的主验收集，也不应与 Dataset v3 指标直接比较。
 
 | 阶段 | 结论 | 证据目录 |
 |---|---|---|

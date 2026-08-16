@@ -128,9 +128,11 @@ $frontend = Start-Process `
     "frontend=$($frontend.Id)|$($frontend.StartTime.ToString('o'))"
 ) | Set-Content -LiteralPath $pidFile -Encoding utf8
 
-Write-Host "Backend PID: $($backend.Id)  http://localhost:8000/docs"
+Write-Host "Backend PID: $($backend.Id)"
 Write-Host "Backend health: ready"
-Write-Host "Frontend PID: $($frontend.Id) http://localhost:8501"
+Write-Host "React SPA: http://localhost:8000/"
+Write-Host "API docs: http://localhost:8000/docs"
+Write-Host "Legacy Streamlit PID: $($frontend.Id) http://localhost:8501"
 Write-Host "Backend log: $backendStderr"
 Write-Host "Frontend log: $frontendStderr"
 if ($Reload) {
