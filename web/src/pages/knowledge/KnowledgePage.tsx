@@ -16,6 +16,7 @@ export default function KnowledgePage() {
   const [tags, setTags] = useState<TagInfo[]>([]);
   const [documents, setDocuments] = useState<DocumentItem[]>([]);
   const [documentFilter, setDocumentFilter] = useState<string[]>([]);
+  const [searchQuery, setSearchQuery] = useState("");
   const [loadingDocuments, setLoadingDocuments] = useState(false);
   const [taskDrawer, setTaskDrawer] = useState<TaskDrawer>(null);
   const [uploadTags, setUploadTags] = useState<string[]>([]);
@@ -25,6 +26,7 @@ export default function KnowledgePage() {
   const loadedRef = useRef(false);
   const documentsRequestRef = useRef(0);
   const previewRequestRef = useRef(0);
+  const searchTimerRef = useRef<number | null>(null);
 
   const refreshTags = useCallback(async () => {
     try {
@@ -36,27 +38,40 @@ export default function KnowledgePage() {
     }
   }, []);
 
-  const refreshDocuments = useCallback(async (filter?: string[]) => {
-    const requestId = documentsRequestRef.current + 1;
-    documentsRequestRef.current = requestId;
-    setLoadingDocuments(true);
-    try {
-      const payload = await api.listDocuments(filter);
-      if (documentsRequestRef.current === requestId) {
-        setDocuments(payload.document_items);
+  const refreshDocuments = useCallback(
+    async (query: string = searchQuery, filter: string[] = documentFilter) => {
+      const requestId = documentsRequestRef.current + 1;
+      documentsRequestRef.current = requestId;
+      setLoadingDocuments(true);
+      try {
+        const payload = await api.listDocuments(query, filter);
+        if (documentsRequestRef.current === requestId) {
+          setDocuments(payload.document_items);
+        }
+      } catch (error) {
+        if (documentsRequestRef.current === requestId) {
+          message.error(
+            `加载文档失败: ${error instanceof Error ? error.message : "未知错误"}`,
+          );
+        }
+      } finally {
+        if (documentsRequestRef.current === requestId) {
+          setLoadingDocuments(false);
+        }
       }
-    } catch (error) {
-      if (documentsRequestRef.current === requestId) {
-        message.error(
-          `加载文档失败: ${error instanceof Error ? error.message : "未知错误"}`,
-        );
-      }
-    } finally {
-      if (documentsRequestRef.current === requestId) {
-        setLoadingDocuments(false);
-      }
+    },
+    [searchQuery, documentFilter],
+  );
+
+  const handleSearchChange = (value: string) => {
+    setSearchQuery(value);
+    if (searchTimerRef.current !== null) {
+      window.clearTimeout(searchTimerRef.current);
     }
-  }, []);
+    searchTimerRef.current = window.setTimeout(() => {
+      void refreshDocuments(value, documentFilter);
+    }, 300);
+  };
 
   useEffect(() => {
     if (loadedRef.current) return;
@@ -67,7 +82,7 @@ export default function KnowledgePage() {
 
   const uploadQueue = useUploadQueue({
     onUploaded: async () => {
-      await Promise.all([refreshDocuments(documentFilter), refreshTags()]);
+      await Promise.all([refreshDocuments(searchQuery, documentFilter), refreshTags()]);
     },
   });
 
@@ -122,7 +137,7 @@ export default function KnowledgePage() {
         new Set(documentFilter.map(replacePrefix)),
       );
       setDocumentFilter(nextFilter);
-      await Promise.all([refreshTags(), refreshDocuments(nextFilter)]);
+      await Promise.all([refreshTags(), refreshDocuments(searchQuery, nextFilter)]);
       message.success("标签及其子树已重命名");
       return true;
     } catch (error) {
@@ -141,7 +156,7 @@ export default function KnowledgePage() {
       setUploadTags((previous) => previous.filter(keepUnrelated));
       const nextFilter = documentFilter.filter(keepUnrelated);
       setDocumentFilter(nextFilter);
-      await Promise.all([refreshTags(), refreshDocuments(nextFilter)]);
+      await Promise.all([refreshTags(), refreshDocuments(searchQuery, nextFilter)]);
       message.success(`标签「${tagPath}」已删除，文档仍保留`);
     } catch (error) {
       message.error(
@@ -181,7 +196,7 @@ export default function KnowledgePage() {
   ): Promise<boolean> => {
     try {
       await api.setDocumentTags(document.document_id, nextTags);
-      await Promise.all([refreshDocuments(documentFilter), refreshTags()]);
+      await Promise.all([refreshDocuments(searchQuery, documentFilter), refreshTags()]);
       message.success("文档标签已更新");
       return true;
     } catch (error) {
@@ -195,7 +210,7 @@ export default function KnowledgePage() {
   const deleteDocument = async (document: DocumentItem) => {
     try {
       await api.deleteDocument(document.document_id);
-      await Promise.all([refreshDocuments(documentFilter), refreshTags()]);
+      await Promise.all([refreshDocuments(searchQuery, documentFilter), refreshTags()]);
       message.success(`「${document.original_name}」已删除`);
     } catch (error) {
       message.error(
@@ -206,7 +221,7 @@ export default function KnowledgePage() {
 
   const handleFilterChange = (value: string[]) => {
     setDocumentFilter(value);
-    void refreshDocuments(value);
+    void refreshDocuments(searchQuery, value);
   };
 
   return (
@@ -215,6 +230,8 @@ export default function KnowledgePage() {
         documents={documents}
         tags={tags}
         filter={documentFilter}
+        searchValue={searchQuery}
+        onSearchChange={handleSearchChange}
         loading={loadingDocuments}
         queuedCount={
           uploadQueue.counts.staged +
@@ -223,7 +240,7 @@ export default function KnowledgePage() {
         }
         failedCount={uploadQueue.counts.failed}
         onFilterChange={handleFilterChange}
-        onRefresh={() => void refreshDocuments(documentFilter)}
+        onRefresh={() => void refreshDocuments(searchQuery, documentFilter)}
         onOpenUpload={() => setTaskDrawer("upload")}
         onOpenTags={() => setTaskDrawer("tags")}
         onPreview={(document) => void openPreview(document)}

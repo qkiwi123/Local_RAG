@@ -3,6 +3,7 @@ import {
   Button,
   Empty,
   Grid,
+  Input,
   Pagination,
   Popconfirm,
   Space,
@@ -29,6 +30,8 @@ interface DocumentTableProps {
   documents: DocumentItem[];
   tags: TagInfo[];
   filter: string[];
+  searchValue: string;
+  onSearchChange: (value: string) => void;
   loading: boolean;
   queuedCount: number;
   failedCount: number;
@@ -112,6 +115,8 @@ export function DocumentTable({
   documents,
   tags,
   filter,
+  searchValue,
+  onSearchChange,
   loading,
   queuedCount,
   failedCount,
@@ -189,6 +194,14 @@ export function DocumentTable({
       </div>
 
       <div className="knowledge-documents__toolbar">
+        <Input.Search
+          value={searchValue}
+          onChange={(event) => onSearchChange(event.target.value)}
+          allowClear
+          aria-label="按文档名称搜索"
+          placeholder="按文档名称搜索"
+          className="knowledge-documents__search"
+        />
         <div className="knowledge-documents__filter">
           <Text className="knowledge-field__label" type="secondary">
             标签筛选
@@ -252,7 +265,7 @@ export function DocumentTable({
             ) : (
               <Empty
                 image={Empty.PRESENTED_IMAGE_SIMPLE}
-                description="当前筛选条件下没有文档"
+                description="当前筛选或搜索条件下没有文档"
               >
                 <Button type="primary" onClick={onOpenUpload}>
                   上传第一份文档
@@ -282,7 +295,7 @@ export function DocumentTable({
             emptyText: (
               <Empty
                 image={Empty.PRESENTED_IMAGE_SIMPLE}
-                description="当前筛选条件下没有文档"
+                description="当前筛选或搜索条件下没有文档"
               >
                 <Button type="primary" onClick={onOpenUpload}>
                   上传第一份文档

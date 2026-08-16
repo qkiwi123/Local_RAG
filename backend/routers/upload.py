@@ -254,13 +254,23 @@ async def upload_document(
 @router.get("/documents")
 async def list_documents(
     tags: list[str] | None = Query(default=None),
+    q: str | None = Query(default=None, max_length=200),
 ):
     """返回结构化登记且已就绪的文档（含标签）。
 
     tags 为可选筛选：与问答检索共享同一套「父级含子孙、多选取并集」语义；
-    不传则返回全部（向后兼容）。非法标签路径返回 422。
+    q 为可选的文档名称模糊搜索（不区分大小写的子串匹配，通配符按字面处理）；
+    两者同时提供时取交集。不传则返回全部（向后兼容）。非法标签路径返回 422。
     """
     records = list_document_records(status="ready")
+    query = (q or "").strip()
+    if query:
+        folded_query = query.casefold()
+        records = [
+            record
+            for record in records
+            if folded_query in record["original_name"].casefold()
+        ]
     if tags:
         try:
             allowed = set(

@@ -242,7 +242,21 @@ describe("KnowledgePage 关键工作流", () => {
       await screen.findByRole("button", { name: "按标签筛选文档" }),
     );
     await waitFor(() =>
-      expect(mocks.listDocuments).toHaveBeenLastCalledWith(["pit"]),
+      expect(mocks.listDocuments).toHaveBeenLastCalledWith("", ["pit"]),
+    );
+  });
+
+  it("文档名称搜索以 q 参数请求服务端", async () => {
+    render(<KnowledgePage />);
+
+    const input = await screen.findByRole("searchbox", {
+      name: "按文档名称搜索",
+    });
+    fireEvent.change(input, { target: { value: "项目" } });
+
+    await waitFor(
+      () => expect(mocks.listDocuments).toHaveBeenLastCalledWith("项目", []),
+      { timeout: 1000 },
     );
   });
 

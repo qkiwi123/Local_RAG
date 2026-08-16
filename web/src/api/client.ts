@@ -84,10 +84,11 @@ export const api = {
     ),
 
   // 文档
-  listDocuments: (tags?: string[]) => {
-    const params = (tags ?? [])
-      .map((tag) => `tags=${encodeURIComponent(tag)}`)
-      .join("&");
+  listDocuments: (q?: string, tags?: string[]) => {
+    const params = [
+      ...(q?.trim() ? [`q=${encodeURIComponent(q.trim())}`] : []),
+      ...(tags ?? []).map((tag) => `tags=${encodeURIComponent(tag)}`),
+    ].join("&");
     return request<{ documents: string[]; document_items: DocumentItem[] }>(
       `/api/documents${params ? `?${params}` : ""}`,
     );

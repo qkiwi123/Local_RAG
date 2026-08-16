@@ -950,6 +950,43 @@ class TestDocumentAPI:
         )
         assert invalid.status_code == 422
 
+    def test_documents_list_searches_by_name_and_combines_with_tags(self, client):
+        def upload_with_tags(name, tags):
+            return client.post(
+                "/api/upload",
+                files={
+                    "file": (
+                        name,
+                        Path("tests/fixtures/sample.txt").read_bytes(),
+                        "application/octet-stream",
+                    )
+                },
+                data={"tags": tags},
+            )
+
+        course = upload_with_tags("数据结构课程.txt", ["课程课件/数据结构"]).json()
+        policy = upload_with_tags("网络安全制度.txt", ["规章制度"]).json()
+
+        by_name = client.get(
+            "/api/documents", params={"q": "课程"}
+        ).json()["document_items"]
+        assert [item["document_id"] for item in by_name] == [course["document_id"]]
+
+        literal_wildcard = client.get(
+            "/api/documents", params={"q": "%"}
+        ).json()["document_items"]
+        assert [item["document_id"] for item in literal_wildcard] == []
+
+        combined = client.get(
+            "/api/documents",
+            params={"q": "制度", "tags": ["规章制度"]},
+        ).json()["document_items"]
+        assert [item["document_id"] for item in combined] == [policy["document_id"]]
+
+        assert client.get(
+            "/api/documents", params={"q": "x" * 201}
+        ).status_code == 422
+
     def test_document_preview_returns_structured_units(self, client):
         uploaded = _upload_path(
             client,
