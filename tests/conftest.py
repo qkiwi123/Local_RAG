@@ -14,7 +14,13 @@ import pytest
 
 
 # 必须在任何 backend import 之前设置。config.py/load_dotenv 默认不会覆盖已存在变量。
-_TEST_ROOT = Path(tempfile.mkdtemp(prefix="rag-pytest-"))
+# 默认使用系统临时目录；受限环境可通过 PYTEST_ISOLATION_ROOT 指定工作区内隔离根。
+_ISOLATION_ROOT = os.environ.get("PYTEST_ISOLATION_ROOT")
+if _ISOLATION_ROOT:
+    _TEST_ROOT = Path(_ISOLATION_ROOT).resolve()
+    _TEST_ROOT.mkdir(parents=True, exist_ok=True)
+else:
+    _TEST_ROOT = Path(tempfile.mkdtemp(prefix="rag-pytest-"))
 os.environ["DEEPSEEK_API_KEY"] = "test-key-not-used"
 os.environ["CHROMA_PERSIST_DIR"] = str(_TEST_ROOT / "chroma")
 os.environ["UPLOAD_DIR"] = str(_TEST_ROOT / "uploads")
@@ -34,6 +40,9 @@ os.environ["OCR_EMBEDDED_IMAGES"] = "false"
 os.environ["VISION_API_KEY"] = ""
 os.environ["VISION_BASE_URL"] = ""
 os.environ["VISION_CACHE_DIR"] = str(_TEST_ROOT / "vision_cache")
+# OCR 原图预览默认关闭，测试按需显式开启；图片写入隔离临时目录。
+os.environ["OCR_IMAGE_PREVIEW_ENABLED"] = "false"
+os.environ["OCR_IMAGE_DIR"] = str(_TEST_ROOT / "ocr_images")
 # 测试进程内不做模型预热，避免与集成测试争抢资源；预热逻辑单独测试。
 os.environ["PREWARM_MODELS"] = "false"
 
