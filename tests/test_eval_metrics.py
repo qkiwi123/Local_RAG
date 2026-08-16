@@ -82,9 +82,10 @@ class TestParseCitations:
                 "content": "课件内容",
                 "metadata": {
                     "document_name": "课件.pptx",
-                    "parser_version": "structured-v1",
+                    "parser_version": "structured-v2",
                     "unit_id": "unit-8",
                     "location_label": "第 8 张幻灯片",
+                    "locator_kind": "slide",
                 },
             }
         ]
@@ -94,6 +95,27 @@ class TestParseCitations:
         assert cite["valid"] is True
         assert cite["page"] is None
         assert cite["doc"] == "课件.pptx"
+
+    def test_structured_v2_section_without_page_number_is_valid(self):
+        retrieval = [
+            {
+                "chunk_id": "chunk-section",
+                "content": "章节内容",
+                "metadata": {
+                    "document_name": "手册.md",
+                    "parser_version": "structured-v2",
+                    "unit_id": "unit-3",
+                    "location_label": "章节：系统维护 / 更新",
+                    "locator_kind": "section",
+                },
+            }
+        ]
+
+        cite = parse_citations("见【来源1】。", retrieval)[0]
+
+        assert cite["valid"] is True
+        assert cite["page"] is None
+        assert cite["doc"] == "手册.md"
 
     def test_no_marker(self):
         assert parse_citations("没有引用的回答") == []

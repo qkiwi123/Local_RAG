@@ -239,7 +239,7 @@ def _ingest_structured_corpus(corpus_dir: Path) -> dict:
         warning_count += len(parsed.warnings)
 
     return {
-        "parser_mode": "structured-v1",
+        "parser_mode": PARSER_VERSION,
         "documents": doc_chunks,
         "units": doc_units,
         "total_units": sum(doc_units.values()),

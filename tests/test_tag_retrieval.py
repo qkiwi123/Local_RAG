@@ -19,7 +19,7 @@ def seeded_filter_store():
                 document_name=name,
                 page_number=1,
                 chunk_index=0,
-                parser_version="structured-v1",
+                parser_version="structured-v2",
             ),
         )
 

@@ -194,7 +194,7 @@ def build_structured_preview_html(
     highlight_start: int | None,
     highlight_end: int | None,
 ) -> str:
-    """按 block 类型安全渲染 structured-v1 来源并精确标记相交字符。"""
+    """按 block 类型安全渲染 structured 来源并精确标记相交字符。"""
     if (highlight_start is None) != (highlight_end is None):
         raise ValueError("高亮起止必须同时提供或同时省略")
     if highlight_start is None:

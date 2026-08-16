@@ -81,9 +81,10 @@ def parse_citations(answer: str, retrieval: Optional[List[dict]] = None) -> List
             doc = meta.get("document_name")
             page = meta.get("page_number")
             structured_location = (
-                meta.get("parser_version") == "structured-v1"
-                and bool(meta.get("unit_id"))
+                bool(meta.get("unit_id"))
                 and bool(meta.get("location_label"))
+                and meta.get("locator_kind")
+                in {"page", "virtual_page", "slide", "section", "sheet"}
             )
             if doc and (isinstance(page, int) or structured_location):
                 item.update({

@@ -154,7 +154,7 @@ class StructuredPreviewUnit(BaseModel):
 
 
 class StructuredCitationPreview(BaseModel):
-    """structured-v1 整文档预览，不包含旧 parsed_page_text 或重复 chunk。"""
+    """structured 整文档预览，不包含旧 parsed_page_text 或重复 chunk。"""
     document_id: str
     chunk_id: str
     document_name: str

@@ -69,7 +69,7 @@ def build_structured_citation_preview(
         raise CitationPreviewConflictError("chunk 所属 document_id 不一致")
     if metadata.get("parser_version") != PARSER_VERSION:
         raise CitationPreviewConflictError(
-            "chunk 不是当前 structured-v1 索引，请清空并重建"
+            f"chunk 不是当前 {PARSER_VERSION} 索引，请清空并重建"
         )
 
     unit_id = metadata.get("unit_id")

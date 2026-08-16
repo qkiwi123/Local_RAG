@@ -374,7 +374,7 @@ async def delete_document_by_stable_id(document_id: str):
 
 @router.delete("/documents/{document_name}")
 async def delete_document(document_name: str):
-    """兼容按展示名删除，但只处理 structured-v1 登记版本。"""
+    """兼容按展示名删除历史登记版本（legacy 兼容入口）。"""
     matching = [
         record
         for record in list_document_records(status=None)
