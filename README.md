@@ -6,7 +6,15 @@ PDF、DOCX、TXT、Markdown 和 PPTX，完成解析、切分、向量检索、Cr
 
 ## 当前状态
 
-截至 2026-08-15，以下链路已经贯通：
+截至 2026-08-16，以下链路已经贯通：
+
+- 验收轮新增：知识库按文档名称模糊搜索（与标签筛选组合）；
+- OCR 文本做确定性结构分类（独立标题/列表块 + 混合段落首行标题渲染），
+  全文预览与引用预览不再把 OCR 内容全部压成普通段落；
+- OCR 原图对照预览：OCR 块旁展示被识别的原始图片（可放大），
+  配置 `OCR_IMAGE_PREVIEW_ENABLED` 与 `OCR_IMAGE_DIR`；
+- eval 指标去除 structured-v1 硬编码，structured-v2 的 MD/PPTX 引用可正确统计；
+- 生产 SQLite 与 Chroma 均已 100% 为 structured-v2。
 
 - 五种文档格式统一输出 `ParsedBlock`、`ParsedUnit` 和 `SourceLocator`；
 - 公共 Assembler 负责稳定 ID、连续 sequence、canonical text 和字符 offset；
@@ -99,6 +107,7 @@ SQLite 中保存的结构 JSON 在读取时会重新经过 Pydantic 校验；损
 可选 OCR 支持扫描 PDF、PDF 页内图片/图表以及 DOCX/PPTX 内嵌图片；各层默认关闭，
 失败只产生 warning，不阻塞其余内容入库。当前不支持 Excel、旧版 PowerPoint/Excel、
 Markdown 外部相对路径图片、SmartArt 和演讲者备注。
+OCR 表格转 Markdown 已推迟到下一轮；当前 OCR 表格内容仍以段落原文展示。
 
 ## 环境准备
 
@@ -123,6 +132,8 @@ OCR_ENABLED=false
 OCR_PDF_SCANNED=false
 OCR_PDF_PAGE_IMAGES=false
 OCR_EMBEDDED_IMAGES=false
+OCR_IMAGE_PREVIEW_ENABLED=true
+OCR_IMAGE_DIR=./data/ocr_images
 ```
 
 启用任一 OCR 层前，还必须配置 `VISION_API_KEY`、`VISION_BASE_URL` 和 `VISION_MODEL`；
