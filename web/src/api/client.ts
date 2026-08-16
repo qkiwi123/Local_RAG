@@ -118,4 +118,8 @@ export const api = {
     request<CitationPreviewPayload>(
       `/api/citations/${documentId}/chunks/${chunkId}/preview`,
     ),
+
+  // OCR 原图对照预览
+  ocrImageUrl: (documentId: string, imageRef: string) =>
+    `/api/documents/id/${encodeURIComponent(documentId)}/ocr-images/${encodeURIComponent(imageRef)}`,
 };

@@ -64,7 +64,11 @@ export function DocumentPreviewDrawer({
                       <Title level={5}>{unit.location.location_label}</Title>
                     </div>
                   </div>
-                  <StructuredRenderer blocks={unit.blocks} />
+                  <StructuredRenderer
+                    blocks={unit.blocks}
+                    documentId={preview.document_id}
+                    showOcrImages
+                  />
                 </section>
               ))}
             </div>

@@ -75,6 +75,8 @@ function CitationPreviewModal({
                   blocks={unit.blocks}
                   highlightStart={isTarget ? preview.highlight_start : undefined}
                   highlightEnd={isTarget ? preview.highlight_end : undefined}
+                  documentId={citation.document_id ?? undefined}
+                  showOcrImages
                 />
               </section>
             );

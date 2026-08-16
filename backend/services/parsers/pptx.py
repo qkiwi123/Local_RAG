@@ -26,6 +26,8 @@ from backend.services.parsers.ocr import (
     ocr_attributes,
     run_vision,
 )
+from backend.services.parsers.ocr_structure import classify_ocr_blocks
+from backend.services.ocr_image_store import save_image
 from backend.services.parsers.office_zip import validate_office_package
 from backend.services.parsers.tables import render_table_markdown
 from backend.services.parsers.text import normalize_text
@@ -144,16 +146,23 @@ def _append_shape_drafts(
             code="ocr_embedded_image_failed",
         )
         if recognized:
-            drafts.append(
-                BlockDraft(
-                    block_type="paragraph",
-                    text=recognized,
-                    attributes={
-                        **attributes,
-                        **ocr_attributes("embedded_image"),
-                    },
-                )
+            image_attrs = ocr_attributes("embedded_image")
+            image_ref = save_image(
+                vision.file_hash,
+                f"pptx-img:{image_blob_sha256(blob)[:16]}",
+                normalized,
             )
+            if image_ref:
+                image_attrs["ocr_image_ref"] = image_ref
+                image_attrs["ocr_image_kind"] = "embedded_image"
+            for draft in classify_ocr_blocks(
+                recognized,
+                ocr_attrs=image_attrs,
+                allow_headings=False,
+                split_into_paragraphs=False,
+            ):
+                draft.attributes.update(attributes)
+                drafts.append(draft)
         return
 
     if getattr(shape, "has_table", False):

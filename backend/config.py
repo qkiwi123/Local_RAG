@@ -141,6 +141,11 @@ class Settings:
     VISION_CACHE_DIR: str = os.getenv(
         "VISION_CACHE_DIR", str(BASE_DIR / "data" / "vision_cache")
     )
+    # OCR 原图对照预览：入库时保存 OCR 使用的图片，供文档/引用预览对照展示。
+    OCR_IMAGE_PREVIEW_ENABLED: bool = _env_bool("OCR_IMAGE_PREVIEW_ENABLED", True)
+    OCR_IMAGE_DIR: str = os.getenv(
+        "OCR_IMAGE_DIR", str(BASE_DIR / "data" / "ocr_images")
+    )
 
     # ─── Trace 持久化与模型预热 ────────────────────────
     # Trace 仅在 RETRIEVAL_TRACE_ENABLED=true 时计算并持久化；总量超过

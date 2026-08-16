@@ -1,10 +1,16 @@
 import React from "react";
 import { Tag, Typography } from "antd";
+import { api } from "../api/client";
 import type { LocatedBlock } from "../api/types";
 
 const { Paragraph, Title, Text } = Typography;
 
 export const OCR_BADGE_TEXT = "AI 识别，可能存在误差";
+
+const preWrapStyle: React.CSSProperties = {
+  whiteSpace: "pre-wrap",
+  marginBottom: 4,
+};
 
 /** 把块内与 [highlightStart, highlightEnd) 相交的字符用 <mark> 包裹。 */
 function highlightText(
@@ -34,22 +40,78 @@ interface BlockViewProps {
   block: LocatedBlock;
   highlightStart?: number;
   highlightEnd?: number;
+  documentId?: string;
+  showOcrImages?: boolean;
+  seenOcrImages?: Set<string>;
 }
 
-export function BlockView({ block, highlightStart, highlightEnd }: BlockViewProps) {
+function levelTitle(level: number): 1 | 2 | 3 | 4 | 5 {
+  return Math.min(Math.max(level, 1), 5) as 1 | 2 | 3 | 4 | 5;
+}
+
+export function BlockView({
+  block,
+  highlightStart,
+  highlightEnd,
+  documentId,
+  showOcrImages,
+  seenOcrImages,
+}: BlockViewProps) {
   const ocr = block.attributes?.ocr === true;
-  const badge = ocr ? (
-    <Tag color="orange" style={{ marginLeft: 8 }}>
-      {OCR_BADGE_TEXT}
-    </Tag>
-  ) : null;
+  const leadingHeadingLevel =
+    typeof block.attributes?.ocr_leading_heading_level === "number"
+      ? block.attributes.ocr_leading_heading_level
+      : null;
+  const imageRef =
+    typeof block.attributes?.ocr_image_ref === "string"
+      ? block.attributes.ocr_image_ref
+      : null;
+
+  const showImage =
+    Boolean(showOcrImages && documentId && imageRef) &&
+    Boolean(seenOcrImages && !seenOcrImages.has(imageRef as string));
+  if (showImage && seenOcrImages) {
+    seenOcrImages.add(imageRef as string);
+  }
+
+  const renderHighlightedLine = (text: string, lineStart: number) => {
+    if (highlightStart !== undefined && highlightEnd !== undefined) {
+      return highlightText(text, lineStart, highlightStart, highlightEnd);
+    }
+    return text;
+  };
+
+  const renderOcrParagraph = () => {
+    const lines = block.text.split("\n");
+    if (leadingHeadingLevel && lines.length > 1) {
+      const heading = lines[0];
+      const rest = lines.slice(1).join("\n");
+      const restStart = block.start_char + heading.length + 1;
+      return (
+        <div>
+          <Title level={levelTitle(leadingHeadingLevel)} style={{ marginBottom: 4 }}>
+            {renderHighlightedLine(heading, block.start_char)}
+          </Title>
+          {rest ? (
+            <div style={preWrapStyle}>{renderHighlightedLine(rest, restStart)}</div>
+          ) : null}
+        </div>
+      );
+    }
+    return (
+      <div style={preWrapStyle}>
+        {highlightStart !== undefined && highlightEnd !== undefined
+          ? highlightText(block.text, block.start_char, highlightStart, highlightEnd)
+          : block.text}
+      </div>
+    );
+  };
 
   const renderBody = () => {
     switch (block.block_type) {
       case "heading": {
-        const level = Math.min(Math.max(block.heading_level ?? 1, 1), 5);
-        const Level = [Title, Title, Title, Title, Title][level - 1];
-        return <Level level={level as 1 | 2 | 3 | 4 | 5}>{body()}</Level>;
+        const level = levelTitle(block.heading_level ?? 1);
+        return <Title level={level}>{body()}</Title>;
       }
       case "quote":
         return <blockquote style={quoteStyle}>{body()}</blockquote>;
@@ -59,16 +121,37 @@ export function BlockView({ block, highlightStart, highlightEnd }: BlockViewProp
             <code>{body()}</code>
           </pre>
         );
-      case "list_item":
+      case "list_item": {
+        const lines = block.text.split("\n");
+        if (ocr && lines.length > 1) {
+          let offset = block.start_char;
+          return (
+            <div>
+              {lines.map((line, index) => {
+                const lineStart = offset;
+                offset += line.length + 1;
+                return (
+                  <div key={index} style={{ marginLeft: (block.list_level ?? 0) * 1.5 + "em" }}>
+                    • {renderHighlightedLine(line, lineStart)}
+                  </div>
+                );
+              })}
+            </div>
+          );
+        }
         return (
           <div style={{ marginLeft: (block.list_level ?? 0) * 1.5 + "em" }}>
             • {body()}
           </div>
         );
+      }
       case "table":
         return renderTable();
       case "paragraph":
       default:
+        if (ocr) {
+          return renderOcrParagraph();
+        }
         return <Paragraph style={{ marginBottom: 4 }}>{body()}</Paragraph>;
     }
   };
@@ -111,9 +194,34 @@ export function BlockView({ block, highlightStart, highlightEnd }: BlockViewProp
     );
   };
 
+  const content = renderBody();
+  const badge = ocr ? (
+    <Tag color="orange" style={{ marginLeft: 8 }}>
+      {OCR_BADGE_TEXT}
+    </Tag>
+  ) : null;
+
   return (
     <div>
-      {renderBody()}
+      {showImage ? (
+        <div className="ocr-compare">
+          <a
+            className="ocr-compare__image"
+            href={api.ocrImageUrl(documentId as string, imageRef as string)}
+            target="_blank"
+            rel="noreferrer"
+            title="点击查看原图"
+          >
+            <img
+              src={api.ocrImageUrl(documentId as string, imageRef as string)}
+              alt="OCR 识别原图"
+            />
+          </a>
+          <div className="ocr-compare__text">{content}</div>
+        </div>
+      ) : (
+        content
+      )}
       {badge}
     </div>
   );
@@ -123,13 +231,18 @@ interface StructuredRendererProps {
   blocks: LocatedBlock[];
   highlightStart?: number;
   highlightEnd?: number;
+  documentId?: string;
+  showOcrImages?: boolean;
 }
 
 export function StructuredRenderer({
   blocks,
   highlightStart,
   highlightEnd,
+  documentId,
+  showOcrImages,
 }: StructuredRendererProps) {
+  const seenOcrImages = new Set<string>();
   return (
     <div>
       {blocks.map((block) => (
@@ -138,6 +251,9 @@ export function StructuredRenderer({
           block={block}
           highlightStart={highlightStart}
           highlightEnd={highlightEnd}
+          documentId={documentId}
+          showOcrImages={showOcrImages}
+          seenOcrImages={seenOcrImages}
         />
       ))}
     </div>

@@ -29,6 +29,8 @@ from backend.services.parsers.ocr import (
     ocr_attributes,
     run_vision,
 )
+from backend.services.parsers.ocr_structure import classify_ocr_blocks
+from backend.services.ocr_image_store import save_image
 from backend.services.parsers.text import normalize_text, split_paragraphs
 from backend.services.vision import describe_image, recognize_text
 from backend.services.vision_cache import VisionBudget
@@ -177,11 +179,14 @@ def parse_pdf_document(
         text = page_text
         ocr_applied = False
 
+        page_image: bytes | None = None
+
         if not text and _scanned_ocr_enabled():
+            page_image = render_page_image(file_path, index)
             recognized = run_vision(
                 file_hash,
                 f"pdf-page:{index}",
-                render_page_image(file_path, index),
+                page_image,
                 recognize_text,
                 budget=budget,
                 warnings=warnings,
@@ -195,15 +200,24 @@ def parse_pdf_document(
         if not text:
             text = _EMPTY_PAGE_TEMPLATE.format(page=index)
 
-        attributes = ocr_attributes("scanned_page") if ocr_applied else {}
-        drafts = [
-            BlockDraft(
-                block_type="paragraph",
-                text=paragraph,
-                attributes=attributes,
+        if ocr_applied:
+            ocr_attrs = ocr_attributes("scanned_page")
+            image_ref = save_image(file_hash, f"pdf-page:{index}", page_image or b"")
+            if image_ref:
+                ocr_attrs["ocr_image_ref"] = image_ref
+                ocr_attrs["ocr_image_kind"] = "scanned_page"
+            drafts = classify_ocr_blocks(
+                text,
+                ocr_attrs=ocr_attrs,
             )
-            for paragraph in split_paragraphs(text)
-        ]
+        else:
+            drafts = [
+                BlockDraft(
+                    block_type="paragraph",
+                    text=paragraph,
+                )
+                for paragraph in split_paragraphs(text)
+            ]
 
         # B 层：原生文本页含图片/图表时追加说明块（OCR 后的页不再重复描述）。
         if (
@@ -212,10 +226,11 @@ def parse_pdf_document(
             and _page_images_enabled()
             and page_has_images(file_path, index)
         ):
+            page_image = render_page_image(file_path, index)
             description = run_vision(
                 file_hash,
                 f"pdf-page-images:{index}",
-                render_page_image(file_path, index),
+                page_image,
                 describe_image,
                 budget=budget,
                 warnings=warnings,
@@ -223,11 +238,20 @@ def parse_pdf_document(
                 code="ocr_page_description_failed",
             )
             if description:
+                desc_attrs = ocr_attributes("page_images")
+                image_ref = save_image(
+                    file_hash,
+                    f"pdf-page-images:{index}",
+                    page_image,
+                )
+                if image_ref:
+                    desc_attrs["ocr_image_ref"] = image_ref
+                    desc_attrs["ocr_image_kind"] = "page_images"
                 drafts.append(
                     BlockDraft(
                         block_type="paragraph",
                         text=description,
-                        attributes=ocr_attributes("page_images"),
+                        attributes=desc_attrs,
                     )
                 )
 

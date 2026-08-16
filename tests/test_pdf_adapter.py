@@ -173,8 +173,33 @@ def test_scanned_page_ocr_replaces_placeholder(monkeypatch, tmp_path, ocr_enable
         "ocr": True,
         "vision_model": settings.VISION_MODEL,
         "vision_kind": "scanned_page",
+        "ocr_structure": "heuristic-v1",
     }
     assert unit.parser_version == PARSER_VERSION
+
+
+def test_scanned_page_attaches_ocr_image_ref_when_preview_enabled(
+    monkeypatch, tmp_path, ocr_enabled
+):
+    from backend.config import settings
+
+    image_dir = tmp_path / "ocr_images"
+    monkeypatch.setattr(settings, "OCR_IMAGE_PREVIEW_ENABLED", True)
+    monkeypatch.setattr(settings, "OCR_IMAGE_DIR", str(image_dir))
+    source = _image_pdf(tmp_path / "scanned.pdf")
+    monkeypatch.setattr(
+        pdf_adapter, "recognize_text", lambda image_bytes: "识别到的正文文字"
+    )
+
+    result = pdf_adapter.parse_pdf_document(
+        str(source), document_id="doc-ocr-image"
+    )
+
+    attrs = result.units[0].blocks[0].attributes
+    assert attrs["ocr_image_kind"] == "scanned_page"
+    image_ref = attrs["ocr_image_ref"]
+    assert isinstance(image_ref, str) and len(image_ref) == 16
+    assert (image_dir / f"{image_ref}.jpg").read_bytes() == b"fake"
 
 
 def test_ocr_disabled_keeps_placeholder(monkeypatch, tmp_path):

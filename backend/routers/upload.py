@@ -4,12 +4,15 @@
 向量 metadata、chunk ID 与删除操作全部通过 document_id 对齐。
 """
 
+import json
 import logging
 import os
+import sqlite3
 from pathlib import Path
 from uuid import uuid4
 
 from fastapi import APIRouter, File, Form, HTTPException, Query, UploadFile
+from fastapi.responses import FileResponse
 
 from backend.config import settings
 from backend.models.schemas import (
@@ -27,6 +30,7 @@ from backend.services.document_store import (
     mark_failed,
     mark_ready,
 )
+from backend.services.ocr_image_store import delete_image, resolve_image
 from backend.services.embedding import count_tokens
 from backend.services.parsers import (
     ADAPTERS,
@@ -294,6 +298,69 @@ async def list_documents(
         "document_items": records,
     }
 
+def _ocr_image_refs_for_document(document_id: str) -> set[str]:
+    """收集文档结构化 blocks 中引用的全部 OCR 原图 ref。"""
+    refs: set[str] = set()
+    try:
+        units = list_document_units(
+            document_id,
+            PARSER_VERSION,
+            db_path=settings.METADATA_DB_PATH,
+        )
+    except Exception:
+        return refs
+    for unit in units:
+        for block in unit.blocks:
+            image_ref = block.attributes.get("ocr_image_ref")
+            if isinstance(image_ref, str) and image_ref:
+                refs.add(image_ref)
+    return refs
+
+
+def _ocr_image_refs_used_elsewhere(document_id: str, refs: set[str]) -> set[str]:
+    """返回同时被其他文档 units 引用的图片 ref（避免误删共享图片）。"""
+    if not refs:
+        return set()
+    used: set[str] = set()
+    connection = sqlite3.connect(settings.METADATA_DB_PATH, timeout=10)
+    try:
+        rows = connection.execute(
+            "SELECT structure_json FROM document_units WHERE document_id != ?",
+            (document_id,),
+        ).fetchall()
+    finally:
+        connection.close()
+    for (structure_json,) in rows:
+        try:
+            structure = json.loads(structure_json)
+        except json.JSONDecodeError:
+            continue
+        for block in structure.get("blocks", []):
+            image_ref = (block.get("attributes") or {}).get("ocr_image_ref")
+            if isinstance(image_ref, str) and image_ref in refs:
+                used.add(image_ref)
+    return used
+
+
+@router.get("/documents/id/{document_id}/ocr-images/{image_ref}")
+async def get_ocr_image(document_id: str, image_ref: str):
+    """返回 OCR 识别所用的原始图片，供预览对照展示。"""
+    if not settings.OCR_IMAGE_PREVIEW_ENABLED:
+        raise HTTPException(status_code=404, detail="OCR 原图预览未开启")
+    record = get_document(document_id)
+    if not record or record.get("status") != "ready":
+        raise HTTPException(status_code=404, detail="文档不存在或未就绪")
+    if image_ref not in _ocr_image_refs_for_document(document_id):
+        raise HTTPException(status_code=404, detail="图片引用不存在")
+    path = resolve_image(image_ref)
+    if path is None:
+        raise HTTPException(status_code=404, detail="图片文件不存在")
+    return FileResponse(
+        path,
+        media_type="image/jpeg",
+        headers={"Cache-Control": "private, no-store"},
+    )
+
 
 @router.put("/documents/id/{document_id}/tags")
 async def update_document_tags(document_id: str, payload: DocumentTagsUpdate):
@@ -361,10 +428,14 @@ def _delete_registered_document(document_id: str) -> dict:
     if not delete_document_by_id(document_id):
         raise HTTPException(status_code=500, detail="删除向量数据失败")
 
+    image_refs = _ocr_image_refs_for_document(document_id)
     delete_document_units(
         document_id,
         db_path=settings.METADATA_DB_PATH,
     )
+    shared_refs = _ocr_image_refs_used_elsewhere(document_id, image_refs)
+    for image_ref in image_refs - shared_refs:
+        delete_image(image_ref)
     upload_dir = Path(settings.UPLOAD_DIR)
     _safe_unlink(upload_dir / record["stored_name"], upload_dir)
     delete_record(document_id)

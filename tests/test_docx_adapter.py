@@ -173,6 +173,7 @@ def test_docx_embedded_image_inserts_ocr_block_in_place(
         "ocr": True,
         "vision_model": settings.VISION_MODEL,
         "vision_kind": "embedded_image",
+        "ocr_structure": "heuristic-v1",
     }
 
 
