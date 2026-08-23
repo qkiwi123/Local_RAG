@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Optional
 
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 
 SCHEMA_META = """
 CREATE TABLE schema_meta (
@@ -128,6 +128,25 @@ CREATE TABLE message_traces (
 )
 """
 
+# v4：运行时设置只保存非敏感覆盖；API Key 等密钥使用独立 DPAPI 文件。
+RUNTIME_SETTINGS_SCHEMA = """
+CREATE TABLE runtime_settings (
+    singleton_id INTEGER PRIMARY KEY CHECK (singleton_id = 1),
+    revision INTEGER NOT NULL CHECK (revision >= 1),
+    payload_json TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+)
+"""
+
+RUNTIME_SETTINGS_HISTORY_SCHEMA = """
+CREATE TABLE runtime_settings_history (
+    revision INTEGER PRIMARY KEY CHECK (revision >= 1),
+    payload_json TEXT NOT NULL,
+    changed_keys_json TEXT NOT NULL,
+    created_at TEXT NOT NULL
+)
+"""
+
 _SCHEMAS = (
     SCHEMA_META,
     DOCUMENTS_SCHEMA,
@@ -138,6 +157,8 @@ _SCHEMAS = (
     TAGS_SCHEMA,
     DOCUMENT_TAGS_SCHEMA,
     MESSAGE_TRACES_SCHEMA,
+    RUNTIME_SETTINGS_SCHEMA,
+    RUNTIME_SETTINGS_HISTORY_SCHEMA,
 )
 _REQUIRED_TABLES = {
     "schema_meta",
@@ -149,6 +170,8 @@ _REQUIRED_TABLES = {
     "tags",
     "document_tags",
     "message_traces",
+    "runtime_settings",
+    "runtime_settings_history",
 }
 _V1_REQUIRED_TABLES = {
     "schema_meta",
@@ -167,6 +190,17 @@ _V2_REQUIRED_TABLES = {
     "chat_requests",
     "tags",
     "document_tags",
+}
+_V3_REQUIRED_TABLES = {
+    "schema_meta",
+    "documents",
+    "document_units",
+    "conversations",
+    "messages",
+    "chat_requests",
+    "tags",
+    "document_tags",
+    "message_traces",
 }
 
 
@@ -206,6 +240,8 @@ def _required_tables_for(version: int) -> set[str]:
         return _V1_REQUIRED_TABLES
     if version == 2:
         return _V2_REQUIRED_TABLES
+    if version == 3:
+        return _V3_REQUIRED_TABLES
     if version == SCHEMA_VERSION:
         return _REQUIRED_TABLES
     raise UnsupportedSchemaError(
@@ -226,6 +262,13 @@ def _apply_migration(connection: sqlite3.Connection, from_version: int) -> None:
         connection.execute(MESSAGE_TRACES_SCHEMA)
         connection.execute(
             "UPDATE schema_meta SET schema_version = 3 WHERE schema_version = 2"
+        )
+        return
+    if from_version == 3:
+        connection.execute(RUNTIME_SETTINGS_SCHEMA)
+        connection.execute(RUNTIME_SETTINGS_HISTORY_SCHEMA)
+        connection.execute(
+            "UPDATE schema_meta SET schema_version = 4 WHERE schema_version = 3"
         )
         return
     raise UnsupportedSchemaError(

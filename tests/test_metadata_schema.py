@@ -43,6 +43,8 @@ def test_empty_database_bootstraps_complete_versioned_schema(temp_dir):
         "tags",
         "document_tags",
         "message_traces",
+        "runtime_settings",
+        "runtime_settings_history",
     }
     connection = sqlite3.connect(db_path)
     try:

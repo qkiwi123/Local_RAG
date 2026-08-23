@@ -22,15 +22,35 @@ if _ISOLATION_ROOT:
 else:
     _TEST_ROOT = Path(tempfile.mkdtemp(prefix="rag-pytest-"))
 os.environ["DEEPSEEK_API_KEY"] = "test-key-not-used"
+os.environ["LLM_ENABLED"] = "true"
+os.environ["LLM_PROVIDER"] = "deepseek"
+os.environ["LLM_TEMPERATURE"] = "0.3"
+os.environ["LLM_MAX_TOKENS"] = "2000"
+os.environ["LLM_TIMEOUT_SECONDS"] = "120"
 os.environ["CHROMA_PERSIST_DIR"] = str(_TEST_ROOT / "chroma")
 os.environ["UPLOAD_DIR"] = str(_TEST_ROOT / "uploads")
 os.environ["METADATA_DB_PATH"] = str(_TEST_ROOT / "metadata.db")
 os.environ["EMBEDDING_MODEL"] = "BAAI/bge-large-zh-v1.5"
 os.environ["EMBEDDING_QUERY_INSTRUCTION"] = ""
+# 测试设备不得继承生产 .env；GPU 专项可通过 PYTEST_* 显式选择。
+os.environ["EMBEDDING_DEVICE"] = os.environ.get(
+    "PYTEST_EMBEDDING_DEVICE", "cpu"
+)
+os.environ["EMBEDDING_BATCH_SIZE"] = os.environ.get(
+    "PYTEST_EMBEDDING_BATCH_SIZE", "32"
+)
 os.environ["RETRIEVAL_MODE"] = "dense"
+os.environ["DENSE_CANDIDATE_K"] = ""
+os.environ["MAX_CHUNKS_PER_DOCUMENT"] = "3"
 os.environ["RETRIEVAL_TRACE_ENABLED"] = "false"
 # 单元测试默认不加载约 2.2 GB 的 Reranker；专项测试会显式开启。
 os.environ["RERANKER_ENABLED"] = "false"
+os.environ["RERANKER_DEVICE"] = os.environ.get(
+    "PYTEST_RERANKER_DEVICE", "cpu"
+)
+os.environ["RERANKER_USE_FP16"] = os.environ.get(
+    "PYTEST_RERANKER_USE_FP16", "false"
+)
 os.environ["CITATION_PREVIEW_ENABLED"] = "false"
 # OCR 默认全部关闭，测试不受本地 .env 的真实开关影响；专项测试显式开启。
 os.environ["OCR_ENABLED"] = "false"

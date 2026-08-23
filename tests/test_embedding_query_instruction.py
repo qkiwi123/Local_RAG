@@ -50,6 +50,9 @@ def test_query_instruction_is_applied_only_to_queries(monkeypatch):
 
 
 def test_eval_cli_sets_and_records_query_instruction(monkeypatch, tmp_path):
+    # 其他测试可能已在 CPU 上加载模型；本测试验证的是“未加载时只记录配置”，
+    # 必须清缓存以避免执行顺序把 CPU 实例与模拟的 cuda:0 配置混在一起。
+    embedding._get_model.cache_clear()
     instruction = "为这个句子生成表示以用于检索相关文章："
     monkeypatch.setattr(eval_cli, "EVAL_DIR", tmp_path)
     for name in (

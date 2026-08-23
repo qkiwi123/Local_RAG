@@ -8,6 +8,7 @@
 import os
 import re
 from pathlib import Path
+from urllib.parse import urlsplit
 from dotenv import load_dotenv
 
 # 加载项目根目录下的 .env 文件
@@ -41,6 +42,12 @@ class Settings:
     DEEPSEEK_API_KEY: str = os.getenv("DEEPSEEK_API_KEY", "")
     DEEPSEEK_BASE_URL: str = os.getenv("DEEPSEEK_BASE_URL", "https://api.deepseek.com")
     DEEPSEEK_MODEL: str = os.getenv("DEEPSEEK_MODEL", "deepseek-v4-flash")
+    # S1 先解析运行时设置可覆盖的部署默认；实际业务链路在 S3/S4 接入。
+    LLM_ENABLED: bool = _env_bool("LLM_ENABLED", True)
+    LLM_PROVIDER: str = os.getenv("LLM_PROVIDER", "deepseek").strip().lower()
+    LLM_TEMPERATURE: float = float(os.getenv("LLM_TEMPERATURE", "0.3"))
+    LLM_MAX_TOKENS: int = int(os.getenv("LLM_MAX_TOKENS", "2000"))
+    LLM_TIMEOUT_SECONDS: float = float(os.getenv("LLM_TIMEOUT_SECONDS", "120"))
 
     # ─── 文件存储 ──────────────────────────────────────
     # 相对路径统一基于项目根目录（即 backend/ 的上一级）
@@ -64,6 +71,18 @@ class Settings:
 
     # ─── 检索参数 ─────────────────────────────────────
     RETRIEVAL_TOP_K: int = int(os.getenv("RETRIEVAL_TOP_K", "5"))
+    _DENSE_CANDIDATE_K_RAW = (os.getenv("DENSE_CANDIDATE_K") or "").strip()
+    DENSE_CANDIDATE_K: int | None = (
+        int(_DENSE_CANDIDATE_K_RAW)
+        if _DENSE_CANDIDATE_K_RAW
+        else None
+    )
+    MAX_CHUNKS_PER_DOCUMENT: int = int(
+        os.getenv(
+            "MAX_CHUNKS_PER_DOCUMENT",
+            str(min(3, RETRIEVAL_TOP_K)),
+        )
+    )
     # Chroma cosine distance 越小越相似；P1-4 在真实评测集上校准为 0.67。
     RETRIEVAL_DISTANCE_THRESHOLD: float = float(
         os.getenv("RETRIEVAL_DISTANCE_THRESHOLD", "0.67")
@@ -171,12 +190,30 @@ class Settings:
 
     def _validate(self):
         """校验必须配置的项是否已设置，缺失时抛出明确错误。"""
-        if not self.DEEPSEEK_API_KEY:
+        if not self.DEEPSEEK_API_KEY.strip():
             raise ValueError(
                 "缺少必填配置: DEEPSEEK_API_KEY\n"
                 "请在项目根目录的 .env 文件中设置 DEEPSEEK_API_KEY=你的API密钥\n"
                 "（可参考 .env.example 模板）"
             )
+        parsed_base_url = urlsplit(self.DEEPSEEK_BASE_URL)
+        if (
+            parsed_base_url.scheme not in {"http", "https"}
+            or not parsed_base_url.netloc
+            or parsed_base_url.username is not None
+            or parsed_base_url.password is not None
+        ):
+            raise ValueError("DEEPSEEK_BASE_URL 必须是有效的 HTTP(S) URL")
+        if not self.DEEPSEEK_MODEL.strip() or len(self.DEEPSEEK_MODEL) > 200:
+            raise ValueError("DEEPSEEK_MODEL 长度必须为 1 到 200 个字符")
+        if self.LLM_PROVIDER not in {"deepseek", "openai_compatible"}:
+            raise ValueError("LLM_PROVIDER 仅支持 deepseek 或 openai_compatible")
+        if not 0 <= self.LLM_TEMPERATURE <= 2:
+            raise ValueError("LLM_TEMPERATURE 必须在 0 到 2 之间")
+        if not 1 <= self.LLM_MAX_TOKENS <= 32768:
+            raise ValueError("LLM_MAX_TOKENS 必须在 1 到 32768 之间")
+        if not 1 <= self.LLM_TIMEOUT_SECONDS <= 600:
+            raise ValueError("LLM_TIMEOUT_SECONDS 必须在 1 到 600 之间")
         if self.CHUNK_STRATEGY not in {"fixed", "recursive"}:
             raise ValueError("CHUNK_STRATEGY 仅支持 fixed 或 recursive")
         if self.CHUNK_SIZE <= 0:
@@ -189,6 +226,18 @@ class Settings:
             raise ValueError("RETRIEVAL_DISTANCE_THRESHOLD 必须在 0 到 2 之间")
         if self.RETRIEVAL_MODE not in {"dense", "bm25", "hybrid"}:
             raise ValueError("RETRIEVAL_MODE 必须是 dense、bm25 或 hybrid")
+        if not 1 <= self.RETRIEVAL_TOP_K <= 20:
+            raise ValueError("RETRIEVAL_TOP_K 必须在 1 到 20 之间")
+        if self.DENSE_CANDIDATE_K is not None and not (
+            self.RETRIEVAL_TOP_K <= self.DENSE_CANDIDATE_K <= 100
+        ):
+            raise ValueError(
+                "DENSE_CANDIDATE_K 必须在 RETRIEVAL_TOP_K 到 100 之间"
+            )
+        if not 1 <= self.MAX_CHUNKS_PER_DOCUMENT <= self.RETRIEVAL_TOP_K:
+            raise ValueError(
+                "MAX_CHUNKS_PER_DOCUMENT 必须在 1 到 RETRIEVAL_TOP_K 之间"
+            )
         if self.BM25_TOP_K <= 0:
             raise ValueError("BM25_TOP_K 必须大于 0")
         if self.BM25_K1 <= 0:

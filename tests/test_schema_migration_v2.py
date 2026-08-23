@@ -298,3 +298,48 @@ def test_v2_migration_is_idempotent(temp_dir):
         ).fetchone()[0] == SCHEMA_VERSION
     finally:
         connection.close()
+
+
+def test_bootstrap_migrates_v3_to_v4_and_preserves_rows(temp_dir):
+    db_path = f"{temp_dir}/metadata.db"
+    _create_v2_database(db_path)
+    connection = sqlite3.connect(db_path)
+    try:
+        connection.execute(
+            """
+            CREATE TABLE message_traces (
+                message_id TEXT PRIMARY KEY,
+                trace_json TEXT NOT NULL,
+                size_bytes INTEGER NOT NULL,
+                created_at TEXT NOT NULL,
+                FOREIGN KEY (message_id)
+                    REFERENCES messages(message_id) ON DELETE CASCADE
+            )
+            """
+        )
+        connection.execute(
+            "UPDATE schema_meta SET schema_version = 3 WHERE schema_version = 2"
+        )
+        connection.commit()
+    finally:
+        connection.close()
+
+    bootstrap_structured_database(db_path, created_at="migration timestamp")
+
+    connection = sqlite3.connect(db_path)
+    try:
+        assert connection.execute(
+            "SELECT schema_version FROM schema_meta"
+        ).fetchone()[0] == SCHEMA_VERSION
+        assert connection.execute(
+            "SELECT title FROM conversations WHERE conversation_id = 'conv-1'"
+        ).fetchone()[0] == "旧会话"
+        tables = {
+            row[0]
+            for row in connection.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'"
+            )
+        }
+        assert {"runtime_settings", "runtime_settings_history"} <= tables
+    finally:
+        connection.close()
