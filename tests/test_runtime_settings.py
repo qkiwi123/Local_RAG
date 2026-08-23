@@ -62,6 +62,16 @@ def _manager(temp_dir, *, environment=None, secret_value=None):
         ("LLM_TIMEOUT_SECONDS", 0, "LLM_TIMEOUT_SECONDS"),
         ("DEEPSEEK_MODEL", "", "DEEPSEEK_MODEL"),
         ("DEEPSEEK_BASE_URL", "file:///tmp/model", "DEEPSEEK_BASE_URL"),
+        (
+            "DEEPSEEK_BASE_URL",
+            "https://api.example.com/v1?token=secret",
+            "DEEPSEEK_BASE_URL",
+        ),
+        (
+            "DEEPSEEK_BASE_URL",
+            "https://api.example.com/v1#fragment",
+            "DEEPSEEK_BASE_URL",
+        ),
         ("RETRIEVAL_TOP_K", 21, "RETRIEVAL_TOP_K"),
         ("DENSE_CANDIDATE_K", 4, "DENSE_CANDIDATE_K"),
         ("MAX_CHUNKS_PER_DOCUMENT", 6, "MAX_CHUNKS_PER_DOCUMENT"),
@@ -203,6 +213,29 @@ def test_cross_field_validation_is_atomic(temp_dir):
                     "reranker_candidate_k": 11,
                 }
             },
+            expected_revision=0,
+        )
+
+    assert manager.snapshot().revision == 0
+    assert manager._store.load().revision == 0
+
+
+@pytest.mark.parametrize(
+    "base_url",
+    [
+        "https://api.example.com/v1?token=secret",
+        "https://api.example.com/v1#fragment",
+    ],
+)
+def test_runtime_base_url_rejects_query_and_fragment_atomically(
+    temp_dir,
+    base_url,
+):
+    manager = _manager(temp_dir)
+
+    with pytest.raises(RuntimeSettingsValidationError):
+        manager.update(
+            {"llm": {"base_url": base_url}},
             expected_revision=0,
         )
 

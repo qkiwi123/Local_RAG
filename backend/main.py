@@ -39,13 +39,21 @@ app.add_middleware(
 )
 
 # 注册路由
-from backend.routers import upload, chat, citations, conversations, tags
+from backend.routers import (
+    chat,
+    citations,
+    conversations,
+    settings as settings_router,
+    tags,
+    upload,
+)
 
 app.include_router(upload.router, prefix="/api")
 app.include_router(chat.router, prefix="/api")
 app.include_router(citations.router)
 app.include_router(conversations.router, prefix="/api")
 app.include_router(tags.router, prefix="/api")
+app.include_router(settings_router.router, prefix="/api")
 
 
 @app.get("/api/health")
@@ -85,12 +93,14 @@ async def startup_event():
     from backend.config import settings
     from backend.services.metadata_schema import bootstrap_structured_database
     from backend.services.conversation_store import recover_interrupted_requests
+    from backend.services.runtime_settings import RuntimeSettingsManager
     from backend.services.warmup import start_background_warmup
 
     bootstrap_structured_database(
         settings.METADATA_DB_PATH,
         created_at=datetime.now(timezone.utc).isoformat(timespec="seconds"),
     )
+    app.state.runtime_settings_manager = RuntimeSettingsManager()
     recover_interrupted_requests()
     start_background_warmup()
     print(f"[启动] RAG Knowledge Base API v0.1.0")

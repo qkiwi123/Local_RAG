@@ -1,7 +1,7 @@
-"""运行时设置的内部强类型模型。
+"""运行时设置的内部强类型模型与只读 API 响应。
 
-本模块只定义 S1 的有效快照与非敏感覆盖结构，不包含 HTTP 请求/响应模型。
 所有模型都拒绝未知字段；有效快照冻结，供一次请求在链路内稳定传递。
+只读响应不包含 SecretStr，只暴露密钥是否配置、来源和安全后缀。
 """
 
 from __future__ import annotations
@@ -22,6 +22,14 @@ from pydantic import (
 ProviderName = Literal["deepseek", "openai_compatible"]
 RetrievalMode = Literal["dense", "bm25", "hybrid"]
 FieldSource = Literal["environment", "runtime", "system"]
+ActivationLevel = Literal[
+    "next_request",
+    "restart_required",
+    "reindex_required",
+    "unavailable",
+    "pending_s3",
+    "pending_s4",
+]
 
 
 def _validate_http_url(value: str) -> str:
@@ -33,6 +41,8 @@ def _validate_http_url(value: str) -> str:
         raise ValueError("Base URL 必须是有效的 HTTP(S) URL")
     if parsed.username is not None or parsed.password is not None:
         raise ValueError("Base URL 不能包含用户名或密码")
+    if parsed.query or parsed.fragment:
+        raise ValueError("Base URL 不能包含查询参数或片段")
     return clean.rstrip("/")
 
 
@@ -110,6 +120,86 @@ class EffectiveSettingsSnapshot(_StrictFrozenModel):
     api_key: SecretStr | None = Field(default=None, exclude=True, repr=False)
     api_key_source: Literal["environment", "runtime_secret", "none"]
     field_sources: dict[str, FieldSource]
+
+
+class APIKeyStatus(_StrictFrozenModel):
+    configured: bool
+    source: Literal["environment", "runtime", "none"]
+    masked_suffix: str | None = None
+
+
+class LLMSettingsView(_StrictFrozenModel):
+    enabled: bool
+    provider: ProviderName
+    base_url: str
+    model: str
+    api_key: APIKeyStatus
+    temperature: float
+    max_tokens: int
+    timeout_seconds: float
+
+
+class SettingsRuntimeSummary(_StrictFrozenModel):
+    access_scope: Literal["trusted_local_workspace"] = "trusted_local_workspace"
+    llm_activation: ActivationLevel = "pending_s3"
+    retrieval_activation: ActivationLevel = "pending_s4"
+    refusal_gate_activation: ActivationLevel = "unavailable"
+
+
+class SettingsReadResponse(_StrictFrozenModel):
+    revision: int = Field(ge=0)
+    updated_at: str | None = None
+    llm: LLMSettingsView
+    retrieval: RetrievalSettings
+    runtime: SettingsRuntimeSummary
+    field_sources: dict[str, FieldSource]
+    field_effects: dict[str, ActivationLevel]
+
+
+class ModelRuntimeStatus(_StrictFrozenModel):
+    model: str
+    enabled: bool
+    configured_device: str
+    actual_device: str | None = None
+    loaded: bool
+    verified: bool
+    cache_available: bool
+    batch_size: int = Field(ge=1)
+    fp16: bool | None = None
+    verification_error: Literal[
+        "cached_model_unavailable",
+        "actual_device_unavailable",
+        "device_mismatch",
+    ] | None = None
+
+
+class TorchRuntimeStatus(_StrictFrozenModel):
+    version: str | None = None
+    cuda_available: bool
+    cuda_runtime: str | None = None
+    gpu_names: list[str] = Field(default_factory=list)
+
+
+class IndexRuntimeStatus(_StrictFrozenModel):
+    parser_version: str
+    chunk_strategy: str
+    chunk_size: int = Field(gt=0)
+    chunk_overlap: int = Field(ge=0)
+    chunk_max_tokens: int = Field(gt=0)
+    storage_profile: Literal["production", "test"]
+    chroma_directory: str
+    metadata_database: str
+    upload_directory: str
+    process_index_revision: int = Field(ge=0)
+
+
+class SettingsRuntimeStatusResponse(_StrictFrozenModel):
+    revision: int = Field(ge=0)
+    updated_at: str | None = None
+    embedding: ModelRuntimeStatus
+    reranker: ModelRuntimeStatus
+    torch: TorchRuntimeStatus
+    index: IndexRuntimeStatus
 
 
 class _PartialModel(BaseModel):

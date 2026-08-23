@@ -202,6 +202,8 @@ class Settings:
             or not parsed_base_url.netloc
             or parsed_base_url.username is not None
             or parsed_base_url.password is not None
+            or parsed_base_url.query
+            or parsed_base_url.fragment
         ):
             raise ValueError("DEEPSEEK_BASE_URL 必须是有效的 HTTP(S) URL")
         if not self.DEEPSEEK_MODEL.strip() or len(self.DEEPSEEK_MODEL) > 200:
