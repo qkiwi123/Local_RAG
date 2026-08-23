@@ -27,8 +27,6 @@ ActivationLevel = Literal[
     "restart_required",
     "reindex_required",
     "unavailable",
-    "pending_s3",
-    "pending_s4",
 ]
 
 
@@ -105,6 +103,8 @@ class RetrievalSettings(_StrictFrozenModel):
     def validate_candidate_relationships(self) -> "RetrievalSettings":
         if self.dense_candidate_k < self.final_top_k:
             raise ValueError("dense_candidate_k 不能小于 final_top_k")
+        if self.bm25_top_k < self.final_top_k:
+            raise ValueError("bm25_top_k 不能小于 final_top_k")
         if self.reranker_candidate_k < self.final_top_k:
             raise ValueError("reranker_candidate_k 不能小于 final_top_k")
         if self.max_chunks_per_document > self.final_top_k:
@@ -142,7 +142,7 @@ class LLMSettingsView(_StrictFrozenModel):
 class SettingsRuntimeSummary(_StrictFrozenModel):
     access_scope: Literal["trusted_local_workspace"] = "trusted_local_workspace"
     llm_activation: ActivationLevel = "next_request"
-    retrieval_activation: ActivationLevel = "pending_s4"
+    retrieval_activation: ActivationLevel = "next_request"
     refusal_gate_activation: ActivationLevel = "unavailable"
 
 
@@ -233,21 +233,6 @@ class LLMSettingsPatch(BaseModel):
             exclude_none=True,
             exclude_unset=True,
         )
-
-
-class SettingsPatchRequest(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    expected_revision: int = Field(ge=0)
-    llm: LLMSettingsPatch
-
-
-class SettingsPatchResponse(_StrictFrozenModel):
-    revision: int = Field(ge=0)
-    settings: SettingsReadResponse
-    changed_fields: list[str]
-    effects: list[str]
-    warnings: list[str]
 
 
 class LLMConnectionDraft(BaseModel):
@@ -420,6 +405,31 @@ class RetrievalSettingsOverrides(_PartialModel):
     reranker_candidate_k: int | None = Field(default=None, ge=1, le=100)
     max_chunks_per_document: int | None = Field(default=None, ge=1)
     refusal_gate: RefusalGateOverrides | None = None
+
+    def runtime_payload(self) -> dict:
+        return self.model_dump(exclude_none=True, exclude_unset=True)
+
+
+class SettingsPatchRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    expected_revision: int = Field(ge=0)
+    llm: LLMSettingsPatch | None = None
+    retrieval: RetrievalSettingsOverrides | None = None
+
+    @model_validator(mode="after")
+    def require_section(self) -> "SettingsPatchRequest":
+        if self.llm is None and self.retrieval is None:
+            raise ValueError("至少需要提供 llm 或 retrieval 设置")
+        return self
+
+
+class SettingsPatchResponse(_StrictFrozenModel):
+    revision: int = Field(ge=0)
+    settings: SettingsReadResponse
+    changed_fields: list[str]
+    effects: list[str]
+    warnings: list[str]
 
 
 class RuntimeSettingsOverrides(_PartialModel):

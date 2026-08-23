@@ -1,4 +1,4 @@
-"""S2/S3 设置读取、LLM 保存与草稿连接测试 API。"""
+"""S2-S4 设置读取、动态保存与草稿连接测试 API。"""
 
 from fastapi import APIRouter, HTTPException, Request
 
@@ -47,9 +47,9 @@ async def get_settings(request: Request):
 
 @router.patch("/settings", response_model=SettingsPatchResponse)
 async def patch_settings(payload: SettingsPatchRequest, request: Request):
-    """原子保存 S3 LLM 设置；密钥只接受保留、替换或清除语义。"""
+    """原子保存 LLM/Retrieval 设置；密钥只接受三态语义。"""
     manager = _manager(request)
-    key_update = payload.llm.api_key_update
+    key_update = payload.llm.api_key_update if payload.llm else None
     action = key_update.action if key_update is not None else "keep"
     key_value = (
         key_update.value.get_secret_value()
@@ -57,8 +57,13 @@ async def patch_settings(payload: SettingsPatchRequest, request: Request):
         else None
     )
     try:
-        snapshot, changed_fields = manager.update_llm(
-            payload.llm.runtime_payload(),
+        patch = {}
+        if payload.llm is not None:
+            patch["llm"] = payload.llm.runtime_payload()
+        if payload.retrieval is not None:
+            patch["retrieval"] = payload.retrieval.runtime_payload()
+        snapshot, changed_fields = manager.update_settings(
+            patch,
             expected_revision=payload.expected_revision,
             api_key_action=action,
             api_key_value=key_value,
@@ -88,12 +93,23 @@ async def patch_settings(payload: SettingsPatchRequest, request: Request):
 
     effects: list[str] = []
     warnings: list[str] = []
-    if changed_fields:
+    llm_changed = any(path.startswith("llm.") for path in changed_fields)
+    retrieval_changed = any(
+        path.startswith("retrieval.") for path in changed_fields
+    )
+    if llm_changed:
         clear_llm_client_cache()
-        effects.extend(["llm_client_cache_cleared", "next_request"])
+        effects.append("llm_client_cache_cleared")
+    if {"retrieval.bm25_k1", "retrieval.bm25_b"} & set(changed_fields):
+        from backend.services.sparse_retriever import clear_cache
+
+        clear_cache()
+        effects.append("bm25_cache_cleared")
+    if llm_changed or retrieval_changed:
+        effects.append("next_request")
     if action == "clear" and snapshot.api_key_source == "environment":
         warnings.append("已清除运行时密钥，当前继续使用环境变量 API Key")
-    if not snapshot.llm.enabled:
+    if llm_changed and not snapshot.llm.enabled:
         warnings.append("生成模型已关闭，问答将使用 retrieval-only 模式")
     return SettingsPatchResponse(
         revision=snapshot.revision,

@@ -11,11 +11,13 @@
 - 低质量的相关结果会误导 LLM，必须先过滤
 """
 
+from dataclasses import dataclass, replace
 from time import perf_counter
 from typing import List
 
 from backend.config import settings
 from backend.models.schemas import RetrievalResponse
+from backend.models.settings_schemas import RetrievalMode, RetrievalSettings
 from backend.services.embedding import embed_query
 from backend.services.fusion import reciprocal_rank_fusion
 from backend.services.reranker import rerank
@@ -27,11 +29,88 @@ from backend.services.vector_store import (
 )
 
 
-def _candidate_k(top_k: int) -> int:
-    """Reranker 开启时取实验候选数，否则保持历史 top_k * 2。"""
-    if settings.RERANKER_ENABLED:
-        return max(top_k, settings.RERANKER_CANDIDATE_K)
-    return top_k * 2
+@dataclass(frozen=True)
+class RetrievalRuntimeConfig:
+    """一次检索请求固定使用的各阶段独立参数。"""
+
+    mode: RetrievalMode
+    final_top_k: int
+    dense_candidate_k: int
+    dense_distance_threshold: float
+    bm25_top_k: int
+    bm25_k1: float
+    bm25_b: float
+    rrf_k: int
+    reranker_enabled: bool
+    reranker_candidate_k: int
+    max_chunks_per_document: int
+    refusal_gate_enabled: bool = False
+
+
+def _runtime_config(
+    runtime: RetrievalSettings | RetrievalRuntimeConfig | None,
+    top_k: int | None,
+) -> RetrievalRuntimeConfig:
+    """优先使用请求快照；无快照时保持脚本/评测的模块配置入口。"""
+    if isinstance(runtime, RetrievalRuntimeConfig):
+        config = runtime
+    elif runtime is not None:
+        config = RetrievalRuntimeConfig(
+            mode=runtime.mode,
+            final_top_k=runtime.final_top_k,
+            dense_candidate_k=runtime.dense_candidate_k,
+            dense_distance_threshold=runtime.dense_distance_threshold,
+            bm25_top_k=runtime.bm25_top_k,
+            bm25_k1=runtime.bm25_k1,
+            bm25_b=runtime.bm25_b,
+            rrf_k=runtime.rrf_k,
+            reranker_enabled=runtime.reranker_enabled,
+            reranker_candidate_k=runtime.reranker_candidate_k,
+            max_chunks_per_document=runtime.max_chunks_per_document,
+            refusal_gate_enabled=runtime.refusal_gate.enabled,
+        )
+    else:
+        final_top_k = (
+            settings.RETRIEVAL_TOP_K if top_k is None else top_k
+        )
+        reranker_enabled = bool(settings.RERANKER_ENABLED)
+        reranker_candidate_k = max(
+            final_top_k,
+            int(settings.RERANKER_CANDIDATE_K),
+        )
+        dense_candidate_k = getattr(settings, "DENSE_CANDIDATE_K", None)
+        if dense_candidate_k is None:
+            dense_candidate_k = (
+                reranker_candidate_k
+                if reranker_enabled
+                else final_top_k * 2
+            )
+        config = RetrievalRuntimeConfig(
+            mode=settings.RETRIEVAL_MODE,
+            final_top_k=final_top_k,
+            dense_candidate_k=max(final_top_k, int(dense_candidate_k)),
+            dense_distance_threshold=settings.RETRIEVAL_DISTANCE_THRESHOLD,
+            bm25_top_k=max(final_top_k, int(settings.BM25_TOP_K)),
+            bm25_k1=float(settings.BM25_K1),
+            bm25_b=float(settings.BM25_B),
+            rrf_k=int(settings.RRF_K),
+            reranker_enabled=reranker_enabled,
+            reranker_candidate_k=reranker_candidate_k,
+            max_chunks_per_document=min(
+                int(getattr(settings, "MAX_CHUNKS_PER_DOCUMENT", 3)),
+                final_top_k,
+            ),
+        )
+    if top_k is None or top_k == config.final_top_k:
+        return config
+    return replace(
+        config,
+        final_top_k=top_k,
+        dense_candidate_k=max(top_k, config.dense_candidate_k),
+        bm25_top_k=max(top_k, config.bm25_top_k),
+        reranker_candidate_k=max(top_k, config.reranker_candidate_k),
+        max_chunks_per_document=min(config.max_chunks_per_document, top_k),
+    )
 
 
 def _dense_candidates(
@@ -39,6 +118,7 @@ def _dense_candidates(
     candidate_k: int,
     collector: TraceCollector,
     allowed_document_ids: List[str] | None,
+    distance_threshold: float,
 ) -> List[dict]:
     """生成 Dense 候选；Trace 开启时拆分向量化与 Chroma 耗时。"""
     if collector.enabled:
@@ -65,10 +145,10 @@ def _dense_candidates(
     ]
     eligibility = {
         row["chunk_id"]: (
-            row["distance"] <= settings.RETRIEVAL_DISTANCE_THRESHOLD,
+            row["distance"] <= distance_threshold,
             (
                 None
-                if row["distance"] <= settings.RETRIEVAL_DISTANCE_THRESHOLD
+                if row["distance"] <= distance_threshold
                 else "distance_above_threshold"
             ),
         )
@@ -83,14 +163,19 @@ def _bm25_candidates(
     candidate_k: int,
     collector: TraceCollector,
     allowed_document_ids: List[str] | None,
+    *,
+    k1: float,
+    b: float,
 ) -> List[dict]:
     """生成 BM25 候选；分支深度可独立配置，融合前截断到候选上限。"""
     started = perf_counter()
     rows = bm25_search(
         question,
-        top_k=max(candidate_k, settings.BM25_TOP_K),
+        top_k=candidate_k,
         allowed_document_ids=allowed_document_ids,
-    )[:candidate_k]
+        k1=k1,
+        b=b,
+    )
     collector.set_timing("sparse_retrieval", perf_counter() - started)
     collector.add_stage("bm25", rows)
     return rows
@@ -98,41 +183,72 @@ def _bm25_candidates(
 
 def _generate_candidates(
     question: str,
-    candidate_k: int,
+    config: RetrievalRuntimeConfig,
     collector: TraceCollector,
     allowed_document_ids: List[str] | None,
 ) -> List[dict]:
     """按配置生成单路或 RRF 融合候选。"""
-    if settings.RETRIEVAL_MODE == "dense":
+    if config.mode == "dense":
         return _dense_candidates(
-            question, candidate_k, collector, allowed_document_ids
+            question,
+            config.dense_candidate_k,
+            collector,
+            allowed_document_ids,
+            config.dense_distance_threshold,
         )
-    if settings.RETRIEVAL_MODE == "bm25":
+    if config.mode == "bm25":
         return _bm25_candidates(
-            question, candidate_k, collector, allowed_document_ids
+            question,
+            config.bm25_top_k,
+            collector,
+            allowed_document_ids,
+            k1=config.bm25_k1,
+            b=config.bm25_b,
         )
 
     dense = _dense_candidates(
-        question, candidate_k, collector, allowed_document_ids
+        question,
+        config.dense_candidate_k,
+        collector,
+        allowed_document_ids,
+        config.dense_distance_threshold,
     )
     sparse = _bm25_candidates(
-        question, candidate_k, collector, allowed_document_ids
+        question,
+        config.bm25_top_k,
+        collector,
+        allowed_document_ids,
+        k1=config.bm25_k1,
+        b=config.bm25_b,
     )
     started = perf_counter()
+    fusion_pool_k = max(
+        config.dense_candidate_k,
+        config.bm25_top_k,
+        (
+            config.reranker_candidate_k
+            if config.reranker_enabled
+            else config.final_top_k
+        ),
+    )
     fused = reciprocal_rank_fusion(
         dense,
         sparse,
-        rrf_k=settings.RRF_K,
-        top_k=candidate_k,
+        rrf_k=config.rrf_k,
+        top_k=fusion_pool_k,
     )
     collector.set_timing("rrf", perf_counter() - started)
     collector.add_stage("rrf", fused)
     return fused
 
 
-def _limit_per_document(rows: List[dict], top_k: int) -> List[dict]:
+def _limit_per_document(
+    rows: List[dict],
+    *,
+    top_k: int,
+    max_per_document: int,
+) -> List[dict]:
     """在排序完成后限制单文档占用量并截取 Top K。"""
-    max_per_document = 3
     document_counts = {}
     selected = []
     for row in rows:
@@ -150,7 +266,7 @@ def _limit_per_document(rows: List[dict], top_k: int) -> List[dict]:
 
 def _retrieve_internal(
     question: str,
-    top_k: int,
+    config: RetrievalRuntimeConfig,
     include_trace: bool,
     allowed_document_ids: List[str] | None = None,
     tag_filter: List[str] | None = None,
@@ -158,8 +274,8 @@ def _retrieve_internal(
     """共享检索流水线；是否捕获 Trace 由调用方显式决定。"""
     collector = TraceCollector(
         enabled=include_trace,
-        mode=settings.RETRIEVAL_MODE,
-        reranker_enabled=settings.RERANKER_ENABLED,
+        mode=config.mode,
+        reranker_enabled=config.reranker_enabled,
         tags=tag_filter,
         allowed_document_count=(
             len(allowed_document_ids)
@@ -169,19 +285,24 @@ def _retrieve_internal(
     )
     candidates = _generate_candidates(
         question,
-        _candidate_k(top_k),
+        config,
         collector,
         allowed_document_ids,
     )
-    if settings.RERANKER_ENABLED:
+    if config.reranker_enabled:
         started = perf_counter()
-        ranked = rerank(question, candidates)
+        reranker_input = candidates[:config.reranker_candidate_k]
+        ranked = rerank(question, reranker_input)
         collector.set_timing("rerank", perf_counter() - started)
         collector.add_stage("reranker", ranked)
     else:
         ranked = candidates
 
-    selected = _limit_per_document(ranked, top_k=top_k)
+    selected = _limit_per_document(
+        ranked,
+        top_k=config.final_top_k,
+        max_per_document=config.max_chunks_per_document,
+    )
     collector.add_stage("selected", selected)
     return RetrievalResponse(
         results=selected,
@@ -194,14 +315,13 @@ def retrieve(
     top_k: int = None,
     allowed_document_ids: List[str] | None = None,
     tag_filter: List[str] | None = None,
+    runtime_config: RetrievalSettings | RetrievalRuntimeConfig | None = None,
 ) -> List[dict]:
     """兼容入口：只返回业务结果，不因服务端开关构造 Trace。"""
-    effective_top_k = (
-        settings.RETRIEVAL_TOP_K if top_k is None else top_k
-    )
+    config = _runtime_config(runtime_config, top_k)
     return _retrieve_internal(
         question,
-        effective_top_k,
+        config,
         include_trace=False,
         allowed_document_ids=allowed_document_ids,
         tag_filter=tag_filter,
@@ -213,14 +333,13 @@ def retrieve_with_trace(
     top_k: int = None,
     allowed_document_ids: List[str] | None = None,
     tag_filter: List[str] | None = None,
+    runtime_config: RetrievalSettings | RetrievalRuntimeConfig | None = None,
 ) -> RetrievalResponse:
     """聊天入口：服务端允许时同时返回结构化 Trace。"""
-    effective_top_k = (
-        settings.RETRIEVAL_TOP_K if top_k is None else top_k
-    )
+    config = _runtime_config(runtime_config, top_k)
     return _retrieve_internal(
         question,
-        effective_top_k,
+        config,
         include_trace=settings.RETRIEVAL_TRACE_ENABLED,
         allowed_document_ids=allowed_document_ids,
         tag_filter=tag_filter,

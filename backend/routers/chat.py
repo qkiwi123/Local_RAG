@@ -157,6 +157,7 @@ async def chat(request: ChatRequest, http_request: Request):
             standalone_question,
             allowed_document_ids=allowed_document_ids,
             tag_filter=tag_filter,
+            runtime_config=runtime.retrieval,
         )
     except Exception as error:
         if persistent:
@@ -338,6 +339,7 @@ async def _stream_chat_events(
                 standalone_question,
                 allowed_document_ids=allowed_document_ids,
                 tag_filter=tag_filter,
+                runtime_config=runtime.retrieval if runtime else None,
             )
         except Exception:
             if persistent:

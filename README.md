@@ -43,13 +43,15 @@ PDF、DOCX、TXT、Markdown 和 PPTX，完成解析、切分、向量检索、Cr
 
 后端已提供 `GET /api/settings`、`GET /api/settings/runtime-status`、
 `PATCH /api/settings` 和 `POST /api/settings/test-llm`。当前可以读取脱敏配置与运行状态、
-保存问答 LLM 设置和 DPAPI Key，并用未保存草稿执行一次最小连接测试。读取接口不会返回
+保存问答 LLM、Retrieval 设置和 DPAPI Key，并用未保存草稿执行一次最小连接测试。检索设置
+会在保存后的下一请求生效，Dense、BM25、RRF、Reranker 与最终 Top K 使用各自参数；BM25
+k1/b 变化只刷新进程内稀疏索引缓存，不重写生产向量库。读取接口不会返回
 API Key 明文，也不会为查看状态而冷加载模型；敏感字段的 422 校验错误同样不会回显输入。
 
 当前项目没有账号、角色或权限体系，设置接口只适用于可信本地工作空间。不要把后端直接
 暴露到不受信任的网络；如需远程或多人使用，应先在反向代理或应用层增加身份认证和访问
 控制。连接测试会真实请求所填模型服务，可能产生少量费用，只应由用户显式触发。
-Retrieval 参数保存、恢复默认和 React 设置页尚未实现。
+恢复默认、React 设置页、Trace 配置版本和拒答门控尚未实现。
 
 ## 当前架构
 

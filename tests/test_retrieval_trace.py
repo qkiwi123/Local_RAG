@@ -164,7 +164,7 @@ def test_hybrid_trace_has_only_executed_stages_and_full_chunks(monkeypatch):
     monkeypatch.setattr(
         retriever,
         "bm25_search",
-        lambda question, top_k, allowed_document_ids=None: [
+        lambda question, top_k, allowed_document_ids=None, **kwargs: [
             {**_row("shared"), "bm25_rank": 1, "bm25_score": 5.0}
         ],
     )
@@ -231,7 +231,7 @@ def test_bm25_trace_omits_dense_and_rrf_stages(monkeypatch):
     monkeypatch.setattr(
         retriever,
         "bm25_search",
-        lambda question, top_k, allowed_document_ids=None: [
+        lambda question, top_k, allowed_document_ids=None, **kwargs: [
             {**_row("c1"), "bm25_rank": 1, "bm25_score": 2.0}
         ],
     )

@@ -86,7 +86,7 @@ def test_get_settings_returns_effective_values_sources_and_masked_key():
     assert "test-key-not-used" not in response.text
     assert payload["field_sources"]["llm.model"] == "environment"
     assert payload["field_effects"]["llm.model"] == "next_request"
-    assert payload["field_effects"]["retrieval.final_top_k"] == "pending_s4"
+    assert payload["field_effects"]["retrieval.final_top_k"] == "next_request"
     assert (
         payload["field_effects"]["retrieval.refusal_gate.enabled"]
         == "unavailable"
@@ -187,7 +187,7 @@ def test_runtime_status_verifies_already_cached_model_devices(
     assert payload["reranker"]["verified"] is True
 
 
-def test_s3_exposes_only_planned_settings_mutations():
+def test_s4_exposes_only_planned_settings_mutations():
     mutating_methods = {"POST", "PUT", "PATCH", "DELETE"}
     mutating_settings_routes = [
         (
@@ -296,6 +296,87 @@ def test_patch_llm_settings_rejects_stale_revision_without_key_change(
     assert response.json()["detail"]["code"] == "settings_revision_conflict"
     assert manager._secret_store.get_secret("llm_api_key") == "winner-key-1111"
     assert manager.snapshot().llm.model == "winner"
+
+
+def test_patch_retrieval_settings_activates_next_request_and_clears_bm25(
+    tmp_path,
+    monkeypatch,
+):
+    from backend.services import sparse_retriever
+
+    manager = _isolated_manager(tmp_path)
+    clear_calls = []
+    monkeypatch.setattr(
+        sparse_retriever,
+        "clear_cache",
+        lambda: clear_calls.append("cleared"),
+    )
+
+    with TestClient(app) as client:
+        original = app.state.runtime_settings_manager
+        app.state.runtime_settings_manager = manager
+        try:
+            response = client.patch(
+                "/api/settings",
+                json={
+                    "expected_revision": 0,
+                    "retrieval": {
+                        "mode": "hybrid",
+                        "final_top_k": 6,
+                        "dense_candidate_k": 18,
+                        "dense_distance_threshold": 0.55,
+                        "bm25_top_k": 12,
+                        "bm25_k1": 1.8,
+                        "bm25_b": 0.6,
+                        "rrf_k": 45,
+                        "reranker_enabled": True,
+                        "reranker_candidate_k": 10,
+                        "max_chunks_per_document": 2,
+                    },
+                },
+            )
+        finally:
+            app.state.runtime_settings_manager = original
+
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    assert payload["revision"] == 1
+    assert payload["settings"]["retrieval"]["final_top_k"] == 6
+    assert payload["settings"]["retrieval"]["dense_candidate_k"] == 18
+    assert payload["settings"]["retrieval"]["bm25_top_k"] == 12
+    assert payload["settings"]["retrieval"]["reranker_candidate_k"] == 10
+    assert payload["effects"] == ["bm25_cache_cleared", "next_request"]
+    assert clear_calls == ["cleared"]
+    assert manager.snapshot().retrieval.rrf_k == 45
+
+
+def test_patch_retrieval_cross_field_validation_is_atomic(tmp_path):
+    manager = _isolated_manager(tmp_path)
+
+    with TestClient(app) as client:
+        original = app.state.runtime_settings_manager
+        app.state.runtime_settings_manager = manager
+        try:
+            response = client.patch(
+                "/api/settings",
+                json={
+                    "expected_revision": 0,
+                    "llm": {"model": "must-not-be-persisted"},
+                    "retrieval": {
+                        "final_top_k": 16,
+                        "dense_candidate_k": 20,
+                        "bm25_top_k": 15,
+                        "reranker_candidate_k": 20,
+                    },
+                },
+            )
+        finally:
+            app.state.runtime_settings_manager = original
+
+    assert response.status_code == 422
+    assert manager.snapshot().revision == 0
+    assert manager.snapshot().llm.model == settings.DEEPSEEK_MODEL
+    assert manager._store.load().revision == 0
 
 
 def test_invalid_api_key_validation_response_does_not_echo_value():
@@ -514,3 +595,57 @@ def test_retrieval_only_sync_stream_and_followup_make_zero_llm_calls(
     ]
     assert "生成模型已关闭" in events[1]["text"]
     assert events[2]["citations"][0]["document_name"] == "handbook.pdf"
+
+
+def test_chat_endpoints_use_the_effective_retrieval_snapshot(
+    tmp_path,
+    monkeypatch,
+):
+    from backend.routers import chat as chat_router
+
+    manager = _isolated_manager(tmp_path)
+    manager.update_settings(
+        {
+            "llm": {"enabled": False},
+            "retrieval": {
+                "mode": "hybrid",
+                "final_top_k": 4,
+                "dense_candidate_k": 12,
+                "bm25_top_k": 9,
+                "reranker_candidate_k": 8,
+            },
+        },
+        expected_revision=0,
+    )
+    captured = []
+
+    def fake_retrieve(*args, **kwargs):
+        captured.append(kwargs["runtime_config"])
+        return _retrieval_with_trace()
+
+    monkeypatch.setattr(chat_router, "retrieve_with_trace", fake_retrieve)
+
+    with TestClient(app) as client:
+        original = app.state.runtime_settings_manager
+        app.state.runtime_settings_manager = manager
+        try:
+            response = client.post(
+                "/api/chat",
+                json={"question": "年假几天？"},
+            )
+            streamed = client.post(
+                "/api/chat/stream",
+                json={"question": "年假几天？"},
+            )
+        finally:
+            app.state.runtime_settings_manager = original
+
+    assert response.status_code == 200, response.text
+    assert streamed.status_code == 200, streamed.text
+    assert len(captured) == 2
+    for runtime in captured:
+        assert runtime.mode == "hybrid"
+        assert runtime.final_top_k == 4
+        assert runtime.dense_candidate_k == 12
+        assert runtime.bm25_top_k == 9
+        assert runtime.reranker_candidate_k == 8

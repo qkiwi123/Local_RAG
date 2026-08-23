@@ -323,15 +323,15 @@ class RuntimeSettingsManager:
             self._snapshot = candidate
             return candidate
 
-    def update_llm(
+    def update_settings(
         self,
-        llm_patch: Mapping,
+        patch: Mapping,
         *,
         expected_revision: int,
         api_key_action: str = "keep",
         api_key_value: str | None = None,
     ) -> tuple[EffectiveSettingsSnapshot, list[str]]:
-        """原子发布 LLM 非敏感设置与 DPAPI 密钥覆盖。
+        """原子发布非敏感设置与 DPAPI 密钥覆盖。
 
         同一进程内的 manager 共用提交锁，避免 stale manager 在 SQLite
         revision 冲突前改写密钥文件。密钥先原子写文件，再提交 SQLite；
@@ -350,9 +350,7 @@ class RuntimeSettingsManager:
         else:
             clean_key = None
 
-        normalized_patch = _normalize_overrides(
-            {"llm": dict(llm_patch)} if llm_patch else {}
-        )
+        normalized_patch = _normalize_overrides(patch)
         with _COMMIT_LOCK, self._lock:
             current = self._store.load()
             if current.revision != expected_revision:
@@ -415,6 +413,22 @@ class RuntimeSettingsManager:
             )
             self._snapshot = candidate
             return candidate, changed_keys
+
+    def update_llm(
+        self,
+        llm_patch: Mapping,
+        *,
+        expected_revision: int,
+        api_key_action: str = "keep",
+        api_key_value: str | None = None,
+    ) -> tuple[EffectiveSettingsSnapshot, list[str]]:
+        """兼容 S3 调用；内部统一走完整设置提交。"""
+        return self.update_settings(
+            {"llm": dict(llm_patch)} if llm_patch else {},
+            expected_revision=expected_revision,
+            api_key_action=api_key_action,
+            api_key_value=api_key_value,
+        )
 
     def _write_runtime_key(self, value: str | None) -> None:
         if value is None:

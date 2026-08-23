@@ -45,7 +45,7 @@ def test_hybrid_mode_fuses_before_reranking(monkeypatch):
         calls["dense"].append((question, top_k, allowed_document_ids))
         return [_dense("d1", 0.2)]
 
-    def fake_bm25(question, top_k, allowed_document_ids=None):
+    def fake_bm25(question, top_k, allowed_document_ids=None, **kwargs):
         calls["bm25"].append((question, top_k, allowed_document_ids))
         return [_sparse("s1", 2.0)]
 
@@ -87,7 +87,7 @@ def test_bm25_mode_does_not_call_dense(monkeypatch):
         lambda *args: (_ for _ in ()).throw(AssertionError("不应调用 Dense")),
     )
 
-    def fake_bm25(question, top_k, allowed_document_ids=None):
+    def fake_bm25(question, top_k, allowed_document_ids=None, **kwargs):
         calls.append((question, top_k, allowed_document_ids))
         return [_sparse("s1", 1.0)]
 
@@ -110,14 +110,14 @@ def test_hybrid_keeps_sparse_candidate_when_dense_threshold_filters_all(
     monkeypatch.setattr(
         retriever,
         "vector_search",
-        lambda question, top_k, allowed_document_ids=None: [
+        lambda question, top_k, allowed_document_ids=None, **kwargs: [
             _dense("filtered", 0.8)
         ],
     )
     monkeypatch.setattr(
         retriever,
         "bm25_search",
-        lambda question, top_k, allowed_document_ids=None: [
+        lambda question, top_k, allowed_document_ids=None, **kwargs: [
             _sparse("kept", 3.0)
         ],
         raising=False,

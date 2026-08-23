@@ -76,7 +76,7 @@ def build_settings_response(
     field_effects = {
         **{f"llm.{name}": "next_request" for name in _LLM_FIELDS},
         **{
-            f"retrieval.{name}": "pending_s4"
+            f"retrieval.{name}": "next_request"
             for name in _RETRIEVAL_FIELDS
         },
         "llm.api_key": "next_request",

@@ -173,3 +173,35 @@ def test_bm25_filter_cache_is_keyed_by_allowed_set(monkeypatch):
 
     sparse_retriever.search("二叉树", 5)
     assert state["fetches"] == 3
+
+
+def test_bm25_cache_is_keyed_by_request_k1_and_b(monkeypatch):
+    state = {"fetches": 0, "models": []}
+    chunks = [_chunk("c1", "二叉树"), _chunk("c2", "进程调度")]
+
+    class FakeBM25:
+        def __init__(self, corpus, *, k1, b):
+            state["models"].append((k1, b, len(corpus)))
+
+        def get_scores(self, tokens):
+            return [1.0, 0.0]
+
+    monkeypatch.setattr(
+        sparse_retriever.vector_store,
+        "get_all_chunks",
+        lambda: state.update(fetches=state["fetches"] + 1) or chunks,
+    )
+    monkeypatch.setattr(
+        sparse_retriever.vector_store,
+        "get_index_revision",
+        lambda: 9,
+    )
+    monkeypatch.setattr(sparse_retriever, "BM25Okapi", FakeBM25)
+    sparse_retriever.clear_cache()
+
+    sparse_retriever.search("二叉树", 2, k1=1.2, b=0.6)
+    sparse_retriever.search("二叉树", 2, k1=1.2, b=0.6)
+    sparse_retriever.search("二叉树", 2, k1=1.9, b=0.6)
+
+    assert state["fetches"] == 2
+    assert state["models"] == [(1.2, 0.6, 2), (1.9, 0.6, 2)]
