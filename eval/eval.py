@@ -26,6 +26,7 @@ adapters.py 中所有 backend import 都在函数内部。
 """
 
 import argparse
+import inspect
 import json
 import os
 import shutil
@@ -83,6 +84,10 @@ def _setup_env(args) -> Path:
         os.environ["EMBEDDING_MODEL"] = args.embedding_model
     if getattr(args, "query_instruction", None) is not None:
         os.environ["EMBEDDING_QUERY_INSTRUCTION"] = args.query_instruction
+    if getattr(args, "embedding_device", None):
+        os.environ["EMBEDDING_DEVICE"] = args.embedding_device
+    if getattr(args, "embedding_batch_size", None) is not None:
+        os.environ["EMBEDDING_BATCH_SIZE"] = str(args.embedding_batch_size)
     if getattr(args, "top_k", None):
         os.environ["RETRIEVAL_TOP_K"] = str(args.top_k)
     if getattr(args, "retrieval_mode", None):
@@ -95,6 +100,14 @@ def _setup_env(args) -> Path:
         )
     if getattr(args, "reranker_model", None):
         os.environ["RERANKER_MODEL"] = args.reranker_model
+    if getattr(args, "reranker_device", None):
+        os.environ["RERANKER_DEVICE"] = args.reranker_device
+    if getattr(args, "reranker_use_fp16", None) is not None:
+        os.environ["RERANKER_USE_FP16"] = (
+            "true" if args.reranker_use_fp16 else "false"
+        )
+    if getattr(args, "reranker_batch_size", None) is not None:
+        os.environ["RERANKER_BATCH_SIZE"] = str(args.reranker_batch_size)
     if getattr(args, "reranker_candidate_k", None) is not None:
         os.environ["RERANKER_CANDIDATE_K"] = str(args.reranker_candidate_k)
     if getattr(args, "bm25_top_k", None) is not None:
@@ -430,18 +443,27 @@ def cmd_retrieval_sweep(args):
     print(f"[3/3] Reranker 候选数扫描：{args.candidate_ks}")
     original_enabled = settings.RERANKER_ENABLED
     original_candidate_k = settings.RERANKER_CANDIDATE_K
+    trace_requested = bool(getattr(args, "retrieval_trace", False))
     try:
         settings.RERANKER_ENABLED = True
         candidate_results = []
         for candidate_k in args.candidate_ks:
             settings.RERANKER_CANDIDATE_K = candidate_k
             retrievals = {}
+            traces = {}
             timings = []
             raw_path = run_dir / f"retrieval-k{candidate_k}.jsonl"
             with open(raw_path, "w", encoding="utf-8") as raw_file:
                 for index, question in enumerate(questions, 1):
-                    result = adapters.retrieve_only(question["question"])
+                    if trace_requested:
+                        result = adapters.retrieve_only(
+                            question["question"], include_trace=True
+                        )
+                    else:
+                        result = adapters.retrieve_only(question["question"])
                     retrievals[question["id"]] = result["retrieval"]
+                    if trace_requested:
+                        traces[question["id"]] = result.get("trace")
                     timings.append(result["retrieval_s"])
                     raw_file.write(
                         json.dumps(
@@ -455,18 +477,26 @@ def cmd_retrieval_sweep(args):
                         f"  [k={candidate_k}] [{index}/{len(questions)}] "
                         f"{question['id']} {result['retrieval_s']}s"
                     )
-            candidate_results.append(
-                build_candidate_result(
-                    candidate_k=candidate_k,
-                    questions=questions,
-                    retrievals=retrievals,
-                    timings_s=timings,
-                )
-            )
+            candidate_kwargs = {
+                "candidate_k": candidate_k,
+                "questions": questions,
+                "retrievals": retrievals,
+                "timings_s": timings,
+            }
+            # 新版指标聚合器可消费逐题 Trace；旧版签名保持兼容，避免
+            # 没有 Trace 的历史 retrieval-sweep 被强制升级。
+            if "traces" in inspect.signature(build_candidate_result).parameters:
+                candidate_kwargs["traces"] = traces
+            candidate_results.append(build_candidate_result(**candidate_kwargs))
 
         config = adapters.get_run_config()
         config.pop("reranker_candidate_k", None)
         config["reranker_candidate_ks"] = list(args.candidate_ks)
+        config["llm_called"] = False
+        config["hf_hub_offline"] = os.getenv("HF_HUB_OFFLINE") == "1"
+        config["transformers_offline"] = os.getenv("TRANSFORMERS_OFFLINE") == "1"
+        if trace_requested:
+            config["retrieval_trace_enabled"] = True
         payload = build_retrieval_sweep(
             label=args.label,
             config=config,
@@ -474,6 +504,37 @@ def cmd_retrieval_sweep(args):
             candidates=candidate_results,
             dataset_version=dataset["version"],
         )
+        if trace_requested:
+            payload["retrieval_trace"] = {
+                "enabled": True,
+                "artifact": "retrieval-k{candidate_k}.jsonl",
+                "stages": [
+                    "dense",
+                    "bm25",
+                    "rrf",
+                    "reranker",
+                    "selected",
+                ],
+                "timings_unit": "ms",
+                "per_question": True,
+            }
+        payload["evaluation_scope"] = {
+            "workflow": "retrieval_only",
+            "llm_called": False,
+            "dataset": str(dataset_path.resolve()),
+            "corpus": str(corpus_dir.resolve()),
+            "manifest": (
+                str(Path(args.manifest).resolve())
+                if getattr(args, "manifest", None)
+                else None
+            ),
+            "allow_draft_v3": bool(getattr(args, "allow_draft_v3", False)),
+            "storage": {
+                "chroma": str(Path(os.environ["CHROMA_PERSIST_DIR"]).resolve()),
+                "metadata": str(Path(os.environ["METADATA_DB_PATH"]).resolve()),
+                "uploads": str(Path(os.environ["UPLOAD_DIR"]).resolve()),
+            },
+        }
         with open(run_dir / "retrieval-sweep.json", "w", encoding="utf-8") as f:
             json.dump(payload, f, ensure_ascii=False, indent=2)
         with open(run_dir / "retrieval-sweep.md", "w", encoding="utf-8") as f:
@@ -616,6 +677,8 @@ def main():
     p_run.add_argument("--limit", type=int, help="只跑前 N 题（冒烟测试）")
     p_run.add_argument("--overwrite", action="store_true", help="覆盖同名 label 的已有报告")
     p_run.add_argument("--embedding-model", help="覆盖 EMBEDDING_MODEL（需模型已在本地缓存）")
+    p_run.add_argument("--embedding-device", help="覆盖 EMBEDDING_DEVICE，如 cuda:0")
+    p_run.add_argument("--embedding-batch-size", type=int)
     p_run.add_argument(
         "--query-instruction",
         help="仅在 query 编码前添加的 instruction；传空字符串表示不添加",
@@ -646,6 +709,20 @@ def main():
         help="显式关闭 Cross-encoder Reranker",
     )
     p_run.add_argument("--reranker-model", help="覆盖 RERANKER_MODEL")
+    p_run.add_argument("--reranker-device", help="覆盖 RERANKER_DEVICE，如 cuda:0")
+    reranker_fp16_group = p_run.add_mutually_exclusive_group()
+    reranker_fp16_group.add_argument(
+        "--reranker-fp16",
+        dest="reranker_use_fp16",
+        action="store_true",
+        default=None,
+    )
+    reranker_fp16_group.add_argument(
+        "--no-reranker-fp16",
+        dest="reranker_use_fp16",
+        action="store_false",
+    )
+    p_run.add_argument("--reranker-batch-size", type=int)
     p_run.add_argument(
         "--reranker-candidate-k",
         type=int,
@@ -722,10 +799,43 @@ def main():
     )
     p_retrieval.add_argument("--overwrite", action="store_true")
     p_retrieval.add_argument("--embedding-model")
+    p_retrieval.add_argument("--embedding-device")
+    p_retrieval.add_argument("--embedding-batch-size", type=int)
     p_retrieval.add_argument("--query-instruction")
     p_retrieval.add_argument("--top-k", type=int)
+    p_retrieval.add_argument(
+        "--retrieval-mode",
+        choices=("dense", "bm25", "hybrid"),
+        help="覆盖 RETRIEVAL_MODE",
+    )
     p_retrieval.add_argument("--distance-threshold", type=float)
+    p_retrieval.add_argument("--bm25-top-k", type=int)
+    p_retrieval.add_argument("--bm25-k1", type=float)
+    p_retrieval.add_argument("--bm25-b", type=float)
+    p_retrieval.add_argument("--rrf-k", type=int)
     p_retrieval.add_argument("--reranker-model")
+    p_retrieval.add_argument(
+        "--retrieval-trace",
+        "--trace",
+        "--include-trace",
+        dest="retrieval_trace",
+        action="store_true",
+        help="显式保存每题 dense/BM25/RRF/reranker/selected Trace 到 JSONL",
+    )
+    p_retrieval.add_argument("--reranker-device")
+    retrieval_fp16_group = p_retrieval.add_mutually_exclusive_group()
+    retrieval_fp16_group.add_argument(
+        "--reranker-fp16",
+        dest="reranker_use_fp16",
+        action="store_true",
+        default=None,
+    )
+    retrieval_fp16_group.add_argument(
+        "--no-reranker-fp16",
+        dest="reranker_use_fp16",
+        action="store_false",
+    )
+    p_retrieval.add_argument("--reranker-batch-size", type=int)
     p_retrieval.add_argument("--chunk-strategy", choices=("fixed", "recursive"))
     p_retrieval.add_argument("--chunk-size", type=int)
     p_retrieval.add_argument("--chunk-overlap", type=int)
@@ -757,10 +867,20 @@ def main():
     )
     p_hybrid.add_argument("--overwrite", action="store_true")
     p_hybrid.add_argument("--embedding-model")
+    p_hybrid.add_argument("--embedding-device")
+    p_hybrid.add_argument("--embedding-batch-size", type=int)
     p_hybrid.add_argument("--query-instruction")
     p_hybrid.add_argument("--top-k", type=int)
     p_hybrid.add_argument("--distance-threshold", type=float)
     p_hybrid.add_argument("--reranker-model")
+    p_hybrid.add_argument("--reranker-device")
+    p_hybrid.add_argument(
+        "--reranker-fp16",
+        dest="reranker_use_fp16",
+        action="store_true",
+        default=None,
+    )
+    p_hybrid.add_argument("--reranker-batch-size", type=int)
     p_hybrid.add_argument("--reranker-candidate-k", type=int)
     p_hybrid.add_argument("--bm25-top-k", type=int)
     p_hybrid.add_argument("--bm25-k1", type=float)

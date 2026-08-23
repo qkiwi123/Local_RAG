@@ -1,9 +1,11 @@
 # RAG v2 优化整体设计
 
-> 状态：已由用户于 2026-08-13 确认（含数据策略、前端技术栈与范围决策）。
-> 基线：`master` @ 57bb273。实施分支：`feature/rag-v2-optimization`（待创建）。
-> 本设计在「structured-v1」完整链路（五格式解析、结构化预览、持久化多轮对话、
-> Dataset v3 框架）之上做三部分增量优化，不重写现有能力，不迁移向量数据库。
+> 设计状态：已由用户于 2026-08-13 确认（含数据策略、前端技术栈与范围决策）；
+> 实施状态更新于 2026-08-16。
+> 基线：`master` @ 57bb273。实施分支：`feature/rag-v2-optimization`；
+> 当前实现快照：`1512077`（React UX 重设计完成工程验证，等待最终人工验收）。
+> 本设计最初从「structured-v1」完整链路增量演进；当前生产上传与索引已切换到
+> `structured-v2`，SQLite 已演进到 schema v3，React SPA 已成为主前端。
 
 ## 1. 背景与目标
 
@@ -22,6 +24,30 @@
 - 用多级树形标签实现按目录筛选检索，缩小范围、降低开销、提高准确率；
 - 用 React + Ant Design 重写前端，补齐流式回答与知识库管理界面；
 - 所有质量结论以评测证据为准，不宣称未经评测的收益。
+
+### 1.1 当前实施状态（更新于 2026-08-16）
+
+总体判断：本轮三项核心优化已进入**收尾验收阶段**，不是“尚未开始”。标签、OCR/
+图片理解、持久化 Trace、流式多轮对话和 React SPA 均已落地；当前剩余工作集中在人工
+验收、Dataset v3 正式签核与 structured-v2 正式评测，不应把历史 structured-v1 指标
+误写为本轮优化后的质量结论。
+
+| 阶段 | 当前状态 | 已完成与证据 | 尚未完成/边界 |
+|---|---|---|---|
+| 0 准备 | 已完成 | 设计、阶段计划、基线与实施分支均已建立 | 无 |
+| 1 标签体系 | 已完成 | schema v2 标签迁移、树形标签 CRUD、上传/文档挂标签、Dense/BM25/Hybrid 范围过滤及前端交互已实现 | 全库固定候选窗口仍可能漏掉边缘相关文档；按既定决策先以标签缩小范围 |
+| 2 OCR/多模态 | 已完成代码与生产切换 | 视觉模型已改为 GLM-4.6V-Flash；A/B/C 三层识别、缓存、warning、`structured-v2` 和重建工具已落地；生产上传与索引使用 `structured-v2` | OCR 默认关闭且依赖外部配置；Dataset v3 尚未形成正式 structured-v2 评测结论 |
+| Trace/预热增量 | 已完成 | schema v3 持久化 Trace、LRU 淘汰、模型预热与相关回归已实现 | 外部模型服务可用性与时延仍受运行环境影响 |
+| 3 React 前端 | 工程验证完成，待最终人工确认 | 流式多轮对话、停止/失败重试、409 重同步、知识库管理、标签筛选、完整文档引用预览与高亮、Trace、响应式 UX 均已实现；React 由 FastAPI 静态托管 | 旧 Streamlit 仅作为兼容对照保留，尚未删除；最新 UX 调整仍需用户最终手动验收 |
+| 4 回归与文档 | 部分完成 | 已记录后端全量 `461 passed, 3 skipped`；前端 7 个测试文件 `27/27`，lint、TypeScript 与生产构建通过；README 已同步当前架构 | 3 个外部 DeepSeek 用例未在该轮执行；Dataset v3 的 41 个审核组仍为 draft，需真实审核者签核并完成 structured-v2 正式评测；前端构建仍有单个 chunk 超过 500 kB 警告 |
+
+前端实施文档分工如下：
+
+- `2026-08-13-v2-phase-3-frontend-streaming.md`：定义流式协议、后端前置接口、会话语义与
+  Streamlit 功能对齐门槛；
+- `2026-08-15-phase-3-frontend-ux-redesign-plan.md`：记录后续实际采用的信息架构、桌面/
+  窄屏响应式布局、可调尺寸面板、交互细节及 F0-F4 工程验收结果。该文档是阶段 3 的
+  UX 实施与验收补充，不替代前一份协议设计。
 
 ## 2. 决策记录
 
@@ -96,8 +122,8 @@ OCR 验收通过后执行 `structured-v2` 切换，二选一：
 ### 4.1 视觉客户端
 
 - 新模块 `backend/services/vision.py`：独立 OpenAI 兼容客户端，配置
-  `VISION_API_KEY` / `VISION_BASE_URL` / `VISION_MODEL`（默认指向 MiMo `mimo-v2.5`，
-  以平台文档给出的实际值填入 `.env`）；
+  `VISION_API_KEY` / `VISION_BASE_URL` / `VISION_MODEL`（当前默认模型为智谱
+  `glm-4.6v-flash`，默认兼容端点见 `.env.example`；密钥只填入本地 `.env`）；
 - 接口：`recognize_text(image_bytes) -> str`（转录文字）与
   `describe_image(image_bytes, context) -> str`（描述图表）；
 - Prompt 固定：「转录图片中的全部文字，保留段落与换行，不总结不翻译」/
@@ -268,15 +294,31 @@ CREATE TABLE document_tags (
 - `UploadResponse` 增加 `warnings` 字段（透出解析与 OCR 警告）；
 - 静态托管与启动脚本适配；不新增认证（继续本地单用户定位）。
 
+### 6.6 UX 重设计补充
+
+阶段 3 初版完成后，前端又按
+`docs/superpowers/plans/2026-08-15-phase-3-frontend-ux-redesign-plan.md` 完成了独立的
+UX 重设计与 F0-F4 验证，主要包括：
+
+- 重新组织对话区、会话栏、检索范围与引用/Trace 抽屉的信息层级；
+- 统一桌面端和 390px 窄屏布局，避免整页横向溢出；
+- 会话栏和右侧抽屉支持鼠标/键盘调整宽度并持久化；
+- 流式请求开始后立即显示本地用户消息，检索范围移动到输入框上方；
+- 引用预览展示完整文档、自动定位并高亮引用片段，移除与高亮内容重复的 chunk 展示；
+- 预览关闭入口固定可达并适配深色模式；空会话可直接提问，首次提问后自动形成会话记录。
+
+截至当前快照 `1512077`，上述调整已通过自动化与浏览器工程验证，但仍保留“用户最终
+手动确认”这一验收边界；本次状态更新不等同于授权删除旧 Streamlit 前端。
+
 ## 7. 实施阶段与顺序
 
-| 阶段 | 内容 | 独立验收 | 依赖 |
+| 阶段 | 内容 | 当前验收结论 | 依赖 |
 |---|---|---|---|
-| 0 准备 | 本设计与阶段计划落盘；创建 `feature/rag-v2-optimization`；全量测试基线存档 | 基线可复现 | — |
-| 1 标签体系 | schema v2 迁移、标签 CRUD API、三模式检索过滤、上传带标签、Streamlit 过渡件（2026-08-13 验收反馈修正：暂存+确认上传、独立新建空标签、已上传文档改标签） | 标签筛选端到端；过渡件交互验收；全库检索回归不劣化 | 阶段 0 |
-| 2 OCR/多模态 | `vision.py`（MiMo）、A/B/C 三层、`structured-v2`、rebuild 工具适配、隔离验收、生产重建 | 真实扫描件可检索可引用；OCR 关闭时与 v1 行为一致 | 阶段 1 |
-| 3 前端重写 + 流式 | **后端前置**（4 接口：stream/preview/tags 筛选/warnings）→ SPA 骨架 → 对话页 → 知识库管理页 → 功能对齐 | 对齐清单全过，Streamlit 移除 | 阶段 1/2 API |
-| 4 回归与文档 | 全量 pytest、eval v3 preflight、legacy 回归、README 更新 | 全部证据存档 | 全部 |
+| 0 准备 | 本设计与阶段计划落盘；创建 `feature/rag-v2-optimization`；全量测试基线存档 | 已完成，基线可复现 | — |
+| 1 标签体系 | schema v2 迁移、标签 CRUD API、三模式检索过滤、上传带标签、Streamlit 过渡件（2026-08-13 验收反馈修正：暂存+确认上传、独立新建空标签、已上传文档改标签） | 已完成并通过端到端与回归验证 | 阶段 0 |
+| 2 OCR/多模态 | `vision.py`（GLM-4.6V-Flash）、A/B/C 三层、`structured-v2`、rebuild 工具适配、隔离验收、生产重建 | 已完成代码与生产切换；正式 Dataset v3 structured-v2 评测待补 | 阶段 1 |
+| 3 前端重写 + 流式 | **后端前置**（4 接口：stream/preview/tags 筛选/warnings）→ SPA 骨架 → 对话页 → 知识库管理页 → UX 重设计与功能对齐 | F0-F4 工程验证完成；待用户最终人工确认，Streamlit 暂未删除 | 阶段 1/2 API |
+| 4 回归与文档 | 全量 pytest、eval v3 preflight、legacy 回归、README 更新 | 自动化回归与 README 已完成；真实审核签核、正式 structured-v2 评测及外部模型用例待补 | 全部 |
 
 顺序理由：标签改动面最小、无新外部依赖与费用、收益直接（缩小检索范围即降低开销与噪声），
 先做可最快拿到可用增量；OCR 引入新供应商、费用、渲染依赖与生产重建，风险最高，放在标签
@@ -291,13 +333,13 @@ CREATE TABLE document_tags (
   v1 完全一致；
 - **前端**：api client / store / SSE 事件解析 vitest 单测；UI 冒烟清单人工验收；
 - **回归**：全量 pytest、CI 子集、eval v3 preflight（draft）、legacy v2、真实
-  DeepSeek 与 MiMo 外部测试。
+  DeepSeek 与 GLM 视觉模型外部测试。
 
 ## 9. 风险与应对
 
 | 风险 | 应对 |
 |---|---|
-| MiMo 调用成本/延迟不可控 | 默认关闭、页/图级缓存、尺寸压缩、数量上限；收益以评测数据为准 |
+| GLM 视觉模型调用成本/延迟不可控 | 默认关闭、页/图级缓存、尺寸压缩、数量上限；收益以评测数据为准 |
 | OCR 文本有噪声 | `ocr` 标记 + UI 徽标 + 可关；失败不阻塞入库 |
 | structured-v2 重建风险 | 沿用 7.4 安全流程：隔离验收 → 清单核对 → 用户确认 → 一次性切换 |
 | eval v3 parser_version 漂移 | 同步版本 + `dataset prepare` 重算 hash，并验证 evidence 不变 |
@@ -310,7 +352,7 @@ CREATE TABLE document_tags (
 
 - 扫描件、PDF 页内图表、DOCX/PPTX 内嵌图片可被检索并定位到正确来源，预览带 OCR 徽标；
 - 标签树多级、多标签，父级筛选含子孙、多选取并集，全库检索（不带标签）行为不变；
-- 新 React 前端通过功能对齐清单，流式回答可用，Streamlit 已移除；
+- 新 React 前端通过功能对齐清单，流式回答可用；旧 Streamlit 仅在用户最终确认后另行移除；
 - 生产数据为纯 `structured-v2`，schema 为当前版本（v2 标签 / v3 Trace），切换过程证据存档；
 - 全量测试、真实文档验收、评测回归均有保存证据；
 - 不宣称未经评测证明的质量提升。
@@ -331,7 +373,10 @@ CREATE TABLE document_tags (
   - `docs/superpowers/plans/2026-08-13-v2-phase-1-tags.md`
   - `docs/superpowers/plans/2026-08-13-v2-phase-2-ocr-vision.md`
   - `docs/superpowers/plans/2026-08-13-v2-phase-3-frontend-streaming.md`
-- 阶段 4 结束后更新 `README.md`。
+  - `docs/superpowers/plans/2026-08-15-phase-3-frontend-ux-redesign-plan.md`
+- 前端 F0 基线：`docs/superpowers/baselines/2026-08-15-phase-3-frontend-f0-baseline.md`
+- 当前架构、运行方式与验证结果：`README.md`
+- 人工测试与反馈记录：`docs/测试反馈记录.md`
 
 Git 纪律沿用交接指南：写文档不自动提交，先展示 `git status` / `diff --stat`，用户确认后
 再提交；一次提交一个主题；不修改 `.env`、`.claude/`；不自动合并 `master`、不自动推送；

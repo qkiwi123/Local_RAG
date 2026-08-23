@@ -23,6 +23,18 @@ REFUSAL_CANNED = "未找到与您问题相关的文档内容。请确认已上�
 _LEGACY_PARSER_SUFFIXES = {".pdf", ".docx", ".txt"}
 
 
+def _iter_structured_corpus_files(corpus_dir: Path, adapters: dict):
+    """Yield supported corpus files recursively in stable relative-path order."""
+    return sorted(
+        (
+            source
+            for source in corpus_dir.rglob("*")
+            if source.is_file() and source.suffix.lower() in adapters
+        ),
+        key=lambda source: source.relative_to(corpus_dir).as_posix(),
+    )
+
+
 def _structured_document_id(relative_name: str) -> str:
     digest = hashlib.sha256(relative_name.encode("utf-8")).hexdigest()[:24]
     return f"eval-{digest}"
@@ -35,6 +47,87 @@ def _get_store():
     except ImportError:
         from backend.services import vector_store as store
     return store
+
+
+def _cached_model_runtime(
+    getter,
+    *,
+    configured_device: str,
+    component: str,
+    model_attr: str | None = None,
+) -> dict:
+    """只读取已缓存模型的实际设备，不因生成报告触发模型加载。"""
+    cache_info = getattr(getter, "cache_info", lambda: None)()
+    if cache_info is None or cache_info.currsize == 0:
+        return {
+            "loaded": False,
+            "configured_device": configured_device,
+            "actual_device": None,
+            "verified": False,
+        }
+
+    # cache_info.currsize > 0 时 getter() 只会命中 lru_cache；若实现不是
+    # lru_cache，则宁可让它显式失败，也不在配置快照里伪造设备结论。
+    model = getter()
+    checked_model = getattr(model, model_attr) if model_attr else model
+    from backend.services.torch_device import assert_model_uses_device
+
+    validated_device = assert_model_uses_device(
+        checked_model,
+        configured_device,
+        component,
+    )
+    import torch
+
+    actual_device = getattr(checked_model, "device", None)
+    if actual_device is None:
+        try:
+            actual_device = next(checked_model.parameters()).device
+        except (AttributeError, StopIteration, TypeError) as error:
+            raise RuntimeError(
+                f"无法读取已加载 {component} 模型的实际参数设备"
+            ) from error
+    actual_device = str(torch.device(actual_device))
+    if actual_device != validated_device:
+        raise RuntimeError(
+            f"{component} 设备核验不一致：校验结果 {validated_device}，"
+            f"参数实际位于 {actual_device}"
+        )
+    return {
+        "loaded": True,
+        "configured_device": configured_device,
+        "actual_device": actual_device,
+        "verified": True,
+    }
+
+
+def _get_model_runtime(settings, torch) -> dict:
+    """获取本次进程中已完成推理模型的只读运行时证据。"""
+    from backend.services import embedding, reranker
+
+    runtime = {
+        "embedding": _cached_model_runtime(
+            embedding._get_model,
+            configured_device=settings.EMBEDDING_DEVICE,
+            component="Embedding",
+        ),
+        "reranker": _cached_model_runtime(
+            reranker._get_model,
+            configured_device=settings.RERANKER_DEVICE,
+            component="Reranker",
+            model_attr="model",
+        ),
+    }
+    cuda_available = bool(torch.cuda.is_available())
+    runtime["cuda_peak_memory"] = {
+        "allocated_bytes": (
+            int(torch.cuda.max_memory_allocated()) if cuda_available else 0
+        ),
+        "reserved_bytes": (
+            int(torch.cuda.max_memory_reserved()) if cuda_available else 0
+        ),
+    }
+    return runtime
 
 
 def assert_isolation():
@@ -67,9 +160,52 @@ def get_run_config() -> dict:
     """快照本次运行的关键配置，写入 report.json 供跨 run 追溯。"""
     from backend.config import settings
 
+    model_runtime = None
+    try:
+        import torch
+
+        torch_runtime = {
+            "torch_version": torch.__version__,
+            "torch_cuda_version": torch.version.cuda,
+            "torch_cuda_available": torch.cuda.is_available(),
+            "torch_cuda_device_name": (
+                torch.cuda.get_device_name(0) if torch.cuda.is_available() else None
+            ),
+        }
+        # 仅在 get_run_config() 调用时检查，并只读取已缓存的模型；模型
+        # 尚未经过真实推理时明确标记 loaded=false，不主动冷启动模型。
+        model_runtime = _get_model_runtime(settings, torch)
+    except ImportError:
+        torch_runtime = {
+            "torch_version": None,
+            "torch_cuda_version": None,
+            "torch_cuda_available": False,
+            "torch_cuda_device_name": None,
+        }
+        model_runtime = {
+            "embedding": {
+                "loaded": False,
+                "configured_device": settings.EMBEDDING_DEVICE,
+                "actual_device": None,
+                "verified": False,
+            },
+            "reranker": {
+                "loaded": False,
+                "configured_device": settings.RERANKER_DEVICE,
+                "actual_device": None,
+                "verified": False,
+            },
+            "cuda_peak_memory": {
+                "allocated_bytes": 0,
+                "reserved_bytes": 0,
+            },
+        }
+
     return {
         "embedding_model": settings.EMBEDDING_MODEL,
         "embedding_query_instruction": settings.EMBEDDING_QUERY_INSTRUCTION,
+        "embedding_device": settings.EMBEDDING_DEVICE,
+        "embedding_batch_size": settings.EMBEDDING_BATCH_SIZE,
         "chunk_size": settings.CHUNK_SIZE,
         "chunk_overlap": settings.CHUNK_OVERLAP,
         "chunk_strategy": settings.CHUNK_STRATEGY,
@@ -85,9 +221,12 @@ def get_run_config() -> dict:
         "reranker_model": settings.RERANKER_MODEL,
         "reranker_candidate_k": settings.RERANKER_CANDIDATE_K,
         "reranker_device": settings.RERANKER_DEVICE,
+        "reranker_use_fp16": settings.RERANKER_USE_FP16,
         "reranker_batch_size": settings.RERANKER_BATCH_SIZE,
         "reranker_max_length": settings.RERANKER_MAX_LENGTH,
         "llm_model": settings.DEEPSEEK_MODEL,
+        **torch_runtime,
+        "runtime": model_runtime,
     }
 
 
@@ -97,9 +236,7 @@ def parse_corpus(corpus_dir: Path, *, structured: bool = False) -> dict:
         from backend.services.parsers import ADAPTERS, parse_document_structure
 
         texts = {}
-        for source in sorted(corpus_dir.iterdir()):
-            if not source.is_file() or source.suffix.lower() not in ADAPTERS:
-                continue
+        for source in _iter_structured_corpus_files(corpus_dir, ADAPTERS):
             relative_name = source.relative_to(corpus_dir).as_posix()
             parsed = parse_document_structure(
                 str(source),
@@ -189,9 +326,7 @@ def _ingest_structured_corpus(corpus_dir: Path) -> dict:
         created_at=datetime.now(timezone.utc).isoformat(timespec="seconds"),
     )
 
-    for source in sorted(corpus_dir.iterdir()):
-        if not source.is_file() or source.suffix.lower() not in ADAPTERS:
-            continue
+    for source in _iter_structured_corpus_files(corpus_dir, ADAPTERS):
         relative_name = source.relative_to(corpus_dir).as_posix()
         document_id = _structured_document_id(relative_name)
         create_document(
@@ -294,13 +429,55 @@ def answer_question(question: str) -> dict:
     }
 
 
-def retrieve_only(question: str) -> dict:
-    """只执行检索链路，供 Reranker 候选实验复用，不调用 LLM。"""
-    from backend.services.retriever import retrieve
+def _dump_retrieval_trace(trace) -> dict | None:
+    """将 backend Trace 转为可直接写入 JSONL 的普通字典。"""
+    if trace is None:
+        return None
+    if hasattr(trace, "model_dump"):
+        return trace.model_dump(mode="json")
+    if isinstance(trace, dict):
+        return trace
+    raise TypeError(f"不支持的 RetrievalTrace 类型：{type(trace)!r}")
 
+
+def retrieve_only(question: str, *, include_trace: bool = False) -> dict:
+    """只执行检索链路，供无 LLM 评测复用；可显式请求逐阶段 Trace。
+
+    ``include_trace=False`` 保持历史返回形状（仅 ``retrieval`` 和
+    ``retrieval_s``），因此既有 retrieval-sweep 和离线重放无需修改。
+    开启时临时打开 backend 的 Trace 开关并调用 ``retrieve_with_trace``；
+    该开关在调用完成后恢复，避免把评测设置泄漏到同进程的业务请求。
+    """
     started = time.perf_counter()
-    retrieval = retrieve(question)
+    if not include_trace:
+        from backend.services.retriever import retrieve
+
+        retrieval = retrieve(question)
+        return {
+            "retrieval": retrieval,
+            "retrieval_s": round(time.perf_counter() - started, 3),
+        }
+
+    from backend.config import settings
+    from backend.services.retriever import retrieve_with_trace
+
+    previous_trace_setting = settings.RETRIEVAL_TRACE_ENABLED
+    try:
+        # retrieve_with_trace() 复用服务端开关；评测的 include_trace 是一次
+        # 调用级显式请求，而不是永久修改 .env 或生产配置。
+        settings.RETRIEVAL_TRACE_ENABLED = True
+        response = retrieve_with_trace(question)
+    finally:
+        settings.RETRIEVAL_TRACE_ENABLED = previous_trace_setting
+
+    elapsed = time.perf_counter() - started
+    if response.trace is not None:
+        # backend 的 total 通常由 chat 层在 LLM 完成后补齐；无 LLM 评测
+        # 没有 chat 层，因此这里写入纯检索总耗时（毫秒）。
+        response.trace.timings_ms.total = round(elapsed * 1000, 3)
+
     return {
-        "retrieval": retrieval,
-        "retrieval_s": round(time.perf_counter() - started, 3),
+        "retrieval": response.results,
+        "retrieval_s": round(elapsed, 3),
+        "trace": _dump_retrieval_trace(response.trace),
     }

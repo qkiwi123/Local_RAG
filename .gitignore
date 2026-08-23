@@ -7,6 +7,8 @@ web/dist/
 
 # 评估运行输出（报告、隔离向量库；基线报告手动挑选提交）
 eval/runs/
+eval/crud_rag_1000/runs/
+eval/crud_rag_1000/v3/runs/
 
 # 本地启动脚本输出
 logs/
@@ -24,6 +26,7 @@ build/
 
 # 虚拟环境
 .venv/
+.venv-gpu/
 venv/
 env/
 
@@ -36,8 +39,13 @@ env/
 
 # 测试缓存
 .pytest_cache/
+.pytest-tmp/
+eval/crud_rag_1000/.pytest-tmp*/
 .coverage
 htmlcov/
+
+# 本地助手配置
+.claude/
 
 # 系统文件
 .DS_Store

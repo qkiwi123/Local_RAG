@@ -1,12 +1,13 @@
 ﻿param(
     [switch]$Reload,
-    [switch]$Stop
+    [switch]$Stop,
+    [ValidateSet("gpu", "cpu")]
+    [string]$InferenceProfile = "gpu"
 )
 
 $ErrorActionPreference = "Stop"
 
 $repoRoot = Split-Path -Parent $PSScriptRoot
-$python = Join-Path $repoRoot ".venv\Scripts\python.exe"
 $logsDir = Join-Path $repoRoot "logs"
 $pidFile = Join-Path $logsDir "service.pids"
 
@@ -16,8 +17,24 @@ if ($Stop) {
     exit 0
 }
 
+if ($InferenceProfile -eq "gpu") {
+    $virtualEnv = ".venv-gpu"
+    $env:EMBEDDING_DEVICE = "cuda:0"
+    $env:EMBEDDING_BATCH_SIZE = "32"
+    $env:RERANKER_DEVICE = "cuda:0"
+    $env:RERANKER_USE_FP16 = "true"
+}
+else {
+    $virtualEnv = ".venv"
+    $env:EMBEDDING_DEVICE = "cpu"
+    $env:EMBEDDING_BATCH_SIZE = "32"
+    $env:RERANKER_DEVICE = "cpu"
+    $env:RERANKER_USE_FP16 = "false"
+}
+$python = Join-Path $repoRoot "$virtualEnv\Scripts\python.exe"
+
 if (-not (Test-Path -LiteralPath $python)) {
-    throw "未找到项目 Python：$python，请先创建 .venv 并安装 requirements.txt"
+    throw "未找到 $InferenceProfile 推理环境：$python，请先安装对应虚拟环境"
 }
 
 # 防双开：PID 文件里仍有存活且启动时间匹配的记录时拒绝再次启动。
@@ -130,6 +147,9 @@ $frontend = Start-Process `
 
 Write-Host "Backend PID: $($backend.Id)"
 Write-Host "Backend health: ready"
+Write-Host "Inference profile: $InferenceProfile ($virtualEnv)"
+Write-Host "Embedding device: $env:EMBEDDING_DEVICE"
+Write-Host "Reranker device: $env:RERANKER_DEVICE; FP16: $env:RERANKER_USE_FP16"
 Write-Host "React SPA: http://localhost:8000/"
 Write-Host "API docs: http://localhost:8000/docs"
 Write-Host "Legacy Streamlit PID: $($frontend.Id) http://localhost:8501"

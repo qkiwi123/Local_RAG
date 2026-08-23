@@ -6,6 +6,7 @@
 """
 
 import os
+import re
 from pathlib import Path
 from dotenv import load_dotenv
 
@@ -26,6 +27,11 @@ def _env_bool(name: str, default: bool = False) -> bool:
     if normalized in {"0", "false", "no", "off"}:
         return False
     raise ValueError(f"{name} 必须是 true/false、1/0、yes/no 或 on/off")
+
+
+def _is_supported_torch_device(device: str) -> bool:
+    """设备配置只接受当前项目已验证的 CPU/CUDA 形式。"""
+    return re.fullmatch(r"(?:cpu|cuda(?::\d+)?)", device) is not None
 
 
 class Settings:
@@ -108,7 +114,8 @@ class Settings:
     )
     # P1-5 的 k=15/20/30 扫描质量持平，选择延迟最低的 k=15。
     RERANKER_CANDIDATE_K: int = int(os.getenv("RERANKER_CANDIDATE_K", "15"))
-    RERANKER_DEVICE: str = os.getenv("RERANKER_DEVICE", "cpu")
+    RERANKER_DEVICE: str = os.getenv("RERANKER_DEVICE", "cpu").strip().lower()
+    RERANKER_USE_FP16: bool = _env_bool("RERANKER_USE_FP16", False)
     RERANKER_BATCH_SIZE: int = int(os.getenv("RERANKER_BATCH_SIZE", "8"))
     RERANKER_MAX_LENGTH: int = int(os.getenv("RERANKER_MAX_LENGTH", "512"))
 
@@ -121,6 +128,8 @@ class Settings:
     EMBEDDING_QUERY_INSTRUCTION: str = os.getenv(
         "EMBEDDING_QUERY_INSTRUCTION", ""
     )
+    EMBEDDING_DEVICE: str = os.getenv("EMBEDDING_DEVICE", "cpu").strip().lower()
+    EMBEDDING_BATCH_SIZE: int = int(os.getenv("EMBEDDING_BATCH_SIZE", "32"))
 
     # ─── 视觉 / OCR（多模态模型 API，独立于问答 LLM） ───
     # 智谱 GLM-4.6V-Flash 等 OpenAI 兼容端点；密钥一律放 .env，
@@ -194,6 +203,14 @@ class Settings:
             raise ValueError("RERANKER_BATCH_SIZE 必须大于 0")
         if self.RERANKER_MAX_LENGTH <= 0:
             raise ValueError("RERANKER_MAX_LENGTH 必须大于 0")
+        if not _is_supported_torch_device(self.RERANKER_DEVICE):
+            raise ValueError("RERANKER_DEVICE 仅支持 cpu、cuda 或 cuda:非负序号")
+        if self.RERANKER_USE_FP16 and not self.RERANKER_DEVICE.startswith("cuda"):
+            raise ValueError("RERANKER_USE_FP16=true 时 RERANKER_DEVICE 必须是 cuda")
+        if not _is_supported_torch_device(self.EMBEDDING_DEVICE):
+            raise ValueError("EMBEDDING_DEVICE 仅支持 cpu、cuda 或 cuda:非负序号")
+        if self.EMBEDDING_BATCH_SIZE <= 0:
+            raise ValueError("EMBEDDING_BATCH_SIZE 必须大于 0")
         if self.CITATION_PREVIEW_MAX_PAGE_CHARS <= 0:
             raise ValueError("CITATION_PREVIEW_MAX_PAGE_CHARS 必须大于 0")
         if self.OCR_MAX_IMAGE_EDGE <= 0:

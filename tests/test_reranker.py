@@ -36,6 +36,7 @@ class _FakeReranker:
 def test_rerank_candidates_sorts_by_score_and_preserves_dense_fields(monkeypatch):
     model = _FakeReranker([0.2, 0.9, -0.1])
     monkeypatch.setattr(reranker, "_get_model", lambda: model)
+    monkeypatch.setattr(settings, "RERANKER_DEVICE", "cpu")
     candidates = [
         {**_result("a", 0.10), "dense_rank": 1},
         {**_result("b", 0.20), "dense_rank": 2},
@@ -142,6 +143,9 @@ def test_eval_run_sets_and_records_reranker_config(monkeypatch, tmp_path):
         reranker_enabled=True,
         reranker_model="BAAI/bge-reranker-v2-m3",
         reranker_candidate_k=15,
+        reranker_device="cuda:0",
+        reranker_use_fp16=True,
+        reranker_batch_size=8,
     )
 
     eval_cli._setup_env(args)
@@ -149,16 +153,25 @@ def test_eval_run_sets_and_records_reranker_config(monkeypatch, tmp_path):
     assert os.environ["RERANKER_ENABLED"] == "true"
     assert os.environ["RERANKER_MODEL"] == "BAAI/bge-reranker-v2-m3"
     assert os.environ["RERANKER_CANDIDATE_K"] == "15"
+    assert os.environ["RERANKER_DEVICE"] == "cuda:0"
+    assert os.environ["RERANKER_USE_FP16"] == "true"
+    assert os.environ["RERANKER_BATCH_SIZE"] == "8"
 
     monkeypatch.setattr(settings, "RERANKER_ENABLED", True, raising=False)
     monkeypatch.setattr(
         settings, "RERANKER_MODEL", "BAAI/bge-reranker-v2-m3", raising=False
     )
     monkeypatch.setattr(settings, "RERANKER_CANDIDATE_K", 15, raising=False)
+    monkeypatch.setattr(settings, "RERANKER_DEVICE", "cuda:0", raising=False)
+    monkeypatch.setattr(settings, "RERANKER_USE_FP16", True, raising=False)
+    monkeypatch.setattr(settings, "RERANKER_BATCH_SIZE", 8, raising=False)
     config = adapters.get_run_config()
     assert config["reranker_enabled"] is True
     assert config["reranker_model"] == "BAAI/bge-reranker-v2-m3"
     assert config["reranker_candidate_k"] == 15
+    assert config["reranker_device"] == "cuda:0"
+    assert config["reranker_use_fp16"] is True
+    assert config["reranker_batch_size"] == 8
 
 
 def test_selected_reranker_defaults_keep_safe_switch_and_use_k15(monkeypatch):
@@ -167,6 +180,39 @@ def test_selected_reranker_defaults_keep_safe_switch_and_use_k15(monkeypatch):
     assert _env_bool("RERANKER_SAFE_DEFAULT_TEST", False) is False
     assert settings.RERANKER_MODEL == "BAAI/bge-reranker-v2-m3"
     assert settings.RERANKER_CANDIDATE_K == 15
+
+
+def test_reranker_model_receives_device_and_precision_config(monkeypatch):
+    import FlagEmbedding
+
+    captured = {}
+
+    class _ConfiguredReranker:
+        def __init__(self, model_path, **kwargs):
+            captured["model_path"] = model_path
+            captured.update(kwargs)
+
+    monkeypatch.setattr(FlagEmbedding, "FlagReranker", _ConfiguredReranker)
+    monkeypatch.setattr(
+        "backend.services.model_cache.resolve_cached_snapshot",
+        lambda model_name: f"cached/{model_name}",
+    )
+    monkeypatch.setattr(settings, "RERANKER_DEVICE", "cpu")
+    monkeypatch.setattr(settings, "RERANKER_USE_FP16", False)
+    monkeypatch.setattr(settings, "RERANKER_BATCH_SIZE", 8)
+    monkeypatch.setattr(settings, "RERANKER_MAX_LENGTH", 512)
+    reranker._get_model.cache_clear()
+
+    reranker._get_model()
+
+    assert captured == {
+        "model_path": "cached/BAAI/bge-reranker-v2-m3",
+        "use_fp16": False,
+        "devices": "cpu",
+        "batch_size": 8,
+        "max_length": 512,
+    }
+    reranker._get_model.cache_clear()
 
 
 @pytest.mark.integration

@@ -20,9 +20,11 @@ class _Encoded:
 class _RecordingModel:
     def __init__(self):
         self.calls = []
+        self.kwargs_calls = []
 
     def encode(self, texts, **kwargs):
         self.calls.append(list(texts))
+        self.kwargs_calls.append(kwargs)
         return _Encoded([[0.1, 0.2] for _ in texts])
 
 
@@ -41,6 +43,10 @@ def test_query_instruction_is_applied_only_to_queries(monkeypatch):
     embedding.embed_query("什么是 RAG？")
 
     assert model.calls == [["文档正文"], [f"{instruction}什么是 RAG？"]]
+    assert [call["batch_size"] for call in model.kwargs_calls] == [
+        settings.EMBEDDING_BATCH_SIZE,
+        settings.EMBEDDING_BATCH_SIZE,
+    ]
 
 
 def test_eval_cli_sets_and_records_query_instruction(monkeypatch, tmp_path):
@@ -57,12 +63,21 @@ def test_eval_cli_sets_and_records_query_instruction(monkeypatch, tmp_path):
         label="instruction-test",
         overwrite=False,
         embedding_model=None,
+        embedding_device="cuda:0",
+        embedding_batch_size=32,
         query_instruction=instruction,
         top_k=None,
     )
 
     eval_cli._setup_env(args)
     assert os.environ["EMBEDDING_QUERY_INSTRUCTION"] == instruction
+    assert os.environ["EMBEDDING_DEVICE"] == "cuda:0"
+    assert os.environ["EMBEDDING_BATCH_SIZE"] == "32"
 
     monkeypatch.setattr(settings, "EMBEDDING_QUERY_INSTRUCTION", instruction, raising=False)
-    assert adapters.get_run_config()["embedding_query_instruction"] == instruction
+    monkeypatch.setattr(settings, "EMBEDDING_DEVICE", "cuda:0", raising=False)
+    monkeypatch.setattr(settings, "EMBEDDING_BATCH_SIZE", 32, raising=False)
+    config = adapters.get_run_config()
+    assert config["embedding_query_instruction"] == instruction
+    assert config["embedding_device"] == "cuda:0"
+    assert config["embedding_batch_size"] == 32

@@ -94,7 +94,15 @@ async def startup_event():
     recover_interrupted_requests()
     start_background_warmup()
     print(f"[启动] RAG Knowledge Base API v0.1.0")
-    print(f"[启动] Embedding 模型: {settings.EMBEDDING_MODEL}")
+    print(
+        f"[启动] Embedding 模型: {settings.EMBEDDING_MODEL}; "
+        f"device={settings.EMBEDDING_DEVICE}; batch={settings.EMBEDDING_BATCH_SIZE}"
+    )
+    print(
+        f"[启动] Reranker: enabled={settings.RERANKER_ENABLED}; "
+        f"device={settings.RERANKER_DEVICE}; fp16={settings.RERANKER_USE_FP16}; "
+        f"batch={settings.RERANKER_BATCH_SIZE}"
+    )
     print(f"[启动] LLM 模型: {settings.DEEPSEEK_MODEL}")
     print(f"[启动] Chroma 数据目录: {settings.CHROMA_PERSIST_DIR}")
     print(f"[启动] 文档元数据: {settings.METADATA_DB_PATH}")

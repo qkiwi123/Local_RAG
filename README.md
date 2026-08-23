@@ -111,14 +111,21 @@ OCR 表格转 Markdown 已推迟到下一轮；当前 OCR 表格内容仍以段�
 
 ## 环境准备
 
-当前环境已在 Windows、Python 3.14.0 上验证。
+当前 GPU 默认环境已在 Windows、Python 3.14.0、RTX 4060 Laptop GPU 上验证。
+原 `.venv` 作为 CPU 回退环境保留；日常启动使用独立的 `.venv-gpu`。
 
 ```powershell
-py -3.14 -m venv .venv
-.\.venv\Scripts\Activate.ps1
-python -m pip install -r requirements.txt
+D:\Python\python.exe -m venv .venv-gpu
+.\.venv-gpu\Scripts\python.exe -m pip install --no-cache-dir `
+  torch==2.13.0 --index-url https://download.pytorch.org/whl/cu130
+.\.venv-gpu\Scripts\python.exe -m pip install --no-cache-dir -r requirements.txt
+.\.venv-gpu\Scripts\python.exe -m pip check
 Copy-Item .env.example .env
 ```
+
+CUDA PyTorch wheel 应从官方索引安装。当前已验证组合为
+`torch 2.13.0+cu130`、CUDA runtime 13.0、Python 3.14；不要在原 `.venv`
+中直接替换 PyTorch，以免同时破坏 CPU 回退环境。
 
 编辑 `.env`，至少设置：
 
@@ -128,6 +135,10 @@ DEEPSEEK_BASE_URL=https://api.deepseek.com
 DEEPSEEK_MODEL=deepseek-v4-flash
 RETRIEVAL_TRACE_ENABLED=false
 TRACE_STORAGE_MAX_BYTES=52428800
+EMBEDDING_DEVICE=cuda:0
+EMBEDDING_BATCH_SIZE=32
+RERANKER_DEVICE=cuda:0
+RERANKER_USE_FP16=true
 OCR_ENABLED=false
 OCR_PDF_SCANNED=false
 OCR_PDF_PAGE_IMAGES=false
@@ -154,7 +165,7 @@ chunk 规则变化后，应使用 `scripts/rebuild_index.py` 在独立目录安�
 开发时分别在两个终端启动 FastAPI 与 Vite。后端终端从仓库根目录运行：
 
 ```powershell
-.\.venv\Scripts\python.exe -m uvicorn backend.main:app --reload --reload-dir backend
+.\.venv-gpu\Scripts\python.exe -m uvicorn backend.main:app --reload --reload-dir backend
 ```
 
 前端终端运行：
@@ -166,13 +177,23 @@ npm.cmd run dev
 
 Vite 默认通过 `http://localhost:5173/` 提供开发页面，并把 `/api` 代理到 8000。
 只有需要与旧界面对照时，才从仓库根目录另行运行
-`.\.venv\Scripts\python.exe -m streamlit run frontend/app.py`。
+`.\.venv-gpu\Scripts\python.exe -m streamlit run frontend/app.py`。
 
 或使用一键脚本：
 
 ```powershell
 .\scripts\start.ps1
 ```
+
+默认 profile 为 GPU：使用 `.venv-gpu`，Embedding/Reranker 均为 `cuda:0`，
+Reranker 使用 FP16。需要故障回退时才显式启动 CPU profile：
+
+```powershell
+.\scripts\start.ps1 -InferenceProfile cpu
+```
+
+CPU profile 使用原 `.venv`，并在启动进程中强制覆盖为 CPU/FP32；两个 profile
+不会同时启动，防双开检查仍然生效。
 
 只有需要后端热重载时才使用：
 
@@ -235,7 +256,7 @@ Stop-Process -Id <Backend PID>,<Frontend PID>
 默认测试不会调用 DeepSeek，也不会写入生产 `data/`：
 
 ```powershell
-.\.venv\Scripts\python.exe -m pytest -q
+.\.venv-gpu\Scripts\python.exe -m pytest -q
 ```
 
 2026-08-15 阶段 3 F4 的隔离验收结果：
@@ -253,7 +274,7 @@ Stop-Process -Id <Backend PID>,<Frontend PID>
 不依赖本地模型权重的 CI 测试：
 
 ```powershell
-.\.venv\Scripts\python.exe -m pytest -m "not integration and not external" -q
+.\.venv-gpu\Scripts\python.exe -m pytest -m "not integration and not external" -q
 ```
 
 React 前端检查：
@@ -275,7 +296,7 @@ F4 结果为 7 个测试文件、27/27 测试通过，lint、TypeScript 和生�
 允许外部调用后，仅对这个测试文件禁用公共 conftest：
 
 ```powershell
-.\.venv\Scripts\python.exe -m pytest --noconftest tests/test_llm.py -m external -q -s
+.\.venv-gpu\Scripts\python.exe -m pytest --noconftest tests/test_llm.py -m external -q -s
 ```
 
 2026-07-30 使用 `.env` 中配置的 `deepseek-v4-flash` 实测为 `3 passed`。
@@ -293,7 +314,7 @@ Dataset v3 使用单一顶层 JSON、独立 corpus manifest 和 `structured-v2` 
 非严格校验用于检查结构、manifest 和证据绑定：
 
 ```powershell
-.\.venv\Scripts\python.exe -m eval.dataset_v3 validate `
+.\.venv-gpu\Scripts\python.exe -m eval.dataset_v3 validate `
   --dataset eval/dataset/questions_v3.json `
   --corpus eval/corpus `
   --manifest eval/dataset/corpus_v3_manifest.json
@@ -302,7 +323,7 @@ Dataset v3 使用单一顶层 JSON、独立 corpus manifest 和 `structured-v2` 
 严格校验只应在真实审核者完成全部签核后通过：
 
 ```powershell
-.\.venv\Scripts\python.exe -m eval.dataset_v3 validate `
+.\.venv-gpu\Scripts\python.exe -m eval.dataset_v3 validate `
   --dataset eval/dataset/questions_v3.json `
   --corpus eval/corpus `
   --manifest eval/dataset/corpus_v3_manifest.json `
@@ -322,7 +343,7 @@ structured-v2 评测结果。该运行创建隔离 Chroma、SQLite 和上传目�
 $env:PYTHONIOENCODING='utf-8'
 $env:HF_HUB_OFFLINE='1'
 $env:TRANSFORMERS_OFFLINE='1'
-.\.venv\Scripts\python.exe -m eval.eval run `
+.\.venv-gpu\Scripts\python.exe -m eval.eval run `
   --label <label> `
   --dataset eval/dataset/questions_v3.json `
   --corpus eval/corpus `

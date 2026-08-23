@@ -27,11 +27,19 @@ from backend.config import settings
 def _get_model():
     from sentence_transformers import SentenceTransformer
     from backend.services.model_cache import resolve_cached_snapshot
+    from backend.services.torch_device import (
+        assert_model_uses_device,
+        require_torch_device,
+    )
 
-    return SentenceTransformer(
+    require_torch_device(settings.EMBEDDING_DEVICE, "Embedding")
+    model = SentenceTransformer(
         resolve_cached_snapshot(settings.EMBEDDING_MODEL),
         local_files_only=True,
+        device=settings.EMBEDDING_DEVICE,
     )
+    assert_model_uses_device(model, settings.EMBEDDING_DEVICE, "Embedding")
+    return model
 
 
 def embed_texts(texts: List[str]) -> List[List[float]]:
@@ -51,7 +59,8 @@ def embed_texts(texts: List[str]) -> List[List[float]]:
     embeddings = _get_model().encode(
         texts,
         normalize_embeddings=True,
-        show_progress_bar=False  # 测试和 API 调用时不需要进度条
+        show_progress_bar=False,  # 测试和 API 调用时不需要进度条
+        batch_size=settings.EMBEDDING_BATCH_SIZE,
     )
     return embeddings.tolist()
 
