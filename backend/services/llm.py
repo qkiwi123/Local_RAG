@@ -10,19 +10,208 @@ DeepSeek API 兼容 OpenAI 接口格式，因此可以直接使用 openai 库。
 - 流式：LLM 每生成一个 token 就 yield 出去，前端逐字显示
 """
 
-from functools import lru_cache
+from collections import OrderedDict
+from dataclasses import dataclass, field
+from hashlib import sha256
+from threading import RLock
+from time import perf_counter
 from typing import Generator, List
+from urllib.parse import urlsplit
 
 from openai import OpenAI
+from pydantic import SecretStr
+
 from backend.config import settings
+from backend.models.settings_schemas import (
+    EffectiveSettingsSnapshot,
+    LLMConnectionTestResponse,
+)
 
 
-@lru_cache(maxsize=1)
-def _get_client() -> OpenAI:
-    """首次真实调用 LLM 时才创建客户端。"""
+@dataclass(frozen=True)
+class LLMCallConfig:
+    revision: int
+    enabled: bool
+    provider: str
+    base_url: str
+    model: str
+    api_key: SecretStr | None = field(repr=False)
+    temperature: float
+    max_tokens: int
+    timeout_seconds: float
+
+
+class LLMDisabledError(RuntimeError):
+    """调用方在生成模型关闭时错误发起了模型调用。"""
+
+
+_CLIENT_CACHE_LIMIT = 4
+_CLIENT_CACHE: OrderedDict[tuple, OpenAI] = OrderedDict()
+_CLIENT_CACHE_LOCK = RLock()
+
+
+def call_config_from_snapshot(
+    runtime: EffectiveSettingsSnapshot | None = None,
+    *,
+    overrides: dict | None = None,
+    api_key: SecretStr | None = None,
+    use_snapshot_key: bool = True,
+) -> LLMCallConfig:
+    """把一次请求的冻结快照转换为 LLM 调用配置。"""
+    if runtime is None:
+        values = {
+            "enabled": bool(getattr(settings, "LLM_ENABLED", True)),
+            "provider": str(getattr(settings, "LLM_PROVIDER", "deepseek")),
+            "base_url": settings.DEEPSEEK_BASE_URL,
+            "model": settings.DEEPSEEK_MODEL,
+            "temperature": float(getattr(settings, "LLM_TEMPERATURE", 0.3)),
+            "max_tokens": int(getattr(settings, "LLM_MAX_TOKENS", 2000)),
+            "timeout_seconds": float(
+                getattr(settings, "LLM_TIMEOUT_SECONDS", 120)
+            ),
+        }
+        resolved_key = SecretStr(settings.DEEPSEEK_API_KEY)
+        revision = -1
+    else:
+        values = runtime.llm.model_dump()
+        resolved_key = runtime.api_key if use_snapshot_key else api_key
+        revision = runtime.revision
+    values.update(overrides or {})
+    if runtime is None and not use_snapshot_key:
+        resolved_key = api_key
+    return LLMCallConfig(
+        revision=revision,
+        api_key=resolved_key,
+        **values,
+    )
+
+
+def _client_key(config: LLMCallConfig) -> tuple:
+    secret = (
+        config.api_key.get_secret_value()
+        if config.api_key is not None
+        else ""
+    )
+    key_fingerprint = sha256(secret.encode("utf-8")).hexdigest()
+    return (
+        config.revision,
+        config.provider,
+        config.base_url,
+        config.timeout_seconds,
+        key_fingerprint,
+    )
+
+
+def _create_client(config: LLMCallConfig) -> OpenAI:
+    if config.api_key is None:
+        raise ValueError("未配置 LLM API Key")
+    secret = config.api_key.get_secret_value().strip()
+    if not secret:
+        raise ValueError("未配置 LLM API Key")
     return OpenAI(
-        api_key=settings.DEEPSEEK_API_KEY,
-        base_url=settings.DEEPSEEK_BASE_URL,
+        api_key=secret,
+        base_url=config.base_url,
+        timeout=config.timeout_seconds,
+    )
+
+
+def _get_client(config: LLMCallConfig | None = None) -> OpenAI:
+    """按 revision 和连接参数惰性复用客户端，不把明文 Key 作为键。"""
+    resolved = config or call_config_from_snapshot()
+    key = _client_key(resolved)
+    with _CLIENT_CACHE_LOCK:
+        cached = _CLIENT_CACHE.get(key)
+        if cached is not None:
+            _CLIENT_CACHE.move_to_end(key)
+            return cached
+        client = _create_client(resolved)
+        _CLIENT_CACHE[key] = client
+        while len(_CLIENT_CACHE) > _CLIENT_CACHE_LIMIT:
+            _CLIENT_CACHE.popitem(last=False)
+        return client
+
+
+def clear_llm_client_cache() -> None:
+    """保存 LLM 设置后释放缓存引用；已持有旧客户端的请求可继续完成。"""
+    with _CLIENT_CACHE_LOCK:
+        _CLIENT_CACHE.clear()
+
+
+def _require_enabled(config: LLMCallConfig) -> None:
+    if not config.enabled:
+        raise LLMDisabledError("生成模型已关闭")
+
+
+def build_retrieval_only_answer(source_count: int) -> str:
+    """生成不调用模型、但能被现有引用解析器识别的固定回答。"""
+    markers = " ".join(f"【来源{index}】" for index in range(1, source_count + 1))
+    return (
+        "生成模型已关闭，已返回本次检索到的相关文档来源。"
+        "请通过引用查看原文：" + markers
+    )
+
+
+def _endpoint_origin(base_url: str) -> str:
+    parsed = urlsplit(base_url)
+    return f"{parsed.scheme}://{parsed.netloc}"
+
+
+def _connection_error(error: Exception) -> tuple[str, str]:
+    status_code = getattr(error, "status_code", None)
+    class_name = type(error).__name__.lower()
+    if status_code == 401 or "authentication" in class_name:
+        return "authentication_failed", "API Key 无效或认证失败"
+    if status_code == 403 or "permission" in class_name:
+        return "permission_denied", "API Key 没有访问该模型的权限"
+    if status_code == 404 or "notfound" in class_name:
+        return "model_not_found", "模型或接口地址不存在"
+    if isinstance(error, TimeoutError) or "timeout" in class_name:
+        return "timeout", "连接模型服务超时"
+    if isinstance(error, ConnectionError) or "connection" in class_name:
+        return "network_error", "无法连接模型服务"
+    return "upstream_error", "模型服务返回了未分类错误"
+
+
+def test_llm_connection(config: LLMCallConfig) -> LLMConnectionTestResponse:
+    """对草稿配置执行一次最小请求；不使用或污染正式客户端缓存。"""
+    started = perf_counter()
+    endpoint = _endpoint_origin(config.base_url)
+    if config.api_key is None:
+        return LLMConnectionTestResponse(
+            success=False,
+            latency_ms=0,
+            provider=config.provider,
+            model=config.model,
+            endpoint=endpoint,
+            error_code="authentication_failed",
+            message="尚未配置 API Key",
+        )
+    try:
+        client = _create_client(config)
+        client.chat.completions.create(
+            model=config.model,
+            messages=[{"role": "user", "content": "ping"}],
+            temperature=0,
+            max_tokens=1,
+        )
+    except Exception as error:
+        code, message = _connection_error(error)
+        return LLMConnectionTestResponse(
+            success=False,
+            latency_ms=(perf_counter() - started) * 1000,
+            provider=config.provider,
+            model=config.model,
+            endpoint=endpoint,
+            error_code=code,
+            message=message,
+        )
+    return LLMConnectionTestResponse(
+        success=True,
+        latency_ms=(perf_counter() - started) * 1000,
+        provider=config.provider,
+        model=config.model,
+        endpoint=endpoint,
+        message="连接成功",
     )
 
 
@@ -61,7 +250,11 @@ def build_messages(question: str, context: str) -> List[dict]:
     ]
 
 
-def ask(question: str, context: str) -> str:
+def ask(
+    question: str,
+    context: str,
+    runtime: EffectiveSettingsSnapshot | None = None,
+) -> str:
     """
     向 LLM 提问，获取完整的回答文本。
 
@@ -75,22 +268,30 @@ def ask(question: str, context: str) -> str:
     Returns:
         LLM 生成的回答文本
     """
+    config = call_config_from_snapshot(runtime)
+    _require_enabled(config)
     messages = build_messages(question, context)
 
-    response = _get_client().chat.completions.create(
-        model=settings.DEEPSEEK_MODEL,
+    response = _get_client(config).chat.completions.create(
+        model=config.model,
         messages=messages,
-        temperature=0.3,  # 低温度：更确定性的回答，减少幻觉
-        max_tokens=2000,
+        temperature=config.temperature,
+        max_tokens=config.max_tokens,
     )
 
     return response.choices[0].message.content
 
 
-def rewrite_followup(question: str, history: str) -> str:
+def rewrite_followup(
+    question: str,
+    history: str,
+    runtime: EffectiveSettingsSnapshot | None = None,
+) -> str:
     """把含指代或省略的追问改写为可独立检索的问题。"""
-    response = _get_client().chat.completions.create(
-        model=settings.DEEPSEEK_MODEL,
+    config = call_config_from_snapshot(runtime)
+    _require_enabled(config)
+    response = _get_client(config).chat.completions.create(
+        model=config.model,
         messages=[
             {
                 "role": "system",
@@ -118,10 +319,13 @@ def ask_with_history(
     standalone_question: str,
     context: str,
     history: str,
+    runtime: EffectiveSettingsSnapshot | None = None,
 ) -> str:
     """使用有界历史保持对话连贯，但事实仍只取自当前检索证据。"""
-    response = _get_client().chat.completions.create(
-        model=settings.DEEPSEEK_MODEL,
+    config = call_config_from_snapshot(runtime)
+    _require_enabled(config)
+    response = _get_client(config).chat.completions.create(
+        model=config.model,
         messages=[
             {
                 "role": "system",
@@ -140,8 +344,8 @@ def ask_with_history(
                 ),
             },
         ],
-        temperature=0.3,
-        max_tokens=2000,
+        temperature=config.temperature,
+        max_tokens=config.max_tokens,
     )
     return response.choices[0].message.content
 
@@ -151,10 +355,13 @@ def ask_with_history_stream(
     standalone_question: str,
     context: str,
     history: str,
+    runtime: EffectiveSettingsSnapshot | None = None,
 ) -> Generator[str, None, None]:
     """流式版 ask_with_history：逐 token 产出，历史只用于连贯不作文档证据。"""
-    stream = _get_client().chat.completions.create(
-        model=settings.DEEPSEEK_MODEL,
+    config = call_config_from_snapshot(runtime)
+    _require_enabled(config)
+    stream = _get_client(config).chat.completions.create(
+        model=config.model,
         messages=[
             {
                 "role": "system",
@@ -173,8 +380,8 @@ def ask_with_history_stream(
                 ),
             },
         ],
-        temperature=0.3,
-        max_tokens=2000,
+        temperature=config.temperature,
+        max_tokens=config.max_tokens,
         stream=True,
     )
 
@@ -183,7 +390,11 @@ def ask_with_history_stream(
             yield chunk.choices[0].delta.content
 
 
-def ask_stream(question: str, context: str) -> Generator[str, None, None]:
+def ask_stream(
+    question: str,
+    context: str,
+    runtime: EffectiveSettingsSnapshot | None = None,
+) -> Generator[str, None, None]:
     """
     流式向 LLM 提问，逐 token 返回生成的文本。
 
@@ -197,13 +408,15 @@ def ask_stream(question: str, context: str) -> Generator[str, None, None]:
     Yields:
         每次 yield 一个文本片段（可能是单个字符到一个 token 不等）
     """
+    config = call_config_from_snapshot(runtime)
+    _require_enabled(config)
     messages = build_messages(question, context)
 
-    stream = _get_client().chat.completions.create(
-        model=settings.DEEPSEEK_MODEL,
+    stream = _get_client(config).chat.completions.create(
+        model=config.model,
         messages=messages,
-        temperature=0.3,
-        max_tokens=2000,
+        temperature=config.temperature,
+        max_tokens=config.max_tokens,
         stream=True,
     )
 

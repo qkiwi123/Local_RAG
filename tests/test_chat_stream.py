@@ -136,12 +136,14 @@ def test_stream_replay_returns_saved_answer_in_one_shot(client, monkeypatch):
     monkeypatch.setattr(
         chat_router,
         "ask_with_history",
-        lambda question, standalone, context, history: "已保存回答【来源1】",
+        lambda question, standalone, context, history, runtime=None: (
+            "已保存回答【来源1】"
+        ),
     )
     monkeypatch.setattr(
         chat_router,
         "rewrite_followup",
-        lambda question, history: question,
+        lambda question, history, runtime=None: question,
     )
     conversation_id = client.post("/api/conversations", json={}).json()[
         "conversation_id"
@@ -219,7 +221,9 @@ def test_stream_interrupt_fails_chat_and_keeps_no_partial_answer(
 
     monkeypatch.setattr(chat_router, "ask_with_history_stream", slow_stream)
     monkeypatch.setattr(
-        chat_router, "rewrite_followup", lambda question, history: question
+        chat_router,
+        "rewrite_followup",
+        lambda question, history, runtime=None: question,
     )
     conversation_id = client.post("/api/conversations", json={}).json()[
         "conversation_id"

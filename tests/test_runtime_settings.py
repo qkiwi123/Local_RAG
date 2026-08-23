@@ -146,6 +146,44 @@ def test_enabled_llm_rejects_snapshot_without_api_key(temp_dir):
         _manager(temp_dir, environment=environment)
 
 
+def test_enabled_llm_can_restart_with_dpapi_key_and_no_environment_key(
+    temp_dir,
+):
+    environment = _environment(DEEPSEEK_API_KEY="")
+
+    snapshot = _manager(
+        temp_dir,
+        environment=environment,
+        secret_value="dpapi-only-secret-2468",
+    ).snapshot()
+
+    assert snapshot.llm.enabled is True
+    assert snapshot.api_key_source == "runtime_secret"
+    assert snapshot.api_key.get_secret_value() == "dpapi-only-secret-2468"
+
+
+def test_clearing_only_key_while_llm_enabled_is_atomic(temp_dir):
+    environment = _environment(DEEPSEEK_API_KEY="")
+    manager = _manager(
+        temp_dir,
+        environment=environment,
+        secret_value="required-runtime-secret-1357",
+    )
+
+    with pytest.raises(RuntimeSettingsValidationError, match="API Key"):
+        manager.update_llm(
+            {},
+            expected_revision=0,
+            api_key_action="clear",
+        )
+
+    assert manager.snapshot().revision == 0
+    assert (
+        manager._secret_store.get_secret("llm_api_key")
+        == "required-runtime-secret-1357"
+    )
+
+
 def test_non_secret_override_persists_across_manager_restart(temp_dir):
     manager = _manager(temp_dir)
     updated = manager.update(
@@ -283,3 +321,87 @@ def test_snapshot_is_frozen_and_refusal_gate_cannot_be_enabled(temp_dir):
 
     assert manager.snapshot().retrieval.refusal_gate.available is False
     assert manager.snapshot().retrieval.refusal_gate.enabled is False
+
+
+def test_llm_update_replaces_and_clears_runtime_key_with_revision(temp_dir):
+    manager = _manager(temp_dir)
+
+    replaced, changed = manager.update_llm(
+        {"model": "runtime-model", "temperature": 0.1},
+        expected_revision=0,
+        api_key_action="replace",
+        api_key_value="runtime-secret-2468",
+    )
+
+    assert replaced.revision == 1
+    assert replaced.llm.model == "runtime-model"
+    assert replaced.api_key_source == "runtime_secret"
+    assert replaced.api_key.get_secret_value() == "runtime-secret-2468"
+    assert changed == [
+        "llm.model",
+        "llm.temperature",
+        "llm.api_key",
+    ]
+    assert "api_key" not in str(manager._store.load().payload)
+
+    cleared, changed = manager.update_llm(
+        {},
+        expected_revision=1,
+        api_key_action="clear",
+    )
+
+    assert cleared.revision == 2
+    assert cleared.api_key_source == "environment"
+    assert cleared.api_key.get_secret_value() == "environment-secret-9876"
+    assert changed == ["llm.api_key"]
+
+
+def test_stale_llm_update_cannot_change_winning_runtime_key(temp_dir):
+    first = _manager(temp_dir)
+    stale = _manager(temp_dir)
+    first.update_llm(
+        {},
+        expected_revision=0,
+        api_key_action="replace",
+        api_key_value="winning-secret-1111",
+    )
+
+    with pytest.raises(SettingsRevisionConflict):
+        stale.update_llm(
+            {},
+            expected_revision=0,
+            api_key_action="replace",
+            api_key_value="stale-secret-9999",
+        )
+
+    assert (
+        first._secret_store.get_secret("llm_api_key")
+        == "winning-secret-1111"
+    )
+
+
+def test_llm_update_restores_old_secret_when_sqlite_save_fails(
+    temp_dir,
+    monkeypatch,
+):
+    manager = _manager(temp_dir, secret_value="original-secret-1234")
+
+    def fail_save(*args, **kwargs):
+        raise RuntimeError("simulated sqlite failure")
+
+    monkeypatch.setattr(manager._store, "save", fail_save)
+
+    with pytest.raises(RuntimeError, match="simulated sqlite failure"):
+        manager.update_llm(
+            {"model": "never-published"},
+            expected_revision=0,
+            api_key_action="replace",
+            api_key_value="replacement-secret-5678",
+        )
+
+    assert manager.snapshot().revision == 0
+    assert manager.snapshot().llm.model == "deepseek-v4-flash"
+    assert (
+        manager._secret_store.get_secret("llm_api_key")
+        == "original-secret-1234"
+    )

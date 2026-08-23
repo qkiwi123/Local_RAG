@@ -6,7 +6,7 @@
 
 from __future__ import annotations
 
-from typing import Literal
+from typing import Annotated, Literal
 from urllib.parse import urlsplit
 
 from pydantic import (
@@ -141,7 +141,7 @@ class LLMSettingsView(_StrictFrozenModel):
 
 class SettingsRuntimeSummary(_StrictFrozenModel):
     access_scope: Literal["trusted_local_workspace"] = "trusted_local_workspace"
-    llm_activation: ActivationLevel = "pending_s3"
+    llm_activation: ActivationLevel = "next_request"
     retrieval_activation: ActivationLevel = "pending_s4"
     refusal_gate_activation: ActivationLevel = "unavailable"
 
@@ -154,6 +154,160 @@ class SettingsReadResponse(_StrictFrozenModel):
     runtime: SettingsRuntimeSummary
     field_sources: dict[str, FieldSource]
     field_effects: dict[str, ActivationLevel]
+
+
+class APIKeyReplace(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    action: Literal["replace"]
+    value: SecretStr
+
+    @field_validator("value")
+    @classmethod
+    def validate_value(cls, value: SecretStr) -> SecretStr:
+        clean = value.get_secret_value().strip()
+        if not clean:
+            raise ValueError("API Key 不能为空")
+        if len(clean) > 8192:
+            raise ValueError("API Key 长度不能超过 8192 个字符")
+        return SecretStr(clean)
+
+
+class APIKeyClear(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    action: Literal["clear"]
+
+
+APIKeyUpdate = Annotated[
+    APIKeyReplace | APIKeyClear,
+    Field(discriminator="action"),
+]
+
+
+class LLMSettingsPatch(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool | None = None
+    provider: ProviderName | None = None
+    base_url: str | None = None
+    model: str | None = None
+    temperature: float | None = Field(default=None, ge=0, le=2)
+    max_tokens: int | None = Field(default=None, ge=1, le=32768)
+    timeout_seconds: float | None = Field(default=None, ge=1, le=600)
+    api_key_update: APIKeyUpdate | None = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def reject_null_setting_values(cls, value):
+        if isinstance(value, dict):
+            null_fields = sorted(
+                key
+                for key, item in value.items()
+                if item is None and key != "api_key_update"
+            )
+            if null_fields:
+                raise ValueError(
+                    "LLM 设置不接受 null: " + ", ".join(null_fields)
+                )
+        return value
+
+    @field_validator("base_url")
+    @classmethod
+    def validate_base_url(cls, value: str | None) -> str | None:
+        return _validate_http_url(value) if value is not None else None
+
+    @field_validator("model")
+    @classmethod
+    def normalize_model(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        clean = value.strip()
+        if not clean or len(clean) > 200:
+            raise ValueError("模型名长度必须为 1 到 200 个字符")
+        return clean
+
+    def runtime_payload(self) -> dict:
+        return self.model_dump(
+            exclude={"api_key_update"},
+            exclude_none=True,
+            exclude_unset=True,
+        )
+
+
+class SettingsPatchRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    expected_revision: int = Field(ge=0)
+    llm: LLMSettingsPatch
+
+
+class SettingsPatchResponse(_StrictFrozenModel):
+    revision: int = Field(ge=0)
+    settings: SettingsReadResponse
+    changed_fields: list[str]
+    effects: list[str]
+    warnings: list[str]
+
+
+class LLMConnectionDraft(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    provider: ProviderName | None = None
+    base_url: str | None = None
+    model: str | None = None
+    api_key: SecretStr | None = None
+    timeout_seconds: float | None = Field(default=None, ge=1, le=600)
+
+    @field_validator("base_url")
+    @classmethod
+    def validate_base_url(cls, value: str | None) -> str | None:
+        return _validate_http_url(value) if value is not None else None
+
+    @field_validator("model")
+    @classmethod
+    def normalize_model(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        clean = value.strip()
+        if not clean or len(clean) > 200:
+            raise ValueError("模型名长度必须为 1 到 200 个字符")
+        return clean
+
+    @field_validator("api_key")
+    @classmethod
+    def validate_api_key(cls, value: SecretStr | None) -> SecretStr | None:
+        if value is None:
+            return None
+        clean = value.get_secret_value().strip()
+        if not clean:
+            raise ValueError("API Key 不能为空")
+        if len(clean) > 8192:
+            raise ValueError("API Key 长度不能超过 8192 个字符")
+        return SecretStr(clean)
+
+
+class LLMConnectionTestRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    llm: LLMConnectionDraft = Field(default_factory=LLMConnectionDraft)
+
+
+class LLMConnectionTestResponse(_StrictFrozenModel):
+    success: bool
+    latency_ms: float = Field(ge=0)
+    provider: ProviderName
+    model: str
+    endpoint: str
+    error_code: Literal[
+        "authentication_failed",
+        "permission_denied",
+        "model_not_found",
+        "timeout",
+        "network_error",
+        "upstream_error",
+    ] | None = None
+    message: str
 
 
 class ModelRuntimeStatus(_StrictFrozenModel):

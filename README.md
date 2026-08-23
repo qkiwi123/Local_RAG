@@ -41,13 +41,15 @@ PDF、DOCX、TXT、Markdown 和 PPTX，完成解析、切分、向量检索、Cr
 
 ### 设置接口的当前安全边界
 
-后端已提供只读的 `GET /api/settings` 和
-`GET /api/settings/runtime-status`，用于查看脱敏后的有效配置、字段来源、配置版本、
-模型设备与索引状态。读取接口不会返回 API Key 明文，也不会为查看状态而冷加载模型。
+后端已提供 `GET /api/settings`、`GET /api/settings/runtime-status`、
+`PATCH /api/settings` 和 `POST /api/settings/test-llm`。当前可以读取脱敏配置与运行状态、
+保存问答 LLM 设置和 DPAPI Key，并用未保存草稿执行一次最小连接测试。读取接口不会返回
+API Key 明文，也不会为查看状态而冷加载模型；敏感字段的 422 校验错误同样不会回显输入。
 
 当前项目没有账号、角色或权限体系，设置接口只适用于可信本地工作空间。不要把后端直接
 暴露到不受信任的网络；如需远程或多人使用，应先在反向代理或应用层增加身份认证和访问
-控制。S2 只提供读取能力，保存配置、连接测试和 React 设置页尚未实现。
+控制。连接测试会真实请求所填模型服务，可能产生少量费用，只应由用户显式触发。
+Retrieval 参数保存、恢复默认和 React 设置页尚未实现。
 
 ## 当前架构
 
@@ -137,9 +139,12 @@ CUDA PyTorch wheel 应从官方索引安装。当前已验证组合为
 `torch 2.13.0+cu130`、CUDA runtime 13.0、Python 3.14；不要在原 `.venv`
 中直接替换 PyTorch，以免同时破坏 CPU 回退环境。
 
-编辑 `.env`，至少设置：
+编辑 `.env`。如果启用问答生成，需要环境 Key 或已通过设置 API 保存的用户级 DPAPI
+Key；如果只使用检索链路，可设 `LLM_ENABLED=false` 并留空 Key。首次启动尚无 DPAPI Key
+时，可以先使用环境 Key，或以 retrieval-only 模式启动后再保存 Key：
 
 ```dotenv
+LLM_ENABLED=true
 DEEPSEEK_API_KEY=your_key
 DEEPSEEK_BASE_URL=https://api.deepseek.com
 DEEPSEEK_MODEL=deepseek-v4-flash

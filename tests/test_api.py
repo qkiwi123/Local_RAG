@@ -64,7 +64,9 @@ def client(monkeypatch, isolated_data_dir):
     monkeypatch.setattr(
         chat_router,
         "ask",
-        lambda question, context: "Employees receive 5 days of annual leave.【来源1】",
+        lambda question, context, runtime=None: (
+            "Employees receive 5 days of annual leave.【来源1】"
+        ),
     )
 
     with TestClient(app) as test_client:
@@ -351,7 +353,7 @@ class TestPersistentConversationAPI:
         monkeypatch.setattr(
             chat_router,
             "ask_with_history",
-            lambda question, standalone, context, history: (
+            lambda question, standalone, context, history, runtime=None: (
                 f"回答 {standalone}【来源1】"
             ),
         )
@@ -359,7 +361,7 @@ class TestPersistentConversationAPI:
         monkeypatch.setattr(
             chat_router,
             "rewrite_followup",
-            lambda question, history: rewritten,
+            lambda question, history, runtime=None: rewritten,
         )
 
         conversation = client.post("/api/conversations", json={}).json()
@@ -493,7 +495,9 @@ class TestPersistentConversationAPI:
         monkeypatch.setattr(
             chat_router,
             "ask_with_history",
-            lambda question, standalone, context, history: "回答【来源1】",
+            lambda question, standalone, context, history, runtime=None: (
+                "回答【来源1】"
+            ),
         )
 
         conversation_id = client.post("/api/conversations", json={}).json()[

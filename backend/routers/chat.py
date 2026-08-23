@@ -11,7 +11,7 @@ import json
 import logging
 from time import perf_counter
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from backend.models.schemas import ChatRequest, ChatResponse
 from backend.config import settings
@@ -25,8 +25,10 @@ from backend.services.llm import (
     ask_stream,
     ask_with_history,
     ask_with_history_stream,
+    build_retrieval_only_answer,
     rewrite_followup,
 )
+from backend.models.settings_schemas import EffectiveSettingsSnapshot
 from backend.services.conversation_context import bounded_history, format_history
 from backend.services.conversation_store import (
     ConversationError,
@@ -45,6 +47,13 @@ from backend.utils.citation import extract_citations
 
 router = APIRouter(tags=["chat"])
 logger = logging.getLogger(__name__)
+
+
+def _runtime_snapshot(request: Request) -> EffectiveSettingsSnapshot:
+    manager = getattr(request.app.state, "runtime_settings_manager", None)
+    if manager is None:
+        raise HTTPException(status_code=503, detail="运行时设置尚未初始化")
+    return manager.snapshot()
 
 
 def _normalize_tag_filter(tags: list[str]) -> list[str]:
@@ -74,7 +83,7 @@ def save_persistent_trace(response_fields: dict, trace) -> None:
 
 
 @router.post("/chat", response_model=ChatResponse)
-async def chat(request: ChatRequest):
+async def chat(request: ChatRequest, http_request: Request):
     """
     问答接口：接收自然语言问题，返回答案 + 引用来源。
 
@@ -86,6 +95,7 @@ async def chat(request: ChatRequest):
     5. 返回 ChatResponse（answer + citations）
     """
     total_started = perf_counter()
+    runtime = _runtime_snapshot(http_request)
     question = request.question.strip()
 
     if not question:
@@ -124,10 +134,14 @@ async def chat(request: ChatRequest):
             return ChatResponse(**replay, trace=persisted_trace)
         user_message_id = started["user_message_id"]
         history_rows = complete_history(request.conversation_id)
-        if history_rows:
+        if history_rows and runtime.llm.enabled:
             history_text = format_history(bounded_history(history_rows))
             try:
-                standalone_question = rewrite_followup(question, history_text)
+                standalone_question = rewrite_followup(
+                    question,
+                    history_text,
+                    runtime,
+                )
             except Exception as error:
                 logger.warning(
                     "Follow-up rewrite failed: conversation_id=%s request_id=%s error=%s",
@@ -199,26 +213,31 @@ async def chat(request: ChatRequest):
     context_ms = (perf_counter() - context_started) * 1000
 
     # 3. 调用 LLM 生成答案
-    llm_started = perf_counter()
-    try:
-        if persistent:
-            history_text = format_history(bounded_history(history_rows))
-            answer = ask_with_history(
-                question,
-                standalone_question,
-                context,
-                history_text,
-            )
-        else:
-            answer = ask(question, context)
-    except Exception as e:
-        if persistent:
-            fail_chat(request.request_id, "llm_error")
-        raise HTTPException(
-            status_code=502,
-            detail=f"LLM 调用失败: {str(e)}"
-        )
-    llm_ms = (perf_counter() - llm_started) * 1000
+    if not runtime.llm.enabled:
+        answer = build_retrieval_only_answer(len(retrieval_results))
+        llm_ms = 0.0
+    else:
+        llm_started = perf_counter()
+        try:
+            if persistent:
+                history_text = format_history(bounded_history(history_rows))
+                answer = ask_with_history(
+                    question,
+                    standalone_question,
+                    context,
+                    history_text,
+                    runtime,
+                )
+            else:
+                answer = ask(question, context, runtime)
+        except Exception as error:
+            if persistent:
+                fail_chat(request.request_id, "llm_error")
+            raise HTTPException(
+                status_code=502,
+                detail=f"LLM 调用失败: {type(error).__name__}",
+            ) from error
+        llm_ms = (perf_counter() - llm_started) * 1000
 
     # 4. 提取引用来源
     citations = extract_citations(
@@ -269,6 +288,7 @@ async def _stream_chat_events(
     standalone_question: str,
     tag_filter: list[str],
     allowed_document_ids,
+    runtime: EffectiveSettingsSnapshot | None = None,
 ) -> "AsyncGenerator[str, None]":
     """流式问答事件生成器（NDJSON 行）。
 
@@ -368,7 +388,9 @@ async def _stream_chat_events(
             return
 
         context = format_retrieval_context(retrieval_results)
-        if persistent:
+        if runtime is not None and not runtime.llm.enabled:
+            pieces = [build_retrieval_only_answer(len(retrieval_results))]
+        elif persistent:
             history_rows = complete_history(request.conversation_id)
             history_text = format_history(bounded_history(history_rows))
             pieces = ask_with_history_stream(
@@ -376,9 +398,10 @@ async def _stream_chat_events(
                 standalone_question,
                 context,
                 history_text,
+                runtime,
             )
         else:
-            pieces = ask_stream(request.question.strip(), context)
+            pieces = ask_stream(request.question.strip(), context, runtime)
 
         collected: list[str] = []
         for piece in pieces:
@@ -443,13 +466,14 @@ async def _stream_chat_events(
 
 
 @router.post("/chat/stream")
-async def chat_stream(request: ChatRequest):
+async def chat_stream(request: ChatRequest, http_request: Request):
     """流式问答接口：NDJSON 事件流（meta → delta* → citations → done）。
 
     协议错误（会话不存在/冲突、非法标签、空问题）仍返回常规 HTTP 状态码；
     检索/生成期错误以 `error` 事件返回。中断采用方案甲：按失败处理。
     """
     question = request.question.strip()
+    runtime = _runtime_snapshot(http_request)
     if not question:
         raise HTTPException(status_code=422, detail="问题不能为空")
     if len(question) > settings.CONVERSATION_MESSAGE_MAX_CHARS:
@@ -480,10 +504,14 @@ async def chat_stream(request: ChatRequest):
             ) from error
         if "replay" not in started:
             history_rows = complete_history(request.conversation_id)
-            if history_rows:
+            if history_rows and runtime.llm.enabled:
                 history_text = format_history(bounded_history(history_rows))
                 try:
-                    standalone_question = rewrite_followup(question, history_text)
+                    standalone_question = rewrite_followup(
+                        question,
+                        history_text,
+                        runtime,
+                    )
                 except Exception as error:
                     logger.warning(
                         "Follow-up rewrite failed: conversation_id=%s request_id=%s error=%s",
@@ -500,6 +528,7 @@ async def chat_stream(request: ChatRequest):
             standalone_question,
             tag_filter,
             allowed_document_ids,
+            runtime,
         ),
         media_type="application/x-ndjson",
         headers={"Cache-Control": "no-store"},

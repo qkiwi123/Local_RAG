@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -84,7 +85,7 @@ def test_get_settings_returns_effective_values_sources_and_masked_key():
     }
     assert "test-key-not-used" not in response.text
     assert payload["field_sources"]["llm.model"] == "environment"
-    assert payload["field_effects"]["llm.model"] == "pending_s3"
+    assert payload["field_effects"]["llm.model"] == "next_request"
     assert payload["field_effects"]["retrieval.final_top_k"] == "pending_s4"
     assert (
         payload["field_effects"]["retrieval.refusal_gate.enabled"]
@@ -186,15 +187,330 @@ def test_runtime_status_verifies_already_cached_model_devices(
     assert payload["reranker"]["verified"] is True
 
 
-def test_s2_routes_are_read_only():
+def test_s3_exposes_only_planned_settings_mutations():
     mutating_methods = {"POST", "PUT", "PATCH", "DELETE"}
     mutating_settings_routes = [
-        (route.path, sorted(route.methods & mutating_methods))
-        for route in app.routes
-        if getattr(route, "path", "").startswith("/api/settings")
-        and getattr(route, "methods", set()) & mutating_methods
+        (
+            path,
+            sorted(
+                method.upper()
+                for method in operations
+                if method.upper() in mutating_methods
+            ),
+        )
+        for path, operations in app.openapi()["paths"].items()
+        if path.startswith("/api/settings")
+        and any(method.upper() in mutating_methods for method in operations)
     ]
 
-    assert mutating_settings_routes == []
+    assert mutating_settings_routes == [
+        ("/api/settings", ["PATCH"]),
+        ("/api/settings/test-llm", ["POST"]),
+    ]
     with TestClient(app) as client:
-        assert client.patch("/api/settings", json={}).status_code == 405
+        assert client.post("/api/settings/reset", json={}).status_code in {
+            404,
+            405,
+        }
+
+
+def test_patch_llm_settings_replaces_key_without_leaking_it(
+    tmp_path,
+):
+    manager = _isolated_manager(tmp_path)
+    secret = "new-runtime-key-2468"
+
+    with TestClient(app) as client:
+        original = app.state.runtime_settings_manager
+        app.state.runtime_settings_manager = manager
+        try:
+            response = client.patch(
+                "/api/settings",
+                json={
+                    "expected_revision": 0,
+                    "llm": {
+                        "provider": "openai_compatible",
+                        "base_url": "https://gateway.example.com/v1",
+                        "model": "new-model",
+                        "temperature": 0.2,
+                        "max_tokens": 512,
+                        "timeout_seconds": 15,
+                        "api_key_update": {
+                            "action": "replace",
+                            "value": secret,
+                        },
+                    },
+                },
+            )
+        finally:
+            app.state.runtime_settings_manager = original
+
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    assert payload["revision"] == 1
+    assert payload["settings"]["llm"]["model"] == "new-model"
+    assert payload["settings"]["llm"]["api_key"] == {
+        "configured": True,
+        "source": "runtime",
+        "masked_suffix": "2468",
+    }
+    assert payload["effects"] == [
+        "llm_client_cache_cleared",
+        "next_request",
+    ]
+    assert "llm.api_key" in payload["changed_fields"]
+    assert secret not in response.text
+    assert manager._secret_store.get_secret("llm_api_key") == secret
+    assert secret not in str(manager._store.load().payload)
+
+
+def test_patch_llm_settings_rejects_stale_revision_without_key_change(
+    tmp_path,
+):
+    manager = _isolated_manager(tmp_path, runtime_secret="winner-key-1111")
+    manager.update_llm(
+        {"model": "winner"},
+        expected_revision=0,
+    )
+
+    with TestClient(app) as client:
+        original = app.state.runtime_settings_manager
+        app.state.runtime_settings_manager = manager
+        try:
+            response = client.patch(
+                "/api/settings",
+                json={
+                    "expected_revision": 0,
+                    "llm": {
+                        "api_key_update": {
+                            "action": "replace",
+                            "value": "loser-key-9999",
+                        }
+                    },
+                },
+            )
+        finally:
+            app.state.runtime_settings_manager = original
+
+    assert response.status_code == 409
+    assert response.json()["detail"]["code"] == "settings_revision_conflict"
+    assert manager._secret_store.get_secret("llm_api_key") == "winner-key-1111"
+    assert manager.snapshot().llm.model == "winner"
+
+
+def test_invalid_api_key_validation_response_does_not_echo_value():
+    oversized_secret = "must-not-leak-" * 700
+
+    with TestClient(app) as client:
+        response = client.patch(
+            "/api/settings",
+            json={
+                "expected_revision": 0,
+                "llm": {
+                    "api_key_update": {
+                        "action": "replace",
+                        "value": oversized_secret,
+                    }
+                },
+            },
+        )
+
+    assert response.status_code == 422
+    assert oversized_secret not in response.text
+    assert "must-not-leak" not in response.text
+
+
+def test_connection_test_uses_unsaved_draft_and_keeps_revision(
+    tmp_path,
+    monkeypatch,
+):
+    from backend.models.settings_schemas import LLMConnectionTestResponse
+    from backend.routers import settings as settings_router
+
+    manager = _isolated_manager(tmp_path)
+    captured = {}
+    draft_key = "draft-only-secret-7531"
+
+    def fake_probe(config):
+        captured["config"] = config
+        return LLMConnectionTestResponse(
+            success=True,
+            latency_ms=12.5,
+            provider=config.provider,
+            model=config.model,
+            endpoint="https://draft.example.com",
+            message="连接成功",
+        )
+
+    monkeypatch.setattr(settings_router, "test_llm_connection", fake_probe)
+    with TestClient(app) as client:
+        original = app.state.runtime_settings_manager
+        app.state.runtime_settings_manager = manager
+        try:
+            response = client.post(
+                "/api/settings/test-llm",
+                json={
+                    "llm": {
+                        "provider": "openai_compatible",
+                        "base_url": "https://draft.example.com/v1",
+                        "model": "draft-model",
+                        "api_key": draft_key,
+                        "timeout_seconds": 9,
+                    }
+                },
+            )
+        finally:
+            app.state.runtime_settings_manager = original
+
+    assert response.status_code == 200
+    assert response.json()["success"] is True
+    assert captured["config"].model == "draft-model"
+    assert captured["config"].timeout_seconds == 9
+    assert captured["config"].api_key.get_secret_value() == draft_key
+    assert draft_key not in response.text
+    assert manager.snapshot().revision == 0
+    assert manager.snapshot().llm.model == settings.DEEPSEEK_MODEL
+
+
+def _retrieval_with_trace():
+    from backend.models.schemas import (
+        RetrievalResponse,
+        RetrievalTrace,
+        RetrievalTraceCandidate,
+        RetrievalTraceChunk,
+        RetrievalTraceStage,
+    )
+    from backend.services.parsers import PARSER_VERSION
+
+    row = {
+        "chunk_id": "unit-1_s0_e35",
+        "content": "员工每年享有 5 天带薪年假。",
+        "metadata": {
+            "document_id": "doc-1",
+            "document_name": "handbook.pdf",
+            "unit_id": "unit-1",
+            "unit_index": 0,
+            "locator_kind": "page",
+            "location_label": "第 1 页",
+            "page_number": 1,
+            "heading_path": "[]",
+            "chunk_index": 0,
+            "parser_version": PARSER_VERSION,
+            "content_type": "paragraph",
+            "start_char": 0,
+            "end_char": 35,
+        },
+        "distance": 0.2,
+    }
+    trace = RetrievalTrace(
+        retrieval_mode="dense",
+        reranker_enabled=False,
+        chunks={
+            row["chunk_id"]: RetrievalTraceChunk(
+                chunk_id=row["chunk_id"],
+                document_name="handbook.pdf",
+                page_number=1,
+                content=row["content"],
+            )
+        },
+        stages=[
+            RetrievalTraceStage(
+                name="dense",
+                candidates=[
+                    RetrievalTraceCandidate(
+                        chunk_id=row["chunk_id"],
+                        rank=1,
+                        distance=0.2,
+                        selected=True,
+                    )
+                ],
+            )
+        ],
+        selected_chunk_ids=[row["chunk_id"]],
+    )
+    return RetrievalResponse(results=[row], trace=trace)
+
+
+def test_retrieval_only_sync_stream_and_followup_make_zero_llm_calls(
+    tmp_path,
+    monkeypatch,
+):
+    from backend.routers import chat as chat_router
+
+    manager = _isolated_manager(tmp_path)
+    manager.update_llm({"enabled": False}, expected_revision=0)
+
+    def forbidden(*args, **kwargs):
+        raise AssertionError("retrieval-only 模式不得调用 LLM")
+
+    monkeypatch.setattr(
+        chat_router,
+        "retrieve_with_trace",
+        lambda *args, **kwargs: _retrieval_with_trace(),
+    )
+    for name in (
+        "ask",
+        "ask_stream",
+        "ask_with_history",
+        "ask_with_history_stream",
+        "rewrite_followup",
+    ):
+        monkeypatch.setattr(chat_router, name, forbidden)
+
+    with TestClient(app) as client:
+        original = app.state.runtime_settings_manager
+        app.state.runtime_settings_manager = manager
+        try:
+            conversation_id = client.post(
+                "/api/conversations",
+                json={},
+            ).json()["conversation_id"]
+            first = client.post(
+                "/api/chat",
+                json={
+                    "question": "年假几天？",
+                    "conversation_id": conversation_id,
+                    "request_id": "retrieval-only-1",
+                    "expected_last_message_id": None,
+                },
+            )
+            second = client.post(
+                "/api/chat",
+                json={
+                    "question": "还有呢？",
+                    "conversation_id": conversation_id,
+                    "request_id": "retrieval-only-2",
+                    "expected_last_message_id": first.json()[
+                        "assistant_message_id"
+                    ],
+                },
+            )
+            streamed = client.post(
+                "/api/chat/stream",
+                json={"question": "年假几天？"},
+            )
+        finally:
+            app.state.runtime_settings_manager = original
+
+    for response in (first, second):
+        assert response.status_code == 200, response.text
+        payload = response.json()
+        assert "生成模型已关闭" in payload["answer"]
+        assert payload["citations"][0]["document_name"] == "handbook.pdf"
+        assert payload["trace"]["timings_ms"]["llm_generation"] == 0
+    assert second.json()["standalone_question"] == "还有呢？"
+
+    events = [
+        json.loads(line)
+        for line in streamed.text.splitlines()
+        if line.strip()
+    ]
+    assert streamed.status_code == 200
+    assert [event["event"] for event in events] == [
+        "meta",
+        "delta",
+        "citations",
+        "done",
+    ]
+    assert "生成模型已关闭" in events[1]["text"]
+    assert events[2]["citations"][0]["document_name"] == "handbook.pdf"

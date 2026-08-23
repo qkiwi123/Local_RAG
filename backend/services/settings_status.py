@@ -74,12 +74,12 @@ def build_settings_response(
     snapshot: EffectiveSettingsSnapshot,
 ) -> SettingsReadResponse:
     field_effects = {
-        **{f"llm.{name}": "pending_s3" for name in _LLM_FIELDS},
+        **{f"llm.{name}": "next_request" for name in _LLM_FIELDS},
         **{
             f"retrieval.{name}": "pending_s4"
             for name in _RETRIEVAL_FIELDS
         },
-        "llm.api_key": "pending_s3",
+        "llm.api_key": "next_request",
         "retrieval.refusal_gate.enabled": "unavailable",
     }
     return SettingsReadResponse(

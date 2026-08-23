@@ -190,12 +190,8 @@ class Settings:
 
     def _validate(self):
         """校验必须配置的项是否已设置，缺失时抛出明确错误。"""
-        if not self.DEEPSEEK_API_KEY.strip():
-            raise ValueError(
-                "缺少必填配置: DEEPSEEK_API_KEY\n"
-                "请在项目根目录的 .env 文件中设置 DEEPSEEK_API_KEY=你的API密钥\n"
-                "（可参考 .env.example 模板）"
-            )
+        # S3 起 API Key 可以来自用户级 DPAPI 文件；最终的“LLM 启用时必须
+        # 有 Key”约束由 RuntimeSettingsManager 在合并环境与密钥覆盖后校验。
         parsed_base_url = urlsplit(self.DEEPSEEK_BASE_URL)
         if (
             parsed_base_url.scheme not in {"http", "https"}

@@ -13,8 +13,11 @@ import mimetypes
 from datetime import datetime, timezone
 from pathlib import Path
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
+from fastapi.exception_handlers import request_validation_exception_handler
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
@@ -37,6 +40,47 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+def _is_sensitive_validation_location(location) -> bool:
+    exact_names = {
+        "api_key",
+        "api_key_update",
+        "password",
+        "secret",
+        "authorization",
+        "access_token",
+        "refresh_token",
+    }
+    return any(
+        str(part).strip().lower().replace("-", "_") in exact_names
+        for part in location
+    )
+
+
+@app.exception_handler(RequestValidationError)
+async def sanitized_validation_error(
+    request: Request,
+    error: RequestValidationError,
+):
+    """敏感输入校验失败时不让 FastAPI 的默认 422 回显原值。"""
+    errors = error.errors()
+    if not any(
+        _is_sensitive_validation_location(item.get("loc", ()))
+        for item in errors
+    ):
+        return await request_validation_exception_handler(request, error)
+    sanitized = []
+    for item in errors:
+        clean = {
+            key: value
+            for key, value in item.items()
+            if key not in {"input", "ctx"}
+        }
+        if _is_sensitive_validation_location(item.get("loc", ())):
+            clean["input"] = "**********"
+        sanitized.append(clean)
+    return JSONResponse(status_code=422, content={"detail": sanitized})
 
 # 注册路由
 from backend.routers import (

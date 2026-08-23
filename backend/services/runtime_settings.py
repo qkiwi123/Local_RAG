@@ -18,7 +18,11 @@ from backend.models.settings_schemas import (
     RuntimeSettingsOverrides,
 )
 from backend.services.secret_store import SecretStore
-from backend.services.settings_store import SettingsStore, StoredRuntimeSettings
+from backend.services.settings_store import (
+    SettingsRevisionConflict,
+    SettingsStore,
+    StoredRuntimeSettings,
+)
 
 
 DYNAMIC_FIELD_WHITELIST = frozenset(
@@ -48,6 +52,14 @@ DYNAMIC_FIELD_WHITELIST = frozenset(
 
 class RuntimeSettingsValidationError(ValueError):
     """设置覆盖或合并后的字段关系不合法。"""
+
+
+class RuntimeSettingsCommitError(RuntimeError):
+    """跨 SQLite 与密钥文件的设置提交或回滚失败。"""
+
+
+_COMMIT_LOCK = RLock()
+_RUNTIME_KEY_UNSET = object()
 
 
 def _contains_sensitive_override(value) -> bool:
@@ -210,13 +222,19 @@ class RuntimeSettingsManager:
     def _build_snapshot(
         self,
         stored: StoredRuntimeSettings,
+        *,
+        runtime_key_override: object | str | None = _RUNTIME_KEY_UNSET,
     ) -> EffectiveSettingsSnapshot:
         environment_payload = _environment_payload(self._environment)
         overrides = _normalize_overrides(stored.payload)
         effective = _merge_nested(environment_payload, overrides)
         llm, retrieval = _validate_effective(effective)
 
-        runtime_key = self._secret_store.get_secret("llm_api_key")
+        runtime_key = (
+            self._secret_store.get_secret("llm_api_key")
+            if runtime_key_override is _RUNTIME_KEY_UNSET
+            else runtime_key_override
+        )
         environment_key = str(
             getattr(self._environment, "DEEPSEEK_API_KEY", "")
         ).strip()
@@ -279,7 +297,7 @@ class RuntimeSettingsManager:
         expected_revision: int,
     ) -> EffectiveSettingsSnapshot:
         normalized_patch = _normalize_overrides(patch)
-        with self._lock:
+        with _COMMIT_LOCK, self._lock:
             current = self._store.load()
             current_overrides = _normalize_overrides(current.payload)
             merged_overrides = _merge_nested(current_overrides, normalized_patch)
@@ -304,3 +322,102 @@ class RuntimeSettingsManager:
             )
             self._snapshot = candidate
             return candidate
+
+    def update_llm(
+        self,
+        llm_patch: Mapping,
+        *,
+        expected_revision: int,
+        api_key_action: str = "keep",
+        api_key_value: str | None = None,
+    ) -> tuple[EffectiveSettingsSnapshot, list[str]]:
+        """原子发布 LLM 非敏感设置与 DPAPI 密钥覆盖。
+
+        同一进程内的 manager 共用提交锁，避免 stale manager 在 SQLite
+        revision 冲突前改写密钥文件。密钥先原子写文件，再提交 SQLite；
+        SQLite 失败时恢复旧密钥。跨多个后端进程仍不在当前部署范围内。
+        """
+        if api_key_action not in {"keep", "replace", "clear"}:
+            raise RuntimeSettingsValidationError("不支持的 API Key 操作")
+        if api_key_action == "replace":
+            if not isinstance(api_key_value, str) or not api_key_value.strip():
+                raise RuntimeSettingsValidationError("API Key 不能为空")
+            clean_key = api_key_value.strip()
+            if len(clean_key) > 8192:
+                raise RuntimeSettingsValidationError(
+                    "API Key 长度不能超过 8192 个字符"
+                )
+        else:
+            clean_key = None
+
+        normalized_patch = _normalize_overrides(
+            {"llm": dict(llm_patch)} if llm_patch else {}
+        )
+        with _COMMIT_LOCK, self._lock:
+            current = self._store.load()
+            if current.revision != expected_revision:
+                raise SettingsRevisionConflict(
+                    expected_revision=expected_revision,
+                    actual_revision=current.revision,
+                )
+            prior_runtime_key = self._secret_store.get_secret("llm_api_key")
+            future_runtime_key = (
+                clean_key
+                if api_key_action == "replace"
+                else None
+                if api_key_action == "clear"
+                else prior_runtime_key
+            )
+            secret_changed = future_runtime_key != prior_runtime_key
+            changed_keys = sorted(_flatten_leaf_paths(normalized_patch))
+            if secret_changed:
+                changed_keys.append("llm.api_key")
+            if not changed_keys:
+                return self._snapshot, []
+
+            current_overrides = _normalize_overrides(current.payload)
+            merged_overrides = _merge_nested(
+                current_overrides,
+                normalized_patch,
+            )
+            prepared = self._build_snapshot(
+                StoredRuntimeSettings(
+                    revision=current.revision + 1,
+                    payload=merged_overrides,
+                    updated_at=current.updated_at,
+                ),
+                runtime_key_override=future_runtime_key,
+            )
+
+            if secret_changed:
+                self._write_runtime_key(future_runtime_key)
+            try:
+                saved = self._store.save(
+                    merged_overrides,
+                    expected_revision=expected_revision,
+                    changed_keys=changed_keys,
+                )
+            except Exception as error:
+                if secret_changed:
+                    try:
+                        self._write_runtime_key(prior_runtime_key)
+                    except Exception:
+                        raise RuntimeSettingsCommitError(
+                            "设置保存失败，且运行时密钥无法恢复"
+                        ) from None
+                raise
+
+            candidate = prepared.model_copy(
+                update={
+                    "revision": saved.revision,
+                    "updated_at": saved.updated_at,
+                }
+            )
+            self._snapshot = candidate
+            return candidate, changed_keys
+
+    def _write_runtime_key(self, value: str | None) -> None:
+        if value is None:
+            self._secret_store.delete_secret("llm_api_key")
+        else:
+            self._secret_store.set_secret("llm_api_key", value)
