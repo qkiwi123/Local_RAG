@@ -205,13 +205,9 @@ def test_s4_exposes_only_planned_settings_mutations():
 
     assert mutating_settings_routes == [
         ("/api/settings", ["PATCH"]),
+        ("/api/settings/reset", ["POST"]),
         ("/api/settings/test-llm", ["POST"]),
     ]
-    with TestClient(app) as client:
-        assert client.post("/api/settings/reset", json={}).status_code in {
-            404,
-            405,
-        }
 
 
 def test_patch_llm_settings_replaces_key_without_leaking_it(
@@ -377,6 +373,46 @@ def test_patch_retrieval_cross_field_validation_is_atomic(tmp_path):
     assert manager.snapshot().revision == 0
     assert manager.snapshot().llm.model == settings.DEEPSEEK_MODEL
     assert manager._store.load().revision == 0
+
+
+def test_reset_settings_endpoint_restores_all_runtime_overrides(tmp_path):
+    manager = _isolated_manager(tmp_path, runtime_secret="runtime-key-2468")
+    manager.update_settings(
+        {
+            "llm": {"model": "runtime-model"},
+            "retrieval": {
+                "final_top_k": 6,
+                "dense_candidate_k": 18,
+                "bm25_top_k": 18,
+                "reranker_candidate_k": 18,
+            },
+        },
+        expected_revision=0,
+    )
+
+    with TestClient(app) as client:
+        original = app.state.runtime_settings_manager
+        app.state.runtime_settings_manager = manager
+        try:
+            response = client.post(
+                "/api/settings/reset",
+                json={"expected_revision": 1, "section": "all"},
+            )
+        finally:
+            app.state.runtime_settings_manager = original
+
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    assert payload["revision"] == 2
+    assert payload["settings"]["llm"]["model"] == settings.DEEPSEEK_MODEL
+    assert (
+        payload["settings"]["retrieval"]["final_top_k"]
+        == settings.RETRIEVAL_TOP_K
+    )
+    assert payload["settings"]["llm"]["api_key"]["source"] == "environment"
+    assert payload["effects"] == ["llm_client_cache_cleared", "next_request"]
+    assert payload["warnings"] == ["已恢复使用环境变量 API Key"]
+    assert manager._secret_store.get_secret("llm_api_key") is None
 
 
 def test_invalid_api_key_validation_response_does_not_echo_value():

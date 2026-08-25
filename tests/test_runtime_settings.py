@@ -209,6 +209,68 @@ def test_non_secret_override_persists_across_manager_restart(temp_dir):
     assert restarted.field_sources["retrieval.bm25_k1"] == "environment"
 
 
+def test_reset_settings_restores_sections_and_runtime_key_atomically(temp_dir):
+    manager = _manager(temp_dir, secret_value="runtime-secret-2468")
+    manager.update_settings(
+        {
+            "llm": {"model": "runtime-model"},
+            "retrieval": {
+                "final_top_k": 8,
+                "dense_candidate_k": 20,
+                "bm25_top_k": 20,
+                "reranker_candidate_k": 20,
+                "max_chunks_per_document": 4,
+            },
+        },
+        expected_revision=0,
+    )
+
+    retrieval_reset, retrieval_changes = manager.reset_settings(
+        "retrieval",
+        expected_revision=1,
+    )
+
+    assert retrieval_reset.revision == 2
+    assert retrieval_reset.llm.model == "runtime-model"
+    assert retrieval_reset.retrieval.final_top_k == 5
+    assert retrieval_reset.api_key_source == "runtime_secret"
+    assert "retrieval.final_top_k" in retrieval_changes
+
+    llm_reset, llm_changes = manager.reset_settings(
+        "llm",
+        expected_revision=2,
+    )
+
+    assert llm_reset.revision == 3
+    assert llm_reset.llm.model == "deepseek-v4-flash"
+    assert llm_reset.api_key_source == "environment"
+    assert manager._secret_store.get_secret("llm_api_key") is None
+    assert "llm.model" in llm_changes
+    assert "llm.api_key" in llm_changes
+
+
+def test_reset_llm_rejects_missing_deployment_key_without_changes(temp_dir):
+    manager = _manager(
+        temp_dir,
+        environment=_environment(DEEPSEEK_API_KEY=""),
+        secret_value="required-runtime-secret-1357",
+    )
+    manager.update_settings(
+        {"llm": {"model": "runtime-model"}},
+        expected_revision=0,
+    )
+
+    with pytest.raises(RuntimeSettingsValidationError, match="API Key"):
+        manager.reset_settings("llm", expected_revision=1)
+
+    assert manager.snapshot().revision == 1
+    assert manager.snapshot().llm.model == "runtime-model"
+    assert (
+        manager._secret_store.get_secret("llm_api_key")
+        == "required-runtime-secret-1357"
+    )
+
+
 @pytest.mark.parametrize(
     "patch",
     [

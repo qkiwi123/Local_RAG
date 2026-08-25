@@ -9,6 +9,7 @@ from backend.models.settings_schemas import (
     SettingsReadResponse,
     SettingsPatchRequest,
     SettingsPatchResponse,
+    SettingsResetRequest,
     SettingsRuntimeStatusResponse,
 )
 from backend.services.llm import (
@@ -109,6 +110,66 @@ async def patch_settings(payload: SettingsPatchRequest, request: Request):
         effects.append("next_request")
     if action == "clear" and snapshot.api_key_source == "environment":
         warnings.append("已清除运行时密钥，当前继续使用环境变量 API Key")
+    if llm_changed and not snapshot.llm.enabled:
+        warnings.append("生成模型已关闭，问答将使用 retrieval-only 模式")
+    return SettingsPatchResponse(
+        revision=snapshot.revision,
+        settings=build_settings_response(snapshot),
+        changed_fields=changed_fields,
+        effects=effects,
+        warnings=warnings,
+    )
+
+
+@router.post("/settings/reset", response_model=SettingsPatchResponse)
+async def reset_settings(payload: SettingsResetRequest, request: Request):
+    """删除运行时覆盖，恢复环境变量和代码部署默认值。"""
+    manager = _manager(request)
+    try:
+        snapshot, changed_fields = manager.reset_settings(
+            payload.section,
+            expected_revision=payload.expected_revision,
+        )
+    except SettingsRevisionConflict as error:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "settings_revision_conflict",
+                "message": "设置已被其他页面更新，请刷新后重试",
+                "expected_revision": error.expected_revision,
+                "actual_revision": error.actual_revision,
+            },
+        ) from error
+    except RuntimeSettingsValidationError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
+    except SecretStoreError as error:
+        raise HTTPException(
+            status_code=503,
+            detail="运行时密钥存储当前不可用",
+        ) from error
+    except RuntimeSettingsCommitError as error:
+        raise HTTPException(
+            status_code=500,
+            detail="设置恢复失败且无法安全回滚",
+        ) from error
+
+    changed = set(changed_fields)
+    llm_changed = any(path.startswith("llm.") for path in changed)
+    retrieval_changed = any(path.startswith("retrieval.") for path in changed)
+    effects: list[str] = []
+    warnings: list[str] = []
+    if llm_changed:
+        clear_llm_client_cache()
+        effects.append("llm_client_cache_cleared")
+    if {"retrieval.bm25_k1", "retrieval.bm25_b"} & changed:
+        from backend.services.sparse_retriever import clear_cache
+
+        clear_cache()
+        effects.append("bm25_cache_cleared")
+    if llm_changed or retrieval_changed:
+        effects.append("next_request")
+    if llm_changed and snapshot.api_key_source == "environment":
+        warnings.append("已恢复使用环境变量 API Key")
     if llm_changed and not snapshot.llm.enabled:
         warnings.append("生成模型已关闭，问答将使用 retrieval-only 模式")
     return SettingsPatchResponse(

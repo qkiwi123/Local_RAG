@@ -6,7 +6,7 @@ PDF、DOCX、TXT、Markdown 和 PPTX，完成解析、切分、向量检索、Cr
 
 ## 当前状态
 
-截至 2026-08-16，以下链路已经贯通：
+截至 2026-08-24，以下链路已经贯通：
 
 - 验收轮新增：知识库按文档名称模糊搜索（与标签筛选组合）；
 - OCR 文本做确定性结构分类（独立标题/列表块 + 混合段落首行标题渲染），
@@ -42,8 +42,9 @@ PDF、DOCX、TXT、Markdown 和 PPTX，完成解析、切分、向量检索、Cr
 ### 设置接口的当前安全边界
 
 后端已提供 `GET /api/settings`、`GET /api/settings/runtime-status`、
-`PATCH /api/settings` 和 `POST /api/settings/test-llm`。当前可以读取脱敏配置与运行状态、
-保存问答 LLM、Retrieval 设置和 DPAPI Key，并用未保存草稿执行一次最小连接测试。检索设置
+`PATCH /api/settings`、`POST /api/settings/reset` 和 `POST /api/settings/test-llm`。
+React 主前端已增加 `/settings` 路由和导航入口，可以读取脱敏配置与运行状态、保存问答
+LLM、Retrieval 设置和 DPAPI Key、恢复部署默认，并用未保存草稿执行一次最小连接测试。检索设置
 会在保存后的下一请求生效，Dense、BM25、RRF、Reranker 与最终 Top K 使用各自参数；BM25
 k1/b 变化只刷新进程内稀疏索引缓存，不重写生产向量库。读取接口不会返回
 API Key 明文，也不会为查看状态而冷加载模型；敏感字段的 422 校验错误同样不会回显输入。
@@ -51,7 +52,9 @@ API Key 明文，也不会为查看状态而冷加载模型；敏感字段的 42
 当前项目没有账号、角色或权限体系，设置接口只适用于可信本地工作空间。不要把后端直接
 暴露到不受信任的网络；如需远程或多人使用，应先在反向代理或应用层增加身份认证和访问
 控制。连接测试会真实请求所填模型服务，可能产生少量费用，只应由用户显式触发。
-恢复默认、React 设置页、Trace 配置版本和拒答门控尚未实现。
+设置页不使用 localStorage 保存配置，API Key 输入框不会回填旧明文；恢复默认只删除运行时
+覆盖和当前用户 DPAPI 密钥，不修改 `.env`、不清空或重建向量库。Trace 配置版本和拒答门控
+仍未实现。
 
 ## 当前架构
 

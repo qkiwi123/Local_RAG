@@ -1,0 +1,123 @@
+.settings-page {
+  display: grid;
+  width: min(100%, 1440px);
+  margin: 0 auto;
+  gap: 18px;
+  padding-bottom: 96px;
+}
+
+.settings-page-loading {
+  min-height: 52vh;
+  place-items: center;
+}
+
+.settings-page-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 24px;
+}
+
+.settings-page-header .ant-typography {
+  margin-block: 0 6px;
+}
+
+.settings-card.ant-card {
+  border-color: var(--app-border);
+  border-radius: var(--app-radius-lg);
+  box-shadow: var(--app-shadow);
+}
+
+.settings-card .ant-input-number {
+  width: 100%;
+}
+
+.settings-field-meta {
+  min-height: 22px;
+  margin-top: 3px;
+}
+
+.settings-field-meta .ant-tag {
+  margin-inline-end: 0;
+  font-size: 11px;
+}
+
+.settings-inline-alert.ant-alert {
+  margin-top: 12px;
+}
+
+.settings-card .ant-collapse-header {
+  padding-inline: 0 !important;
+  color: var(--app-primary) !important;
+  font-weight: 600;
+}
+
+.settings-card .ant-collapse-content-box {
+  padding-inline: 0 !important;
+}
+
+.settings-apply-bar {
+  position: fixed;
+  right: clamp(16px, 2.2vw, 32px);
+  bottom: 18px;
+  left: clamp(16px, 2.2vw, 32px);
+  z-index: 15;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  max-width: 1380px;
+  min-height: 68px;
+  margin: 0 auto;
+  gap: 20px;
+  padding: 12px 18px;
+  border: 1px solid var(--app-border);
+  border-radius: 16px;
+  background: rgb(255 255 255 / 96%);
+  box-shadow: 0 12px 36px rgb(16 24 40 / 14%);
+  backdrop-filter: blur(12px);
+}
+
+@media (max-width: 760px) {
+  .settings-page {
+    gap: 14px;
+    padding-bottom: 154px;
+  }
+
+  .settings-page-header {
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  .settings-page-header > .ant-space {
+    align-items: flex-start;
+  }
+
+  .settings-apply-bar {
+    align-items: stretch;
+    flex-direction: column;
+    gap: 10px;
+  }
+
+  .settings-apply-actions {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .settings-apply-actions .ant-btn-primary {
+    grid-column: 1 / -1;
+  }
+}
+
+@media (max-width: 520px) {
+  .settings-page {
+    padding-bottom: 220px;
+  }
+
+  .settings-apply-actions {
+    grid-template-columns: 1fr;
+  }
+
+  .settings-apply-actions .ant-btn-primary {
+    grid-column: auto;
+  }
+}

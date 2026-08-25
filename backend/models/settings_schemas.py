@@ -432,6 +432,13 @@ class SettingsPatchResponse(_StrictFrozenModel):
     warnings: list[str]
 
 
+class SettingsResetRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    expected_revision: int = Field(ge=0)
+    section: Literal["llm", "retrieval", "all"]
+
+
 class RuntimeSettingsOverrides(_PartialModel):
     llm: LLMSettingsOverrides | None = None
     retrieval: RetrievalSettingsOverrides | None = None

@@ -1,6 +1,10 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { Alert, Layout, Menu } from "antd";
-import { CommentOutlined, DatabaseOutlined } from "@ant-design/icons";
+import {
+  CommentOutlined,
+  DatabaseOutlined,
+  SettingOutlined,
+} from "@ant-design/icons";
 import { Link, useLocation } from "react-router-dom";
 
 const { Header, Content } = Layout;
@@ -11,8 +15,11 @@ interface AppShellProps {
 
 export function AppShell({ children }: AppShellProps) {
   const location = useLocation();
-  const selected =
-    location.pathname.startsWith("/knowledge") ? "knowledge" : "chat";
+  const selected = location.pathname.startsWith("/knowledge")
+    ? "knowledge"
+    : location.pathname.startsWith("/settings")
+      ? "settings"
+      : "chat";
   const [backendDown, setBackendDown] = useState(false);
   const [healthChecked, setHealthChecked] = useState(false);
 
@@ -62,6 +69,11 @@ export function AppShell({ children }: AppShellProps) {
                   key: "knowledge",
                   icon: <DatabaseOutlined />,
                   label: <Link to="/knowledge">知识库管理</Link>,
+                },
+                {
+                  key: "settings",
+                  icon: <SettingOutlined />,
+                  label: <Link to="/settings">设置</Link>,
                 },
               ]}
             />

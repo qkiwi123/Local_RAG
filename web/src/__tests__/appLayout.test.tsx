@@ -12,6 +12,10 @@ vi.mock("../pages/knowledge/KnowledgePage", () => ({
   default: () => <div data-testid="knowledge-page">知识库内容</div>,
 }));
 
+vi.mock("../pages/settings/SettingsPage", () => ({
+  default: () => <div data-testid="settings-page">设置内容</div>,
+}));
+
 describe("应用级布局", () => {
   beforeEach(() => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: true }));
@@ -43,6 +47,10 @@ describe("应用级布局", () => {
       "href",
       "/knowledge",
     );
+    expect(screen.getByRole("link", { name: "设置" })).toHaveAttribute(
+      "href",
+      "/settings",
+    );
     expect(screen.getByRole("banner")).toHaveClass("app-header");
     expect(document.querySelector(".app-content-inner")).toBeInTheDocument();
     expect(document.querySelector(".ant-layout-sider")).toBeNull();
@@ -59,6 +67,23 @@ describe("应用级布局", () => {
 
     expect(screen.getByTestId("knowledge-page")).toBeInTheDocument();
     expect(screen.getByRole("menuitem", { name: /知识库管理/ })).toHaveClass(
+      "ant-menu-item-selected",
+    );
+    expect(screen.getByRole("menuitem", { name: /对话/ })).not.toHaveClass(
+      "ant-menu-item-selected",
+    );
+    await waitFor(() => expect(screen.getByText("后端在线")).toBeInTheDocument());
+  });
+
+  it("根据设置路由显示设置页和导航选中态", async () => {
+    render(
+      <MemoryRouter initialEntries={["/settings"]}>
+        <App />
+      </MemoryRouter>,
+    );
+
+    expect(screen.getByTestId("settings-page")).toBeInTheDocument();
+    expect(screen.getByRole("menuitem", { name: /设置/ })).toHaveClass(
       "ant-menu-item-selected",
     );
     expect(screen.getByRole("menuitem", { name: /对话/ })).not.toHaveClass(

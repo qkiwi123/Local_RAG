@@ -430,6 +430,78 @@ class RuntimeSettingsManager:
             api_key_value=api_key_value,
         )
 
+    def reset_settings(
+        self,
+        section: str,
+        *,
+        expected_revision: int,
+    ) -> tuple[EffectiveSettingsSnapshot, list[str]]:
+        """删除指定运行时覆盖并重新使用部署默认值。"""
+        if section not in {"llm", "retrieval", "all"}:
+            raise RuntimeSettingsValidationError("不支持的设置恢复范围")
+
+        reset_llm = section in {"llm", "all"}
+        reset_retrieval = section in {"retrieval", "all"}
+        with _COMMIT_LOCK, self._lock:
+            current = self._store.load()
+            if current.revision != expected_revision:
+                raise SettingsRevisionConflict(
+                    expected_revision=expected_revision,
+                    actual_revision=current.revision,
+                )
+            current_overrides = _normalize_overrides(current.payload)
+            next_overrides = deepcopy(current_overrides)
+            removed: dict = {}
+            if reset_llm and "llm" in next_overrides:
+                removed["llm"] = next_overrides.pop("llm")
+            if reset_retrieval and "retrieval" in next_overrides:
+                removed["retrieval"] = next_overrides.pop("retrieval")
+
+            prior_runtime_key = self._secret_store.get_secret("llm_api_key")
+            future_runtime_key = None if reset_llm else prior_runtime_key
+            secret_changed = future_runtime_key != prior_runtime_key
+            changed_keys = sorted(_flatten_leaf_paths(removed))
+            if secret_changed:
+                changed_keys.append("llm.api_key")
+            if not changed_keys:
+                return self._snapshot, []
+
+            prepared = self._build_snapshot(
+                StoredRuntimeSettings(
+                    revision=current.revision + 1,
+                    payload=next_overrides,
+                    updated_at=current.updated_at,
+                ),
+                runtime_key_override=future_runtime_key,
+            )
+
+            if secret_changed:
+                self._write_runtime_key(future_runtime_key)
+            try:
+                saved = self._store.save(
+                    next_overrides,
+                    expected_revision=expected_revision,
+                    changed_keys=changed_keys,
+                )
+            except Exception:
+                if secret_changed:
+                    try:
+                        self._write_runtime_key(prior_runtime_key)
+                    except Exception:
+                        raise RuntimeSettingsCommitError(
+                            "设置恢复失败，且运行时密钥无法恢复"
+                        ) from None
+                raise
+
+            candidate = prepared.model_copy(
+                update={
+                    "revision": saved.revision,
+                    "updated_at": saved.updated_at,
+                }
+            )
+            self._snapshot = candidate
+            return candidate, changed_keys
+
     def _write_runtime_key(self, value: str | None) -> None:
         if value is None:
             self._secret_store.delete_secret("llm_api_key")

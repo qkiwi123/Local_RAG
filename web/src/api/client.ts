@@ -6,6 +6,12 @@ import type {
   DocumentPreview,
   TagInfo,
   UploadResponse,
+  LlmConnectionTestResponse,
+  LlmSettingsPatch,
+  RetrievalSettingsPatch,
+  SettingsPatchResponse,
+  SettingsReadResponse,
+  SettingsRuntimeStatus,
 } from "./types";
 
 export class ApiError extends Error {
@@ -32,6 +38,15 @@ async function request<T>(url: string, init?: RequestInit): Promise<T> {
     let code: string | undefined;
     if (typeof detail === "string" && detail) {
       message = detail;
+    } else if (Array.isArray(detail)) {
+      const messages = detail
+        .map((item) =>
+          item && typeof item === "object" && "msg" in item
+            ? String(item.msg)
+            : "",
+        )
+        .filter(Boolean);
+      message = messages.join("；") || message;
     } else if (detail && typeof detail === "object") {
       const item = detail as { code?: string; message?: string };
       code = item.code;
@@ -51,6 +66,39 @@ function jsonInit(method: string, body: unknown): RequestInit {
 }
 
 export const api = {
+  // 运行时设置
+  getSettings: () => request<SettingsReadResponse>("/api/settings"),
+  updateSettings: (payload: {
+    expected_revision: number;
+    llm?: LlmSettingsPatch;
+    retrieval?: RetrievalSettingsPatch;
+  }) =>
+    request<SettingsPatchResponse>(
+      "/api/settings",
+      jsonInit("PATCH", payload),
+    ),
+  resetSettings: (
+    expected_revision: number,
+    section: "llm" | "retrieval" | "all",
+  ) =>
+    request<SettingsPatchResponse>(
+      "/api/settings/reset",
+      jsonInit("POST", { expected_revision, section }),
+    ),
+  testLlmConnection: (llm: {
+    provider?: "deepseek" | "openai_compatible";
+    base_url?: string;
+    model?: string;
+    api_key?: string;
+    timeout_seconds?: number;
+  }) =>
+    request<LlmConnectionTestResponse>(
+      "/api/settings/test-llm",
+      jsonInit("POST", { llm }),
+    ),
+  getSettingsRuntimeStatus: () =>
+    request<SettingsRuntimeStatus>("/api/settings/runtime-status"),
+
   // 会话
   listConversations: () =>
     request<ConversationSummary[]>("/api/conversations"),
