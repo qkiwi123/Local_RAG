@@ -250,7 +250,7 @@ def _is_test_storage(*paths: str) -> bool:
 def build_runtime_status(
     snapshot: EffectiveSettingsSnapshot,
 ) -> SettingsRuntimeStatusResponse:
-    from backend.services import embedding, reranker, vector_store
+    from backend.services import embedding, reranker, sparse_retriever, vector_store
 
     embedding_status = _model_runtime_status(
         getter=embedding._get_model,
@@ -274,6 +274,7 @@ def build_runtime_status(
         settings.METADATA_DB_PATH,
         settings.UPLOAD_DIR,
     )
+    sparse_status = sparse_retriever.get_runtime_status()
     return SettingsRuntimeStatusResponse(
         revision=snapshot.revision,
         updated_at=snapshot.updated_at,
@@ -293,5 +294,12 @@ def build_runtime_status(
             metadata_database=Path(settings.METADATA_DB_PATH).name,
             upload_directory=Path(settings.UPLOAD_DIR).name,
             process_index_revision=vector_store.get_index_revision(),
+            sparse_backend=sparse_status["sparse_backend"],
+            sparse_index_status=sparse_status["sparse_index_status"],
+            sparse_index_directory=Path(settings.SPARSE_INDEX_ROOT).name,
+            sparse_index_generation=sparse_status["sparse_index_generation"],
+            sparse_manifest_hash=sparse_status["sparse_manifest_hash"],
+            sparse_index_load_ms=sparse_status["sparse_index_load_ms"],
+            sparse_contract_version=sparse_status["sparse_contract_version"],
         ),
     )

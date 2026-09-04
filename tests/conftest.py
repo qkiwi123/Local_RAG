@@ -40,6 +40,9 @@ os.environ["EMBEDDING_BATCH_SIZE"] = os.environ.get(
     "PYTEST_EMBEDDING_BATCH_SIZE", "32"
 )
 os.environ["RETRIEVAL_MODE"] = "dense"
+os.environ["SPARSE_BACKEND"] = "rank_bm25_memory"
+os.environ["SPARSE_INDEX_ROOT"] = str(_TEST_ROOT / "sparse_index")
+os.environ["SPARSE_INDEX_CORPUS_ID"] = ""
 os.environ["DENSE_CANDIDATE_K"] = ""
 os.environ["MAX_CHUNKS_PER_DOCUMENT"] = "3"
 os.environ["RETRIEVAL_TRACE_ENABLED"] = "false"

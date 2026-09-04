@@ -92,6 +92,16 @@ class Settings:
     BM25_TOP_K: int = int(os.getenv("BM25_TOP_K", "15"))
     BM25_K1: float = float(os.getenv("BM25_K1", "1.5"))
     BM25_B: float = float(os.getenv("BM25_B", "0.75"))
+    # P3部署级后端开关。默认保留旧实现；持久化索引必须显式指定语料ID。
+    SPARSE_BACKEND: str = os.getenv(
+        "SPARSE_BACKEND", "rank_bm25_memory"
+    ).strip().lower()
+    SPARSE_INDEX_ROOT: str = os.getenv(
+        "SPARSE_INDEX_ROOT", str(BASE_DIR / "data" / "sparse_index")
+    ).strip()
+    SPARSE_INDEX_CORPUS_ID: str = os.getenv(
+        "SPARSE_INDEX_CORPUS_ID", ""
+    ).strip()
     RRF_K: int = int(os.getenv("RRF_K", "60"))
     # P2-3 Trace 会返回未入选候选的完整原文，仅在可信调试环境显式开启。
     RETRIEVAL_TRACE_ENABLED: bool = _env_bool(
@@ -242,6 +252,18 @@ class Settings:
             raise ValueError("BM25_K1 必须大于 0")
         if not 0 <= self.BM25_B <= 1:
             raise ValueError("BM25_B 必须在 0 到 1 之间")
+        if self.SPARSE_BACKEND not in {"rank_bm25_memory", "bm25s_mmap"}:
+            raise ValueError(
+                "SPARSE_BACKEND 必须是 rank_bm25_memory 或 bm25s_mmap"
+            )
+        if self.SPARSE_BACKEND == "bm25s_mmap" and not self.SPARSE_INDEX_CORPUS_ID:
+            raise ValueError(
+                "SPARSE_BACKEND=bm25s_mmap 时必须配置 SPARSE_INDEX_CORPUS_ID"
+            )
+        if self.SPARSE_BACKEND == "bm25s_mmap" and not self.SPARSE_INDEX_ROOT:
+            raise ValueError(
+                "SPARSE_BACKEND=bm25s_mmap 时必须配置 SPARSE_INDEX_ROOT"
+            )
         if self.RRF_K <= 0:
             raise ValueError("RRF_K 必须大于 0")
         if self.RERANKER_CANDIDATE_K < self.RETRIEVAL_TOP_K:

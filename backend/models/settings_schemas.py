@@ -330,6 +330,13 @@ class IndexRuntimeStatus(_StrictFrozenModel):
     metadata_database: str
     upload_directory: str
     process_index_revision: int = Field(ge=0)
+    sparse_backend: Literal["rank_bm25_memory", "bm25s_mmap"]
+    sparse_index_status: Literal["ready", "dirty", "missing", "corrupt", "mismatch"]
+    sparse_index_directory: str
+    sparse_index_generation: str | None = None
+    sparse_manifest_hash: str | None = None
+    sparse_index_load_ms: float = Field(default=0.0, ge=0)
+    sparse_contract_version: str | None = None
 
 
 class SettingsRuntimeStatusResponse(_StrictFrozenModel):

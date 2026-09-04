@@ -254,6 +254,7 @@ class TestChatAPI:
     def test_chat_returns_trace_without_changing_answer_or_citations(
         self, client, monkeypatch
     ):
+        from backend.config import settings as app_settings
         from backend.models.schemas import (
             RetrievalResponse,
             RetrievalTrace,
@@ -332,6 +333,10 @@ class TestChatAPI:
             "content"
         ]
         assert payload["trace"]["context"]["token_count"] == 8
+        assert payload["trace"]["settings_revision"] == 0
+        assert payload["trace"]["llm"]["called"] is True
+        assert payload["trace"]["llm"]["provider"] == app_settings.LLM_PROVIDER
+        assert "api_key" not in response.text.lower()
         assert payload["citations"][0]["chunk_id"] == "c1"
 
     def test_chat_trace_is_null_when_retriever_does_not_capture_it(self, client):
@@ -512,14 +517,19 @@ class TestPersistentConversationAPI:
         first = client.post("/api/chat", json=payload)
         assert first.status_code == 200, first.text
         assert first.json()["trace"]["retrieval_mode"] == "dense"
+        assert first.json()["trace"]["settings_revision"] == 0
+        assert first.json()["trace"]["llm"]["called"] is True
 
         detail = client.get(f"/api/conversations/{conversation_id}").json()
         assistant = detail["messages"][1]
         assert assistant["trace"]["retrieval_mode"] == "dense"
+        assert assistant["trace"]["settings_revision"] == 0
 
         replay = client.post("/api/chat", json=payload)
         assert replay.status_code == 200
         assert replay.json()["trace"]["retrieval_mode"] == "dense"
+        assert replay.json()["trace"]["settings_revision"] == 0
+        assert replay.json()["trace"]["llm"]["called"] is True
 
         deleted = client.delete(f"/api/conversations/{conversation_id}")
         assert deleted.status_code == 200

@@ -121,6 +121,23 @@ export function RuntimeStatusCard({
               children: `${status.index.chunk_size} / overlap ${status.index.chunk_overlap} / max tokens ${status.index.chunk_max_tokens}`,
             },
             {
+              key: "sparse-index",
+              label: "Sparse 索引",
+              children: (
+                <Space wrap size={4}>
+                  <Tag color={status.index.sparse_backend === "bm25s_mmap" ? "purple" : "default"}>
+                    {status.index.sparse_backend}
+                  </Tag>
+                  <Tag color={status.index.sparse_index_status === "ready" ? "green" : "orange"}>
+                    {status.index.sparse_index_status}
+                  </Tag>
+                  {status.index.sparse_index_generation && (
+                    <span>{status.index.sparse_index_generation}</span>
+                  )}
+                </Space>
+              ),
+            },
+            {
               key: "storage",
               label: "存储摘要",
               children: (

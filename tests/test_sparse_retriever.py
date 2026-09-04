@@ -1,6 +1,15 @@
-"""P2-1 中文 BM25 检索测试。"""
+"""中文BM25内存兼容路径与P3持久化全库路径测试。"""
+
+import pytest
 
 from backend.services import sparse_retriever
+from backend.services import bm25s_store
+from backend.services.sparse_index import (
+    SparseIndexDirtyError,
+    SparseIndexMismatchError,
+    SparseIndexMissingError,
+)
+from backend.services.sparse_tokenizer import tokenize as pure_tokenize
 
 
 def _chunk(chunk_id: str, content: str) -> dict:
@@ -37,6 +46,7 @@ def test_tokenize_preserves_chinese_model_and_number_tokens():
     assert "中文" in tokens
     assert any(token in {"30", "50", "30-50"} for token in tokens)
     assert all(token not in {"-", "%", "."} for token in tokens)
+    assert sparse_retriever.tokenize is pure_tokenize
 
 
 def test_bm25_ranks_exact_model_name_first(monkeypatch):
@@ -205,3 +215,216 @@ def test_bm25_cache_is_keyed_by_request_k1_and_b(monkeypatch):
 
     assert state["fetches"] == 2
     assert state["models"] == [(1.2, 0.6, 2), (1.9, 0.6, 2)]
+
+
+def _install_persistent_generation(monkeypatch, tmp_path):
+    chunks = [
+        _chunk("c1", "二叉树前序遍历"),
+        _chunk("c2", "进程调度算法"),
+        _chunk("c3", "数据库索引结构"),
+    ]
+    monkeypatch.setattr(sparse_retriever.settings, "SPARSE_BACKEND", "bm25s_mmap")
+    monkeypatch.setattr(sparse_retriever.settings, "SPARSE_INDEX_ROOT", str(tmp_path))
+    monkeypatch.setattr(
+        sparse_retriever.settings, "SPARSE_INDEX_CORPUS_ID", "test-corpus"
+    )
+    monkeypatch.setattr(sparse_retriever.settings, "CHUNK_STRATEGY", "fixed")
+    monkeypatch.setattr(sparse_retriever.settings, "CHUNK_SIZE", 500)
+    monkeypatch.setattr(sparse_retriever.settings, "CHUNK_OVERLAP", 50)
+    monkeypatch.setattr(sparse_retriever.settings, "CHUNK_MAX_TOKENS", 480)
+    monkeypatch.setattr(sparse_retriever.settings, "BM25_K1", 1.5)
+    monkeypatch.setattr(sparse_retriever.settings, "BM25_B", 0.75)
+    bm25s_store.build_generation(
+        chunks=chunks,
+        target_root=tmp_path,
+        corpus_id="test-corpus",
+        tokenize=pure_tokenize,
+        tokenizer={
+            "contract": bm25s_store.TOKENIZER_CONTRACT,
+            "jieba_version": sparse_retriever.jieba.__version__,
+            "user_dictionary_sha256": None,
+            "stopwords_sha256": None,
+        },
+        chunking={
+            "parser_version": sparse_retriever.PARSER_VERSION,
+            "strategy": "fixed",
+            "size": 500,
+            "overlap": 50,
+            "max_tokens": 480,
+        },
+        source={"chroma_collection": "knowledge_base"},
+        generation_id="test-generation",
+        publish=True,
+    )
+    by_id = {row["chunk_id"]: row for row in chunks}
+    monkeypatch.setattr(
+        sparse_retriever.vector_store,
+        "get_chunks_by_ids",
+        lambda ids: [by_id[chunk_id] for chunk_id in reversed(ids)],
+    )
+    monkeypatch.setattr(
+        sparse_retriever.vector_store, "get_index_revision", lambda: 0
+    )
+    sparse_retriever.clear_cache()
+    return chunks
+
+
+def test_persistent_full_corpus_uses_mmap_without_full_scan(monkeypatch, tmp_path):
+    _install_persistent_generation(monkeypatch, tmp_path)
+    monkeypatch.setattr(
+        sparse_retriever.vector_store,
+        "get_all_chunks",
+        lambda: pytest.fail("持久化健康路径不得全库扫描"),
+    )
+    monkeypatch.setattr(
+        sparse_retriever,
+        "BM25Okapi",
+        lambda *args, **kwargs: pytest.fail("不得构建内存BM25"),
+    )
+    diagnostics = {}
+
+    rows = sparse_retriever.search("二叉树", 2, diagnostics=diagnostics)
+
+    assert [row["chunk_id"] for row in rows] == ["c1"]
+    assert diagnostics["sparse_backend"] == "bm25s_mmap"
+    assert diagnostics["sparse_index_status"] == "ready"
+    assert diagnostics["sparse_index_generation"] == "test-generation"
+    assert diagnostics["sparse_manifest_hash"]
+    assert diagnostics["sparse_index_load_ms"] >= 0
+    assert sparse_retriever._persistent_cache["index"].is_mmap
+
+
+def test_persistent_index_is_reused_after_first_query(monkeypatch, tmp_path):
+    _install_persistent_generation(monkeypatch, tmp_path)
+    first = {}
+    second = {}
+
+    sparse_retriever.search("二叉树", 2, diagnostics=first)
+    sparse_retriever.search("数据库", 2, diagnostics=second)
+
+    assert first["sparse_index_load_ms"] > 0
+    assert second["sparse_index_load_ms"] == 0
+
+
+def test_persistent_contract_mismatch_fails_explicitly(monkeypatch, tmp_path):
+    _install_persistent_generation(monkeypatch, tmp_path)
+
+    with pytest.raises(SparseIndexMismatchError, match="k1"):
+        sparse_retriever.search("二叉树", 2, k1=1.2)
+
+
+def test_persistent_process_revision_is_dirty(monkeypatch, tmp_path):
+    _install_persistent_generation(monkeypatch, tmp_path)
+    monkeypatch.setattr(
+        sparse_retriever.vector_store, "get_index_revision", lambda: 1
+    )
+
+    with pytest.raises(SparseIndexDirtyError, match="已修改"):
+        sparse_retriever.search("二叉树", 2)
+
+
+def test_persistent_missing_chroma_chunk_is_mismatch(monkeypatch, tmp_path):
+    _install_persistent_generation(monkeypatch, tmp_path)
+    monkeypatch.setattr(
+        sparse_retriever.vector_store, "get_chunks_by_ids", lambda ids: []
+    )
+
+    with pytest.raises(SparseIndexMismatchError, match="不在当前Chroma"):
+        sparse_retriever.search("二叉树", 2)
+
+
+def test_persistent_empty_scope_does_not_touch_any_index(monkeypatch, tmp_path):
+    _install_persistent_generation(monkeypatch, tmp_path)
+    sparse_retriever.clear_cache()
+    monkeypatch.setattr(
+        sparse_retriever, "_get_persistent_index", lambda **kwargs: pytest.fail()
+    )
+    monkeypatch.setattr(
+        sparse_retriever, "_get_index", lambda *args, **kwargs: pytest.fail()
+    )
+
+    assert sparse_retriever.search(
+        "二叉树", 2, allowed_document_ids=[]
+    ) == []
+
+
+def test_persistent_nonempty_filter_keeps_memory_subcorpus(monkeypatch, tmp_path):
+    chunks = _install_persistent_generation(monkeypatch, tmp_path)
+    monkeypatch.setattr(
+        sparse_retriever.vector_store, "get_all_chunks", lambda: chunks
+    )
+    monkeypatch.setattr(
+        sparse_retriever,
+        "_get_persistent_index",
+        lambda **kwargs: pytest.fail("过滤范围不能使用全库持久化索引"),
+    )
+    diagnostics = {}
+
+    rows = sparse_retriever.search(
+        "二叉树",
+        2,
+        allowed_document_ids=["doc-c1", "doc-c2", "doc-c3"],
+        diagnostics=diagnostics,
+    )
+
+    assert [row["chunk_id"] for row in rows] == ["c1"]
+    assert diagnostics["sparse_backend"] == "rank_bm25_memory"
+
+
+def test_persistent_missing_index_never_falls_back_to_full_scan(monkeypatch, tmp_path):
+    monkeypatch.setattr(sparse_retriever.settings, "SPARSE_BACKEND", "bm25s_mmap")
+    monkeypatch.setattr(sparse_retriever.settings, "SPARSE_INDEX_ROOT", str(tmp_path))
+    monkeypatch.setattr(
+        sparse_retriever.settings, "SPARSE_INDEX_CORPUS_ID", "test-corpus"
+    )
+    monkeypatch.setattr(
+        sparse_retriever.vector_store, "get_index_revision", lambda: 0
+    )
+    monkeypatch.setattr(
+        sparse_retriever.vector_store,
+        "get_all_chunks",
+        lambda: pytest.fail("索引缺失不得静默回退全库内存构建"),
+    )
+    sparse_retriever.clear_cache()
+
+    with pytest.raises(SparseIndexMissingError, match="active.json"):
+        sparse_retriever.search("二叉树", 2)
+
+
+def test_persistent_dirty_pointer_invalidates_loaded_cache(monkeypatch, tmp_path):
+    _install_persistent_generation(monkeypatch, tmp_path)
+    sparse_retriever.search("二叉树", 2)
+    bm25s_store.mark_active_dirty(tmp_path, "corpus changed")
+
+    with pytest.raises(SparseIndexDirtyError, match="corpus changed"):
+        sparse_retriever.search("二叉树", 2)
+
+    assert sparse_retriever._persistent_cache["index"] is None
+
+
+def test_sparse_runtime_status_reports_loaded_generation(monkeypatch, tmp_path):
+    _install_persistent_generation(monkeypatch, tmp_path)
+
+    status = sparse_retriever.get_runtime_status()
+
+    assert status["sparse_backend"] == "bm25s_mmap"
+    assert status["sparse_index_status"] == "ready"
+    assert status["sparse_index_generation"] == "test-generation"
+    assert status["sparse_manifest_hash"]
+
+
+def test_sparse_runtime_status_maps_missing_without_fallback(monkeypatch, tmp_path):
+    monkeypatch.setattr(sparse_retriever.settings, "SPARSE_BACKEND", "bm25s_mmap")
+    monkeypatch.setattr(sparse_retriever.settings, "SPARSE_INDEX_ROOT", str(tmp_path))
+    monkeypatch.setattr(
+        sparse_retriever.settings, "SPARSE_INDEX_CORPUS_ID", "test-corpus"
+    )
+    monkeypatch.setattr(
+        sparse_retriever.vector_store, "get_index_revision", lambda: 0
+    )
+    sparse_retriever.clear_cache()
+
+    status = sparse_retriever.get_runtime_status()
+
+    assert status["sparse_index_status"] == "missing"
+    assert status["sparse_fallback_reason"] is None

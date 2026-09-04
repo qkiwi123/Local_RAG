@@ -372,3 +372,31 @@ class TestGetChunkById:
         from backend.services.vector_store import get_chunk_by_id
         result = get_chunk_by_id("nonexistent-chunk-id")
         assert result is None
+
+
+class TestGetChunksByIds:
+    def test_batch_get_preserves_requested_order(self, monkeypatch):
+        from backend.services import vector_store
+
+        class FakeCollection:
+            def get(self, *, ids, include):
+                assert ids == ["c2", "c1"]
+                assert include == ["documents", "metadatas"]
+                return {
+                    "ids": ["c1", "c2"],
+                    "documents": ["one", "two"],
+                    "metadatas": [{"n": 1}, {"n": 2}],
+                }
+
+        monkeypatch.setattr(vector_store, "_collection", FakeCollection())
+
+        assert vector_store.get_chunks_by_ids(["c2", "c1"]) == [
+            {"chunk_id": "c2", "content": "two", "metadata": {"n": 2}},
+            {"chunk_id": "c1", "content": "one", "metadata": {"n": 1}},
+        ]
+
+    def test_batch_get_rejects_duplicate_ids(self):
+        from backend.services import vector_store
+
+        with pytest.raises(ValueError, match="不能重复"):
+            vector_store.get_chunks_by_ids(["c1", "c1"])

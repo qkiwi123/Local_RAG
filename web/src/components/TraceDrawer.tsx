@@ -1,4 +1,4 @@
-import { Collapse, Progress, Table, Tag, Typography } from "antd";
+import { Collapse, Descriptions, Progress, Space, Table, Tag, Typography } from "antd";
 import type { RetrievalTrace } from "../api/types";
 import { ResizableDrawer } from "./ResizableDrawer";
 
@@ -29,6 +29,7 @@ export function TraceDrawer({
 }) {
   const stages = trace.stages.filter((stage) => STAGE_LABELS[stage.name]);
   const timings = trace.timings_ms ?? {};
+  const config = trace.effective_config;
   const knownSum = Object.keys(TIMING_LABELS).reduce(
     (sum, key) => sum + (Number(timings[key]) || 0),
     0,
@@ -55,6 +56,97 @@ export function TraceDrawer({
           </>
         )}
       </Typography.Paragraph>
+
+      <Typography.Title level={5}>本次配置</Typography.Title>
+      <Descriptions
+        size="small"
+        bordered
+        column={{ xs: 1, sm: 2 }}
+        items={[
+          {
+            key: "revision",
+            label: "Settings revision",
+            children:
+              trace.settings_revision === null || trace.settings_revision === undefined
+                ? <Typography.Text type="secondary">旧 Trace 未记录</Typography.Text>
+                : <Tag color="blue">revision {trace.settings_revision}</Tag>,
+          },
+          {
+            key: "llm",
+            label: "LLM",
+            children: trace.llm ? (
+              <Space wrap size={4}>
+                <Tag color={trace.llm.called ? "green" : "default"}>
+                  {trace.llm.called ? "已调用" : "未调用"}
+                </Tag>
+                <span>{trace.llm.provider} / {trace.llm.model}</span>
+              </Space>
+            ) : (
+              <Typography.Text type="secondary">旧 Trace 未记录</Typography.Text>
+            ),
+          },
+          {
+            key: "retrieval",
+            label: "检索模式 / 最终 Top K",
+            children: config
+              ? `${config.retrieval_mode} / ${config.final_top_k}`
+              : `${trace.retrieval_mode} / 未记录`,
+          },
+          {
+            key: "dense",
+            label: "Dense",
+            children: config
+              ? `candidates ${config.dense_candidate_k} · distance ≤ ${config.dense_distance_threshold}`
+              : "旧 Trace 未记录",
+          },
+          {
+            key: "bm25",
+            label: "BM25",
+            children: config
+              ? `top K ${config.bm25_top_k} · k1 ${config.bm25_k1} · b ${config.bm25_b}`
+              : "旧 Trace 未记录",
+          },
+          {
+            key: "sparse-backend",
+            label: "Sparse 后端 / 状态",
+            children: trace.sparse_backend ? (
+              <Space wrap size={4}>
+                <Tag color={trace.sparse_backend === "bm25s_mmap" ? "purple" : "default"}>
+                  {trace.sparse_backend}
+                </Tag>
+                <Tag color={trace.sparse_index_status === "ready" ? "green" : "orange"}>
+                  {trace.sparse_index_status ?? "unknown"}
+                </Tag>
+                {trace.sparse_index_generation && <span>{trace.sparse_index_generation}</span>}
+                {(trace.sparse_index_load_ms ?? 0) > 0 && (
+                  <span>加载 {trace.sparse_index_load_ms?.toFixed(1)} ms</span>
+                )}
+              </Space>
+            ) : (
+              <Typography.Text type="secondary">本次未执行 Sparse 或旧 Trace 未记录</Typography.Text>
+            ),
+          },
+          {
+            key: "rrf",
+            label: "RRF k",
+            children: config?.rrf_k ?? "旧 Trace 未记录",
+          },
+          {
+            key: "reranker",
+            label: "Reranker",
+            children: config
+              ? `${config.reranker_enabled ? "启用" : "关闭"} · candidates ${config.reranker_candidate_k}`
+              : "旧 Trace 未记录",
+          },
+          {
+            key: "selection",
+            label: "单文档上限 / 拒答门控",
+            children: config
+              ? `${config.max_chunks_per_document} / ${config.refusal_gate_enabled ? "启用" : "关闭"}`
+              : "旧 Trace 未记录",
+          },
+        ]}
+      />
 
       <Typography.Title level={5}>阶段耗时</Typography.Title>
       <div className="trace-timing-list">

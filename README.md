@@ -6,7 +6,7 @@ PDF、DOCX、TXT、Markdown 和 PPTX，完成解析、切分、向量检索、Cr
 
 ## 当前状态
 
-截至 2026-08-24，以下链路已经贯通：
+截至 2026-08-25，以下链路已经贯通：
 
 - 验收轮新增：知识库按文档名称模糊搜索（与标签筛选组合）；
 - OCR 文本做确定性结构分类（独立标题/列表块 + 混合段落首行标题渲染），
@@ -30,7 +30,8 @@ PDF、DOCX、TXT、Markdown 和 PPTX，完成解析、切分、向量检索、Cr
 - 标签支持父子路径、父级含子孙和多标签并集，可同时用于问答检索范围与文档管理；
 - React SPA 已成为 8000 端口的主前端，覆盖会话、检索范围、引用/OCR 预览、Trace、
   文档上传、标签管理和文档维护，并通过桌面、缩放等效视口与移动端验收；
-- 检索 Trace 可持久化并展示 Dense、BM25、RRF、Reranker、最终上下文和阶段耗时。
+- 检索 Trace 可持久化并展示 Dense、BM25、RRF、Reranker、最终上下文、阶段耗时、
+  settings revision、本次实际检索参数和不含密钥的 LLM 调用摘要。
 
 当前仍未完成的正式验收项：
 
@@ -45,16 +46,20 @@ PDF、DOCX、TXT、Markdown 和 PPTX，完成解析、切分、向量检索、Cr
 `PATCH /api/settings`、`POST /api/settings/reset` 和 `POST /api/settings/test-llm`。
 React 主前端已增加 `/settings` 路由和导航入口，可以读取脱敏配置与运行状态、保存问答
 LLM、Retrieval 设置和 DPAPI Key、恢复部署默认，并用未保存草稿执行一次最小连接测试。检索设置
-会在保存后的下一请求生效，Dense、BM25、RRF、Reranker 与最终 Top K 使用各自参数；BM25
-k1/b 变化只刷新进程内稀疏索引缓存，不重写生产向量库。读取接口不会返回
+会在保存后的下一请求生效，Dense、BM25、RRF、Reranker 与最终 Top K 使用各自参数。默认
+`SPARSE_BACKEND=rank_bm25_memory`时，BM25 k1/b变化刷新进程内缓存；部署级选择
+`bm25s_mmap`时，k1/b必须与预构建generation合同一致，否则显式失败。两者都不重写生产
+向量库。读取接口不会返回
 API Key 明文，也不会为查看状态而冷加载模型；敏感字段的 422 校验错误同样不会回显输入。
 
 当前项目没有账号、角色或权限体系，设置接口只适用于可信本地工作空间。不要把后端直接
 暴露到不受信任的网络；如需远程或多人使用，应先在反向代理或应用层增加身份认证和访问
 控制。连接测试会真实请求所填模型服务，可能产生少量费用，只应由用户显式触发。
 设置页不使用 localStorage 保存配置，API Key 输入框不会回填旧明文；恢复默认只删除运行时
-覆盖和当前用户 DPAPI 密钥，不修改 `.env`、不清空或重建向量库。Trace 配置版本和拒答门控
-仍未实现。
+覆盖和当前用户 DPAPI 密钥，不修改 `.env`、不清空或重建向量库。启用
+`RETRIEVAL_TRACE_ENABLED` 后，新问答 Trace 会记录该请求冻结的 revision、实际 Top K/候选深度/
+Dense threshold/BM25/RRF/Reranker 参数，以及模型是否实际调用和 provider/model；不会记录 API Key。
+旧持久化 Trace 继续可读，并在 Drawer 中标注“旧 Trace 未记录”。拒答门控仍未实现。
 
 ## 当前架构
 
@@ -159,6 +164,9 @@ EMBEDDING_DEVICE=cuda:0
 EMBEDDING_BATCH_SIZE=32
 RERANKER_DEVICE=cuda:0
 RERANKER_USE_FP16=true
+SPARSE_BACKEND=rank_bm25_memory
+SPARSE_INDEX_ROOT=./data/sparse_index
+SPARSE_INDEX_CORPUS_ID=
 OCR_ENABLED=false
 OCR_PDF_SCANNED=false
 OCR_PDF_PAGE_IMAGES=false
@@ -166,6 +174,13 @@ OCR_EMBEDDED_IMAGES=false
 OCR_IMAGE_PREVIEW_ENABLED=true
 OCR_IMAGE_DIR=./data/ocr_images
 ```
+
+`bm25s_mmap`只适用于已用`scripts/rebuild_sparse_index.py`构建并验证的匹配generation；
+缺失、dirty、损坏或合同错配不会自动退回全库内存BM25。当前生产默认值不启用该后端。
+固定1000篇/120题的P4同期对照显示，mmap的Sparse暖态均值由20.700 ms降至5.630 ms，
+完整暖态均值由354.806 ms降至342.947 ms；质量与GPU峰值不变。该结果只进入P5评审，
+尚未授权修改默认后端，也不能外推到更大语料或生产容量。完整证据见
+`eval/crud_rag_1000/v3_1/bm25_persistence_p4/README.md`。
 
 启用任一 OCR 层前，还必须配置 `VISION_API_KEY`、`VISION_BASE_URL` 和 `VISION_MODEL`；
 视觉接口只用于文档入库，不改变 DeepSeek 问答链路。

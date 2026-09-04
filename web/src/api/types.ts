@@ -30,6 +30,26 @@ export interface Citation {
 export interface RetrievalTrace {
   retrieval_mode: string;
   reranker_enabled: boolean;
+  settings_revision?: number | null;
+  effective_config?: {
+    retrieval_mode: string;
+    final_top_k: number;
+    dense_candidate_k: number;
+    dense_distance_threshold: number;
+    bm25_top_k: number;
+    bm25_k1: number;
+    bm25_b: number;
+    rrf_k: number;
+    reranker_enabled: boolean;
+    reranker_candidate_k: number;
+    max_chunks_per_document: number;
+    refusal_gate_enabled: boolean;
+  } | null;
+  llm?: {
+    called: boolean;
+    provider: string;
+    model: string;
+  } | null;
   chunks: Record<string, { chunk_id: string; document_name: string; location_label?: string; page_number?: number | null; slide_number?: number | null; content: string }>;
   stages: Array<{ name: string; candidates: Array<Record<string, unknown>> }>;
   selected_chunk_ids: string[];
@@ -37,6 +57,13 @@ export interface RetrievalTrace {
   timings_ms: Record<string, number>;
   tag_filter: string[];
   filtered_document_count?: number | null;
+  sparse_backend?: "rank_bm25_memory" | "bm25s_mmap" | null;
+  sparse_index_generation?: string | null;
+  sparse_manifest_hash?: string | null;
+  sparse_index_status?: "ready" | "dirty" | "missing" | "corrupt" | "mismatch" | null;
+  sparse_fallback_reason?: string | null;
+  sparse_index_load_ms?: number;
+  sparse_contract_version?: string | null;
 }
 
 export interface ConversationMessage {
@@ -281,6 +308,13 @@ export interface SettingsRuntimeStatus {
     metadata_database: string;
     upload_directory: string;
     process_index_revision: number;
+    sparse_backend: "rank_bm25_memory" | "bm25s_mmap";
+    sparse_index_status: "ready" | "dirty" | "missing" | "corrupt" | "mismatch";
+    sparse_index_directory: string;
+    sparse_index_generation?: string | null;
+    sparse_manifest_hash?: string | null;
+    sparse_index_load_ms: number;
+    sparse_contract_version?: string | null;
   };
 }
 

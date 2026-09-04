@@ -184,6 +184,42 @@ def test_retrieve_only_trace_is_explicit_serialized_and_does_not_change_rows(
     assert traced["trace"]["timings_ms"]["total"] >= 0.0
 
 
+def test_retrieve_only_forwards_explicit_runtime_config_without_global_mutation(
+    monkeypatch,
+):
+    rows = [_row()]
+    runtime_config = object()
+    calls = []
+    response = RetrievalResponse(results=list(rows), trace=_trace())
+    monkeypatch.setattr(settings, "RETRIEVAL_TRACE_ENABLED", False)
+    monkeypatch.setattr(
+        retriever,
+        "retrieve",
+        lambda question, **kwargs: calls.append(("plain", question, kwargs))
+        or rows,
+    )
+    monkeypatch.setattr(
+        retriever,
+        "retrieve_with_trace",
+        lambda question, **kwargs: calls.append(("trace", question, kwargs))
+        or response,
+    )
+
+    plain = adapters.retrieve_only("问题", runtime_config=runtime_config)
+    traced = adapters.retrieve_only(
+        "问题",
+        include_trace=True,
+        runtime_config=runtime_config,
+    )
+
+    assert plain["retrieval"] == traced["retrieval"] == rows
+    assert calls == [
+        ("plain", "问题", {"runtime_config": runtime_config}),
+        ("trace", "问题", {"runtime_config": runtime_config}),
+    ]
+    assert settings.RETRIEVAL_TRACE_ENABLED is False
+
+
 def test_run_config_reads_loaded_cpu_models_and_cuda_peaks_without_loading(
     monkeypatch,
 ):

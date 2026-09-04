@@ -158,6 +158,13 @@ const status: SettingsRuntimeStatus = {
     metadata_database: "metadata.db",
     upload_directory: "uploads",
     process_index_revision: 9,
+    sparse_backend: "rank_bm25_memory",
+    sparse_index_status: "ready",
+    sparse_index_directory: "sparse_index",
+    sparse_index_generation: null,
+    sparse_manifest_hash: null,
+    sparse_index_load_ms: 0,
+    sparse_contract_version: "nfkc-lower-regex-jieba-exact-v1",
   },
 };
 

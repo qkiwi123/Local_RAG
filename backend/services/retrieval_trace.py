@@ -1,13 +1,18 @@
 """检索 Trace 构造：快照候选而不修改业务检索结果。"""
 
+from typing import Any
+
 from backend.models.schemas import (
     RetrievalContextStats,
     RetrievalTrace,
     RetrievalTraceCandidate,
     RetrievalTraceChunk,
+    RetrievalTraceEffectiveConfig,
+    RetrievalTraceLLMSummary,
     RetrievalTraceStage,
     RetrievalTraceTimings,
 )
+from backend.models.settings_schemas import EffectiveSettingsSnapshot
 from backend.services.embedding import count_tokens
 
 
@@ -23,6 +28,29 @@ TIMING_FIELDS = (
 )
 
 
+def build_trace_effective_config(config: Any) -> RetrievalTraceEffectiveConfig:
+    """从已解析的请求级检索配置生成无密钥 Trace 快照。"""
+    refusal_gate = getattr(config, "refusal_gate", None)
+    return RetrievalTraceEffectiveConfig(
+        retrieval_mode=config.mode,
+        final_top_k=config.final_top_k,
+        dense_candidate_k=config.dense_candidate_k,
+        dense_distance_threshold=config.dense_distance_threshold,
+        bm25_top_k=config.bm25_top_k,
+        bm25_k1=config.bm25_k1,
+        bm25_b=config.bm25_b,
+        rrf_k=config.rrf_k,
+        reranker_enabled=config.reranker_enabled,
+        reranker_candidate_k=config.reranker_candidate_k,
+        max_chunks_per_document=config.max_chunks_per_document,
+        refusal_gate_enabled=(
+            refusal_gate.enabled
+            if refusal_gate is not None
+            else bool(getattr(config, "refusal_gate_enabled", False))
+        ),
+    )
+
+
 class TraceCollector:
     """按执行顺序收集阶段快照，并按 chunk_id 去重保存完整原文。"""
 
@@ -32,17 +60,20 @@ class TraceCollector:
         enabled: bool,
         mode: str,
         reranker_enabled: bool,
+        effective_config: RetrievalTraceEffectiveConfig | None = None,
         tags: list[str] | None = None,
         allowed_document_count: int | None = None,
     ):
         self.enabled = enabled
         self.mode = mode
         self.reranker_enabled = reranker_enabled
+        self.effective_config = effective_config
         self.tags = list(tags or [])
         self.allowed_document_count = allowed_document_count
         self.chunks: dict[str, RetrievalTraceChunk] = {}
         self.stages: list[RetrievalTraceStage] = []
         self.timings = {field: 0.0 for field in TIMING_FIELDS}
+        self.sparse_diagnostics: dict[str, Any] = {}
 
     def set_timing(self, name: str, elapsed_seconds: float) -> None:
         """记录秒级测量值，并以毫秒写入 Trace。"""
@@ -94,6 +125,10 @@ class TraceCollector:
             RetrievalTraceStage(name=name, candidates=candidates)
         )
 
+    def set_sparse_diagnostics(self, diagnostics: dict[str, Any]) -> None:
+        if self.enabled:
+            self.sparse_diagnostics = dict(diagnostics)
+
     def finish(self, selected_rows: list[dict]) -> RetrievalTrace | None:
         """标记最终入选 chunk 并生成不可影响业务结果的 Trace 模型。"""
         if not self.enabled:
@@ -119,6 +154,7 @@ class TraceCollector:
         return RetrievalTrace(
             retrieval_mode=self.mode,
             reranker_enabled=self.reranker_enabled,
+            effective_config=self.effective_config,
             chunks=self.chunks,
             stages=stages,
             selected_chunk_ids=selected_ids,
@@ -126,6 +162,7 @@ class TraceCollector:
             timings_ms=RetrievalTraceTimings(**self.timings),
             tag_filter=self.tags,
             filtered_document_count=self.allowed_document_count,
+            **self.sparse_diagnostics,
         )
 
 
@@ -136,8 +173,10 @@ def finalize_chat_trace(
     context_formatting_ms: float,
     llm_generation_ms: float,
     total_ms: float,
+    runtime: EffectiveSettingsSnapshot | None = None,
+    llm_called: bool | None = None,
 ) -> RetrievalTrace | None:
-    """聊天完成后补齐上下文规模和路由层耗时。"""
+    """聊天完成后补齐配置版本、模型摘要、上下文规模和路由层耗时。"""
     if trace is None:
         return None
 
@@ -149,4 +188,15 @@ def finalize_chat_trace(
     trace.timings_ms.context_formatting = round(context_formatting_ms, 3)
     trace.timings_ms.llm_generation = round(llm_generation_ms, 3)
     trace.timings_ms.total = round(total_ms, 3)
+    if runtime is not None:
+        trace.settings_revision = runtime.revision
+        if trace.effective_config is None:
+            trace.effective_config = build_trace_effective_config(
+                runtime.retrieval
+            )
+        trace.llm = RetrievalTraceLLMSummary(
+            called=bool(llm_called),
+            provider=runtime.llm.provider,
+            model=runtime.llm.model,
+        )
     return trace

@@ -10,6 +10,36 @@ eval/runs/
 eval/crud_rag_1000/runs/
 eval/crud_rag_1000/v3/runs/
 
+# v3.1 评测源码、题库、汇总和验收报告可提交；本地数据库、向量索引、
+# pytest工作目录及大体积逐次检索日志可由固定协议重建，不进入Git历史。
+eval/crud_rag_1000/v3_1/__pycache__/
+eval/crud_rag_1000/v3_1/.pytest-tmp/
+eval/crud_rag_1000/v3_1/.validation/**/pytest/
+eval/crud_rag_1000/v3_1/.validation/basetemp*/
+eval/crud_rag_1000/v3_1/.validation/pytest-v*/
+eval/crud_rag_1000/v3_1/.validation/pytest-*/
+eval/crud_rag_1000/v3_1/.validation/tmp-*/
+eval/crud_rag_1000/v3_1/.validation/v35-*/
+eval/crud_rag_1000/v3_1/**/_deps/
+eval/crud_rag_1000/v3_1/**/storage/
+eval/crud_rag_1000/v3_1/**/work/
+eval/crud_rag_1000/v3_1/**/temp/
+eval/crud_rag_1000/v3_1/**/passes/
+eval/crud_rag_1000/v3_1/**/replays/
+eval/crud_rag_1000/v3_1/**/results/
+eval/crud_rag_1000/v3_1/**/*.sqlite3
+eval/crud_rag_1000/v3_1/**/*.db
+eval/crud_rag_1000/v3_1/**/*.bin
+eval/crud_rag_1000/v3_1/**/*.npy
+eval/crud_rag_1000/v3_1/**/*.pickle
+eval/crud_rag_1000/v3_1/**/*.cache
+eval/crud_rag_1000/v3_1/**/*.log
+eval/crud_rag_1000/v3_1/**/params.index.json
+eval/crud_rag_1000/v3_1/**/vocab.index.json
+eval/crud_rag_1000/v3_1/**/*.jsonl
+!eval/crud_rag_1000/v3_1/tuning/v35-a-baseline-20260829/phase-e/v35-e-evidence-gate-guard-20260831/per-question.jsonl
+!eval/crud_rag_1000/v3_1/tuning/v35-a-baseline-20260829/phase-f/v35-f-validation-m2-gpu-20260831/per-question.jsonl
+
 # 本地启动脚本输出
 logs/
 

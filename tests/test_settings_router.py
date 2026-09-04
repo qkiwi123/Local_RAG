@@ -156,6 +156,9 @@ def test_runtime_status_does_not_call_cold_model_getters(monkeypatch):
     assert payload["index"]["metadata_database"] == Path(
         settings.METADATA_DB_PATH
     ).name
+    assert payload["index"]["sparse_backend"] == "rank_bm25_memory"
+    assert payload["index"]["sparse_index_status"] == "ready"
+    assert payload["index"]["sparse_index_directory"] == "sparse_index"
     assert settings.CHROMA_PERSIST_DIR not in response.text
     assert settings.METADATA_DB_PATH not in response.text
 
@@ -615,6 +618,13 @@ def test_retrieval_only_sync_stream_and_followup_make_zero_llm_calls(
         assert "生成模型已关闭" in payload["answer"]
         assert payload["citations"][0]["document_name"] == "handbook.pdf"
         assert payload["trace"]["timings_ms"]["llm_generation"] == 0
+        assert payload["trace"]["settings_revision"] == 1
+        assert payload["trace"]["llm"] == {
+            "called": False,
+            "provider": settings.LLM_PROVIDER,
+            "model": settings.DEEPSEEK_MODEL,
+        }
+        assert "api_key" not in json.dumps(payload["trace"]).lower()
     assert second.json()["standalone_question"] == "还有呢？"
 
     events = [
@@ -631,6 +641,8 @@ def test_retrieval_only_sync_stream_and_followup_make_zero_llm_calls(
     ]
     assert "生成模型已关闭" in events[1]["text"]
     assert events[2]["citations"][0]["document_name"] == "handbook.pdf"
+    assert events[-1]["trace"]["settings_revision"] == 1
+    assert events[-1]["trace"]["llm"]["called"] is False
 
 
 def test_chat_endpoints_use_the_effective_retrieval_snapshot(
@@ -685,3 +697,74 @@ def test_chat_endpoints_use_the_effective_retrieval_snapshot(
         assert runtime.dense_candidate_k == 12
         assert runtime.bm25_top_k == 9
         assert runtime.reranker_candidate_k == 8
+
+    sync_trace = response.json()["trace"]
+    stream_events = [
+        json.loads(line)
+        for line in streamed.text.splitlines()
+        if line.strip()
+    ]
+    stream_trace = stream_events[-1]["trace"]
+    for trace in (sync_trace, stream_trace):
+        assert trace["settings_revision"] == 1
+        assert trace["effective_config"]["retrieval_mode"] == "hybrid"
+        assert trace["effective_config"]["final_top_k"] == 4
+        assert trace["effective_config"]["dense_candidate_k"] == 12
+        assert trace["effective_config"]["bm25_top_k"] == 9
+        assert trace["effective_config"]["reranker_candidate_k"] == 8
+        assert trace["llm"]["called"] is False
+
+
+def test_chat_trace_distinguishes_settings_before_and_after_update(
+    tmp_path,
+    monkeypatch,
+):
+    from backend.routers import chat as chat_router
+
+    manager = _isolated_manager(tmp_path)
+    manager.update_llm({"enabled": False}, expected_revision=0)
+    monkeypatch.setattr(
+        chat_router,
+        "retrieve_with_trace",
+        lambda *args, **kwargs: _retrieval_with_trace(),
+    )
+
+    with TestClient(app) as client:
+        original = app.state.runtime_settings_manager
+        app.state.runtime_settings_manager = manager
+        try:
+            before = client.post(
+                "/api/chat",
+                json={"question": "修改前的设置版本？"},
+            )
+            manager.update_settings(
+                {
+                    "retrieval": {
+                        "final_top_k": 3,
+                        "dense_candidate_k": 7,
+                        "dense_distance_threshold": 0.29,
+                        "bm25_top_k": 6,
+                        "reranker_candidate_k": 5,
+                        "max_chunks_per_document": 2,
+                    }
+                },
+                expected_revision=1,
+            )
+            after = client.post(
+                "/api/chat",
+                json={"question": "修改后的设置版本？"},
+            )
+        finally:
+            app.state.runtime_settings_manager = original
+
+    assert before.status_code == 200, before.text
+    assert after.status_code == 200, after.text
+    before_trace = before.json()["trace"]
+    after_trace = after.json()["trace"]
+    assert before_trace["settings_revision"] == 1
+    assert after_trace["settings_revision"] == 2
+    assert before_trace["effective_config"]["final_top_k"] != 3
+    assert after_trace["effective_config"]["final_top_k"] == 3
+    assert after_trace["effective_config"]["dense_candidate_k"] == 7
+    assert after_trace["effective_config"]["dense_distance_threshold"] == 0.29
+    assert "api_key" not in after.text.lower()

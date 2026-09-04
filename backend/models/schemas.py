@@ -5,9 +5,9 @@ Pydantic 数据模型定义。
 所有模块共享这些类型，保证数据格式一致。
 """
 
-from typing import Optional
+from typing import Literal, Optional
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from backend.models.document_structure import LocatedBlock, SourceLocator
 
@@ -240,10 +240,52 @@ class RetrievalTraceTimings(BaseModel):
     total: float = 0.0
 
 
+class RetrievalTraceEffectiveConfig(BaseModel):
+    """本次检索实际使用的动态参数；不包含任何密钥或本机敏感值。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    retrieval_mode: str
+    final_top_k: int
+    dense_candidate_k: int
+    dense_distance_threshold: float
+    bm25_top_k: int
+    bm25_k1: float
+    bm25_b: float
+    rrf_k: int
+    reranker_enabled: bool
+    reranker_candidate_k: int
+    max_chunks_per_document: int
+    refusal_gate_enabled: bool = False
+
+
+class RetrievalTraceLLMSummary(BaseModel):
+    """本次问答的模型调用摘要；禁止扩展为包含 API Key 的配置副本。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    called: bool
+    provider: str
+    model: str
+
+
 class RetrievalTrace(BaseModel):
     """一次问答实际执行的完整检索链路。"""
     retrieval_mode: str
     reranker_enabled: bool
+    settings_revision: Optional[int] = Field(
+        default=None,
+        ge=0,
+        description="本次问答冻结的运行时设置版本；旧 Trace 为 null",
+    )
+    effective_config: Optional[RetrievalTraceEffectiveConfig] = Field(
+        default=None,
+        description="检索器实际执行的参数；旧 Trace 为 null",
+    )
+    llm: Optional[RetrievalTraceLLMSummary] = Field(
+        default=None,
+        description="模型是否实际调用及 provider/model；旧 Trace 为 null",
+    )
     chunks: dict[str, RetrievalTraceChunk] = Field(default_factory=dict)
     stages: list[RetrievalTraceStage] = Field(default_factory=list)
     selected_chunk_ids: list[str] = Field(default_factory=list)
@@ -257,6 +299,15 @@ class RetrievalTrace(BaseModel):
         default=None,
         description="标签筛选换算出的 ready 文档数；未过滤时为 None",
     )
+    sparse_backend: Optional[Literal["rank_bm25_memory", "bm25s_mmap"]] = None
+    sparse_index_generation: Optional[str] = None
+    sparse_manifest_hash: Optional[str] = None
+    sparse_index_status: Optional[
+        Literal["ready", "dirty", "missing", "corrupt", "mismatch"]
+    ] = None
+    sparse_fallback_reason: Optional[str] = None
+    sparse_index_load_ms: float = Field(default=0.0, ge=0)
+    sparse_contract_version: Optional[str] = None
 
 
 class RetrievalResponse(BaseModel):

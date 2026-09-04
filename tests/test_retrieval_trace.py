@@ -1,6 +1,7 @@
 """P2-3 检索链路 Trace 配置、契约与行为测试。"""
 
 import pytest
+from pydantic import SecretStr, ValidationError
 
 from backend.config import _env_bool, settings
 from backend.models.schemas import (
@@ -9,8 +10,14 @@ from backend.models.schemas import (
     RetrievalTrace,
     RetrievalTraceCandidate,
     RetrievalTraceChunk,
+    RetrievalTraceLLMSummary,
     RetrievalTraceStage,
     RetrievalTraceTimings,
+)
+from backend.models.settings_schemas import (
+    EffectiveSettingsSnapshot,
+    LLMSettings,
+    RetrievalSettings,
 )
 from backend.services.retrieval_trace import TraceCollector, finalize_chat_trace
 
@@ -143,6 +150,91 @@ def test_finalize_chat_trace_records_context_and_llm_timing(monkeypatch):
     assert completed.timings_ms.total == 5.6
 
 
+def test_finalize_chat_trace_records_runtime_without_secret(monkeypatch):
+    secret = "trace-must-not-contain-this-secret"
+    runtime = EffectiveSettingsSnapshot(
+        revision=7,
+        llm=LLMSettings(
+            enabled=False,
+            provider="deepseek",
+            base_url="https://api.example.com",
+            model="example-model",
+            temperature=0.2,
+            max_tokens=100,
+            timeout_seconds=30,
+        ),
+        retrieval=RetrievalSettings(
+            mode="hybrid",
+            final_top_k=4,
+            dense_candidate_k=12,
+            dense_distance_threshold=0.31,
+            bm25_top_k=9,
+            bm25_k1=1.2,
+            bm25_b=0.6,
+            rrf_k=50,
+            reranker_enabled=True,
+            reranker_candidate_k=8,
+            max_chunks_per_document=2,
+        ),
+        api_key=SecretStr(secret),
+        api_key_source="runtime_secret",
+        field_sources={},
+    )
+    trace = TraceCollector(
+        enabled=True,
+        mode="hybrid",
+        reranker_enabled=True,
+    ).finish([])
+    monkeypatch.setattr(
+        "backend.services.retrieval_trace.count_tokens", lambda text: 0
+    )
+
+    completed = finalize_chat_trace(
+        trace,
+        context="",
+        context_formatting_ms=0,
+        llm_generation_ms=0,
+        total_ms=1,
+        runtime=runtime,
+        llm_called=False,
+    )
+    payload = completed.model_dump(mode="json")
+
+    assert payload["settings_revision"] == 7
+    assert payload["effective_config"] == {
+        "retrieval_mode": "hybrid",
+        "final_top_k": 4,
+        "dense_candidate_k": 12,
+        "dense_distance_threshold": 0.31,
+        "bm25_top_k": 9,
+        "bm25_k1": 1.2,
+        "bm25_b": 0.6,
+        "rrf_k": 50,
+        "reranker_enabled": True,
+        "reranker_candidate_k": 8,
+        "max_chunks_per_document": 2,
+        "refusal_gate_enabled": False,
+    }
+    assert payload["llm"] == {
+        "called": False,
+        "provider": "deepseek",
+        "model": "example-model",
+    }
+    serialized = completed.model_dump_json()
+    assert secret not in serialized
+    assert "api_key" not in serialized.lower()
+
+
+def test_trace_llm_summary_rejects_secret_fields():
+    with pytest.raises(ValidationError):
+        RetrievalTraceLLMSummary(
+            called=True,
+            provider="deepseek",
+            model="example-model",
+            api_key="forbidden",
+        )
+
+
 def test_hybrid_trace_has_only_executed_stages_and_full_chunks(monkeypatch):
     from backend.services import retriever
 
@@ -243,3 +335,42 @@ def test_bm25_trace_omits_dense_and_rrf_stages(monkeypatch):
         "selected",
     ]
     assert response.trace.timings_ms.query_embedding == 0.0
+
+
+def test_bm25_trace_records_sparse_backend_without_changing_results(monkeypatch):
+    from backend.services import retriever
+
+    monkeypatch.setattr(settings, "RETRIEVAL_TRACE_ENABLED", True)
+    monkeypatch.setattr(settings, "RETRIEVAL_MODE", "bm25")
+    monkeypatch.setattr(settings, "RERANKER_ENABLED", False)
+
+    def fake_bm25(question, top_k, allowed_document_ids=None, **kwargs):
+        diagnostics = kwargs.get("diagnostics")
+        if diagnostics is not None:
+            diagnostics.update(
+                {
+                    "sparse_backend": "bm25s_mmap",
+                    "sparse_index_generation": "generation-1",
+                    "sparse_manifest_hash": "abc123",
+                    "sparse_index_status": "ready",
+                    "sparse_fallback_reason": None,
+                    "sparse_index_load_ms": 4.5,
+                    "sparse_contract_version": "contract-v1",
+                }
+            )
+        return [{**_row("c1"), "bm25_rank": 1, "bm25_score": 2.0}]
+
+    monkeypatch.setattr(retriever, "bm25_search", fake_bm25)
+
+    plain = retriever.retrieve("问题", top_k=1)
+    traced = retriever.retrieve_with_trace("问题", top_k=1)
+
+    assert [row["chunk_id"] for row in plain] == ["c1"]
+    assert [row["chunk_id"] for row in traced.results] == ["c1"]
+    assert traced.trace.sparse_backend == "bm25s_mmap"
+    assert traced.trace.sparse_index_generation == "generation-1"
+    assert traced.trace.sparse_manifest_hash == "abc123"
+    assert traced.trace.sparse_index_status == "ready"
+    assert traced.trace.sparse_fallback_reason is None
+    assert traced.trace.sparse_index_load_ms == 4.5
+    assert traced.trace.sparse_contract_version == "contract-v1"

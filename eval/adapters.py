@@ -440,19 +440,29 @@ def _dump_retrieval_trace(trace) -> dict | None:
     raise TypeError(f"不支持的 RetrievalTrace 类型：{type(trace)!r}")
 
 
-def retrieve_only(question: str, *, include_trace: bool = False) -> dict:
+def retrieve_only(
+    question: str,
+    *,
+    include_trace: bool = False,
+    runtime_config=None,
+) -> dict:
     """只执行检索链路，供无 LLM 评测复用；可显式请求逐阶段 Trace。
 
     ``include_trace=False`` 保持历史返回形状（仅 ``retrieval`` 和
     ``retrieval_s``），因此既有 retrieval-sweep 和离线重放无需修改。
+    ``runtime_config`` 仅供隔离评测显式传入一次请求的强类型配置；省略时
+    仍走原有模块设置，避免调参入口修改进程级默认值。
     开启时临时打开 backend 的 Trace 开关并调用 ``retrieve_with_trace``；
     该开关在调用完成后恢复，避免把评测设置泄漏到同进程的业务请求。
     """
     started = time.perf_counter()
+    runtime_kwargs = (
+        {} if runtime_config is None else {"runtime_config": runtime_config}
+    )
     if not include_trace:
         from backend.services.retriever import retrieve
 
-        retrieval = retrieve(question)
+        retrieval = retrieve(question, **runtime_kwargs)
         return {
             "retrieval": retrieval,
             "retrieval_s": round(time.perf_counter() - started, 3),
@@ -466,7 +476,7 @@ def retrieve_only(question: str, *, include_trace: bool = False) -> dict:
         # retrieve_with_trace() 复用服务端开关；评测的 include_trace 是一次
         # 调用级显式请求，而不是永久修改 .env 或生产配置。
         settings.RETRIEVAL_TRACE_ENABLED = True
-        response = retrieve_with_trace(question)
+        response = retrieve_with_trace(question, **runtime_kwargs)
     finally:
         settings.RETRIEVAL_TRACE_ENABLED = previous_trace_setting
 

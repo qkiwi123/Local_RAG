@@ -96,6 +96,7 @@ async def chat(request: ChatRequest, http_request: Request):
     """
     total_started = perf_counter()
     runtime = _runtime_snapshot(http_request)
+    llm_called = False
     question = request.question.strip()
 
     if not question:
@@ -137,6 +138,7 @@ async def chat(request: ChatRequest, http_request: Request):
         if history_rows and runtime.llm.enabled:
             history_text = format_history(bounded_history(history_rows))
             try:
+                llm_called = True
                 standalone_question = rewrite_followup(
                     question,
                     history_text,
@@ -173,6 +175,8 @@ async def chat(request: ChatRequest, http_request: Request):
             context_formatting_ms=0.0,
             llm_generation_ms=0.0,
             total_ms=(perf_counter() - total_started) * 1000,
+            runtime=runtime,
+            llm_called=llm_called,
         )
         if tag_filter:
             answer = (
@@ -220,6 +224,7 @@ async def chat(request: ChatRequest, http_request: Request):
     else:
         llm_started = perf_counter()
         try:
+            llm_called = True
             if persistent:
                 history_text = format_history(bounded_history(history_rows))
                 answer = ask_with_history(
@@ -251,6 +256,8 @@ async def chat(request: ChatRequest, http_request: Request):
         context_formatting_ms=context_ms,
         llm_generation_ms=llm_ms,
         total_ms=(perf_counter() - total_started) * 1000,
+        runtime=runtime,
+        llm_called=llm_called,
     )
 
     response_fields = {}
@@ -290,6 +297,7 @@ async def _stream_chat_events(
     tag_filter: list[str],
     allowed_document_ids,
     runtime: EffectiveSettingsSnapshot | None = None,
+    llm_called: bool = False,
 ) -> "AsyncGenerator[str, None]":
     """流式问答事件生成器（NDJSON 行）。
 
@@ -359,6 +367,8 @@ async def _stream_chat_events(
                 context_formatting_ms=0.0,
                 llm_generation_ms=0.0,
                 total_ms=(perf_counter() - total_started) * 1000,
+                runtime=runtime,
+                llm_called=llm_called,
             )
             if tag_filter:
                 answer = (
@@ -393,6 +403,7 @@ async def _stream_chat_events(
         if runtime is not None and not runtime.llm.enabled:
             pieces = [build_retrieval_only_answer(len(retrieval_results))]
         elif persistent:
+            llm_called = True
             history_rows = complete_history(request.conversation_id)
             history_text = format_history(bounded_history(history_rows))
             pieces = ask_with_history_stream(
@@ -403,6 +414,7 @@ async def _stream_chat_events(
                 runtime,
             )
         else:
+            llm_called = True
             pieces = ask_stream(request.question.strip(), context, runtime)
 
         collected: list[str] = []
@@ -422,6 +434,8 @@ async def _stream_chat_events(
             context_formatting_ms=0.0,
             llm_generation_ms=0.0,
             total_ms=(perf_counter() - total_started) * 1000,
+            runtime=runtime,
+            llm_called=llm_called,
         )
         response_fields = {}
         if persistent:
@@ -476,6 +490,7 @@ async def chat_stream(request: ChatRequest, http_request: Request):
     """
     question = request.question.strip()
     runtime = _runtime_snapshot(http_request)
+    llm_called = False
     if not question:
         raise HTTPException(status_code=422, detail="问题不能为空")
     if len(question) > settings.CONVERSATION_MESSAGE_MAX_CHARS:
@@ -509,6 +524,7 @@ async def chat_stream(request: ChatRequest, http_request: Request):
             if history_rows and runtime.llm.enabled:
                 history_text = format_history(bounded_history(history_rows))
                 try:
+                    llm_called = True
                     standalone_question = rewrite_followup(
                         question,
                         history_text,
@@ -531,6 +547,7 @@ async def chat_stream(request: ChatRequest, http_request: Request):
             tag_filter,
             allowed_document_ids,
             runtime,
+            llm_called,
         ),
         media_type="application/x-ndjson",
         headers={"Cache-Control": "no-store"},

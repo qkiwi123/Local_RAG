@@ -304,3 +304,28 @@ def get_chunk_by_id(chunk_id: str) -> Optional[dict]:
         "content": documents[0] if documents else "",
         "metadata": metadatas[0] if metadatas else {},
     }
+
+
+def get_chunks_by_ids(chunk_ids: List[str]) -> List[dict]:
+    """按稳定ID批量回取正文与metadata，并保持调用方给定顺序。"""
+    if not chunk_ids:
+        return []
+    if len(chunk_ids) != len(set(chunk_ids)):
+        raise ValueError("chunk_ids不能重复")
+    result = _collection.get(
+        ids=list(chunk_ids),
+        include=["documents", "metadatas"],
+    )
+    rows = {
+        chunk_id: {
+            "chunk_id": chunk_id,
+            "content": content,
+            "metadata": metadata or {},
+        }
+        for chunk_id, content, metadata in zip(
+            result.get("ids", []),
+            result.get("documents", []),
+            result.get("metadatas", []),
+        )
+    }
+    return [rows[chunk_id] for chunk_id in chunk_ids if chunk_id in rows]

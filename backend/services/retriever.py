@@ -21,7 +21,10 @@ from backend.models.settings_schemas import RetrievalMode, RetrievalSettings
 from backend.services.embedding import embed_query
 from backend.services.fusion import reciprocal_rank_fusion
 from backend.services.reranker import rerank
-from backend.services.retrieval_trace import TraceCollector
+from backend.services.retrieval_trace import (
+    TraceCollector,
+    build_trace_effective_config,
+)
 from backend.services.sparse_retriever import search as bm25_search
 from backend.services.vector_store import (
     search as vector_search,
@@ -169,13 +172,25 @@ def _bm25_candidates(
 ) -> List[dict]:
     """生成 BM25 候选；分支深度可独立配置，融合前截断到候选上限。"""
     started = perf_counter()
-    rows = bm25_search(
-        question,
-        top_k=candidate_k,
-        allowed_document_ids=allowed_document_ids,
-        k1=k1,
-        b=b,
-    )
+    if collector.enabled:
+        diagnostics = {}
+        rows = bm25_search(
+            question,
+            top_k=candidate_k,
+            allowed_document_ids=allowed_document_ids,
+            k1=k1,
+            b=b,
+            diagnostics=diagnostics,
+        )
+        collector.set_sparse_diagnostics(diagnostics)
+    else:
+        rows = bm25_search(
+            question,
+            top_k=candidate_k,
+            allowed_document_ids=allowed_document_ids,
+            k1=k1,
+            b=b,
+        )
     collector.set_timing("sparse_retrieval", perf_counter() - started)
     collector.add_stage("bm25", rows)
     return rows
@@ -276,6 +291,9 @@ def _retrieve_internal(
         enabled=include_trace,
         mode=config.mode,
         reranker_enabled=config.reranker_enabled,
+        effective_config=(
+            build_trace_effective_config(config) if include_trace else None
+        ),
         tags=tag_filter,
         allowed_document_count=(
             len(allowed_document_ids)

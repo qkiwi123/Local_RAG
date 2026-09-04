@@ -206,6 +206,10 @@ def test_request_threshold_filters_dense_and_is_visible_in_trace(monkeypatch):
     dense = response.trace.stages[0].candidates
     assert response.trace.retrieval_mode == "dense"
     assert response.trace.reranker_enabled is False
+    assert response.trace.effective_config.retrieval_mode == "dense"
+    assert response.trace.effective_config.final_top_k == 1
+    assert response.trace.effective_config.dense_candidate_k == 2
+    assert response.trace.effective_config.dense_distance_threshold == 0.3
     assert response.trace.selected_chunk_ids == ["eligible"]
     assert dense[0].eligible is True
     assert dense[1].eligible is False
