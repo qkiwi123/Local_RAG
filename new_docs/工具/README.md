@@ -50,6 +50,8 @@
 
 --check-preserved仅用于首次整理；后续真实代码变化无需永久通过旧快照，不覆盖旧报告或重置旧快照。--report仅允许写入本目录。--self-test在内存构造错误，不改原文档。
 
+P6-C生产默认启用同步后的静态检查：[validation-report-20260908-bm25-p6c.json](./validation-report-20260908-bm25-p6c.json)。只验证文档结构；产品门禁证据以P6-C报告为准。
+
 ## 关联文档
 
 - 关系：实现；[DEV-013](../开发/DEV-013-文档检查工具.md)。

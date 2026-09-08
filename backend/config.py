@@ -92,15 +92,15 @@ class Settings:
     BM25_TOP_K: int = int(os.getenv("BM25_TOP_K", "15"))
     BM25_K1: float = float(os.getenv("BM25_K1", "1.5"))
     BM25_B: float = float(os.getenv("BM25_B", "0.75"))
-    # P3部署级后端开关。默认保留旧实现；持久化索引必须显式指定语料ID。
+    # P6-C生产默认使用已验收的持久化Sparse索引；仍可显式切回旧实现。
     SPARSE_BACKEND: str = os.getenv(
-        "SPARSE_BACKEND", "rank_bm25_memory"
+        "SPARSE_BACKEND", "bm25s_mmap"
     ).strip().lower()
     SPARSE_INDEX_ROOT: str = os.getenv(
         "SPARSE_INDEX_ROOT", str(BASE_DIR / "data" / "sparse_index")
     ).strip()
     SPARSE_INDEX_CORPUS_ID: str = os.getenv(
-        "SPARSE_INDEX_CORPUS_ID", ""
+        "SPARSE_INDEX_CORPUS_ID", "production-rag-20260908"
     ).strip()
     # P6-A后台重建协调：文档增删后自动重建持久化Sparse索引；仅在
     # SPARSE_BACKEND=bm25s_mmap时生效。评测/排查可显式关闭。
