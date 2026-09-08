@@ -337,6 +337,11 @@ class IndexRuntimeStatus(_StrictFrozenModel):
     sparse_manifest_hash: str | None = None
     sparse_index_load_ms: float = Field(default=0.0, ge=0)
     sparse_contract_version: str | None = None
+    # P6-A后台重建协调器快照；字段带默认值，旧客户端读取不受影响。
+    sparse_rebuild_enabled: bool = False
+    sparse_rebuild_pending: bool = False
+    sparse_rebuild_running: bool = False
+    sparse_rebuild_last_outcome: str | None = None
 
 
 class SettingsRuntimeStatusResponse(_StrictFrozenModel):

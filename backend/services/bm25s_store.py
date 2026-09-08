@@ -29,6 +29,7 @@ from backend.services.sparse_index import (
     SparseIndexMissingError,
 )
 from backend.services.sparse_tokenizer import TOKENIZER_CONTRACT
+from backend.services import sparse_lifecycle
 
 
 SCHEMA_VERSION = 1
@@ -458,6 +459,12 @@ def build_generation(
         try:
             if not loaded.is_mmap:
                 raise SparseIndexCorruptError("构建后重载未使用mmap")
+            reload_oracle = _verify_against_rank_bm25(
+                model=loaded.model, corpus_tokens=corpus_tokens,
+                chunk_ids=chunk_ids, questions=oracle_questions,
+                tokenize=tokenize, k1=k1, b=b, epsilon=epsilon,
+                oracle=oracle_model,
+            )
         finally:
             loaded.close()
         os.replace(temp_dir, final_dir)
@@ -471,6 +478,7 @@ def build_generation(
             "chunk_count": manifest["corpus"]["chunk_count"],
             "index_bytes": manifest["index_bytes"],
             "published": publish,
+            "reload_oracle": reload_oracle,
             "wall_s": time.perf_counter() - started,
         }
     except Exception:
@@ -659,6 +667,39 @@ def _close_model_mmaps(model: Any) -> None:
             mmap_handle.close()
 
 
+def corpus_content_digest(chunks: Sequence[Mapping[str, Any]]) -> str:
+    """计算与manifest corpus.content_sha256同口径的语料内容摘要。
+
+    生命周期重建用它在发布前复核"构建期间的源语料是否又发生了变化"。
+    """
+    return _rows_digest(_validate_chunks(chunks), "content")
+
+
+def corpus_metadata_digest(chunks: Sequence[Mapping[str, Any]]) -> str:
+    """metadata也绑定到候选代，不能仅凭正文判断源未改变。"""
+    return _rows_digest(_validate_chunks(chunks), "metadata")
+
+
+def read_active_payload(target_root: str | Path) -> dict[str, Any] | None:
+    """读取活动指针payload；不存在返回None，存在但不可读时显式报错。"""
+    root = Path(target_root).resolve()
+    active = root / "active.json"
+    if _is_link(active):
+        raise SparseIndexCorruptError("active.json不能是链接")
+    if active.exists() and not active.is_file():
+        raise SparseIndexCorruptError("active.json不是普通文件")
+    if not active.is_file():
+        return None
+    try:
+        payload = json.loads(active.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as error:
+        raise SparseIndexCorruptError("active.json不可读") from error
+    if not isinstance(payload, dict):
+        raise SparseIndexCorruptError("active.json根节点必须是对象")
+    return payload
+
+
+@sparse_lifecycle.serialized
 def activate_generation(
     target_root: str | Path,
     generation_id: str,
@@ -690,6 +731,7 @@ def activate_generation(
     return payload
 
 
+@sparse_lifecycle.serialized
 def mark_active_dirty(target_root: str | Path, reason: str) -> dict[str, Any]:
     root = Path(target_root).resolve()
     active = root / "active.json"
@@ -701,7 +743,7 @@ def mark_active_dirty(target_root: str | Path, reason: str) -> dict[str, Any]:
         payload = json.loads(active.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as error:
         raise SparseIndexCorruptError("active.json不可读") from error
-    if payload.get("schema_version") != SCHEMA_VERSION or payload.get("status") not in {
+    if not isinstance(payload, dict) or payload.get("schema_version") != SCHEMA_VERSION or payload.get("status") not in {
         "ready", "dirty"
     }:
         raise SparseIndexCorruptError("active.json合同无效")
@@ -727,6 +769,8 @@ def load_active(
         active = json.loads(active_path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as error:
         raise SparseIndexCorruptError("active.json不可读") from error
+    if not isinstance(active, dict):
+        raise SparseIndexCorruptError("active.json根节点必须是对象")
     if active.get("schema_version") != SCHEMA_VERSION:
         raise SparseIndexMismatchError("active schema版本不匹配")
     if active.get("status") == "dirty":

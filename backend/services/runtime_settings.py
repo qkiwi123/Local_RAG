@@ -18,6 +18,7 @@ from backend.models.settings_schemas import (
     RuntimeSettingsOverrides,
 )
 from backend.services.secret_store import SecretStore
+from backend.services import sparse_lifecycle
 from backend.services.settings_store import (
     SettingsRevisionConflict,
     SettingsStore,
@@ -323,6 +324,7 @@ class RuntimeSettingsManager:
             self._snapshot = candidate
             return candidate
 
+    @sparse_lifecycle.serialized
     def update_settings(
         self,
         patch: Mapping,
@@ -387,6 +389,7 @@ class RuntimeSettingsManager:
                 runtime_key_override=future_runtime_key,
             )
 
+            self._invalidate_sparse_contract(prepared)
             if secret_changed:
                 self._write_runtime_key(future_runtime_key)
             try:
@@ -430,6 +433,7 @@ class RuntimeSettingsManager:
             api_key_value=api_key_value,
         )
 
+    @sparse_lifecycle.serialized
     def reset_settings(
         self,
         section: str,
@@ -475,6 +479,7 @@ class RuntimeSettingsManager:
                 runtime_key_override=future_runtime_key,
             )
 
+            self._invalidate_sparse_contract(prepared)
             if secret_changed:
                 self._write_runtime_key(future_runtime_key)
             try:
@@ -501,6 +506,15 @@ class RuntimeSettingsManager:
             )
             self._snapshot = candidate
             return candidate, changed_keys
+
+    def _invalidate_sparse_contract(self, prepared) -> None:
+        before, after = self._snapshot.retrieval, prepared.retrieval
+        if (before.bm25_k1, before.bm25_b) != (after.bm25_k1, after.bm25_b):
+            from backend.services import sparse_rebuild
+
+            sparse_lifecycle.mark_corpus_changing("bm25_settings_changed")
+            # 保存失败也需按未改变的有效设置复核；worker在事务锁释放后执行。
+            sparse_rebuild.request_rebuild("bm25_settings_changed")
 
     def _write_runtime_key(self, value: str | None) -> None:
         if value is None:

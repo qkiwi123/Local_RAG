@@ -102,6 +102,9 @@ class Settings:
     SPARSE_INDEX_CORPUS_ID: str = os.getenv(
         "SPARSE_INDEX_CORPUS_ID", ""
     ).strip()
+    # P6-A后台重建协调：文档增删后自动重建持久化Sparse索引；仅在
+    # SPARSE_BACKEND=bm25s_mmap时生效。评测/排查可显式关闭。
+    SPARSE_AUTO_REBUILD: bool = _env_bool("SPARSE_AUTO_REBUILD", True)
     RRF_K: int = int(os.getenv("RRF_K", "60"))
     # P2-3 Trace 会返回未入选候选的完整原文，仅在可信调试环境显式开启。
     RETRIEVAL_TRACE_ENABLED: bool = _env_bool(

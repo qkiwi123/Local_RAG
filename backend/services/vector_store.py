@@ -17,6 +17,7 @@ import chromadb
 from chromadb import PersistentClient
 from backend.config import settings
 from backend.models.schemas import DocumentChunk
+from backend.services import sparse_lifecycle
 from backend.services.embedding import embed_texts, embed_query
 
 
@@ -45,6 +46,20 @@ def get_index_revision() -> int:
     return _index_revision
 
 
+def _ensure_sparse_marked_dirty(reason: str) -> None:
+    """Chroma 变更前持久标脏活动 Sparse 指针；标脏失败则拒绝变更。
+
+    P6-A 不变量：先失效索引，再改数据。无活动指针时是安全的空操作。
+    """
+    sparse_lifecycle.mark_corpus_changing(reason)
+
+
+def get_chunk_count() -> int:
+    """返回 Chroma collection 当前 chunk 总数（供持久化索引加载复核）。"""
+    return _collection.count()
+
+
+@sparse_lifecycle.transaction
 def add_chunks(chunks: List[DocumentChunk]) -> int:
     """
     将文本块批量添加到向量数据库。
@@ -116,13 +131,21 @@ def add_chunks(chunks: List[DocumentChunk]) -> int:
     # 批量生成向量
     embeddings = embed_texts(texts)
 
-    _collection.add(
-        ids=ids,
-        documents=texts,
-        embeddings=embeddings,
-        metadatas=metadatas,
+    # 先持久标脏活动Sparse索引，再写入Chroma；标脏失败则整个入库失败。
+    _ensure_sparse_marked_dirty(
+        "chroma_add:" + ",".join(sorted({str(m.get("document_id")) for m in metadatas}))
     )
-    _bump_index_revision()
+
+    try:
+        _collection.add(
+            ids=ids,
+            documents=texts,
+            embeddings=embeddings,
+            metadatas=metadatas,
+        )
+    finally:
+        # 存储抛错也可能已经部分写入，必须让旧内存缓存失效。
+        _bump_index_revision()
 
     return len(chunks)
 
@@ -209,6 +232,7 @@ def search(
     )
 
 
+@sparse_lifecycle.transaction
 def delete_document(document_name: str) -> bool:
     """
     按文档名删除所有关联的文本块。
@@ -223,18 +247,25 @@ def delete_document(document_name: str) -> bool:
         是否删除成功
     """
     try:
-        _collection.delete(where={"document_name": document_name})
-        _bump_index_revision()
+        _ensure_sparse_marked_dirty(f"chroma_delete_by_name:{document_name}")
+        try:
+            _collection.delete(where={"document_name": document_name})
+        finally:
+            _bump_index_revision()
         return True
     except Exception:
         return False
 
 
+@sparse_lifecycle.transaction
 def delete_document_by_id(document_id: str) -> bool:
     """按稳定 document_id 删除文档的全部文本块。"""
     try:
-        _collection.delete(where={"document_id": document_id})
-        _bump_index_revision()
+        _ensure_sparse_marked_dirty(f"chroma_delete:{document_id}")
+        try:
+            _collection.delete(where={"document_id": document_id})
+        finally:
+            _bump_index_revision()
         return True
     except Exception:
         return False

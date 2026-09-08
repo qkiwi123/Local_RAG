@@ -322,6 +322,10 @@ def main(argv: list[str] | None = None) -> int:
     os.environ["METADATA_DB_PATH"] = str(metadata_db_path)
     os.environ["UPLOAD_DIR"] = str(upload_dir)
     os.environ["EMBEDDING_MODEL"] = model
+    # 独立Chroma重建不得通过vector_store的生命周期钩子标脏生产Sparse。
+    os.environ["SPARSE_INDEX_ROOT"] = str(target_index_dir / ".sparse-shadow")
+    os.environ["SPARSE_BACKEND"] = "rank_bm25_memory"
+    os.environ["SPARSE_AUTO_REBUILD"] = "false"
 
     from backend.services import vector_store
     from backend.services.chunker import chunk_units

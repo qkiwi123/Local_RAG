@@ -19,6 +19,7 @@ from backend.services.retriever import (
     retrieve_with_trace,
     format_retrieval_context,
 )
+from backend.services.sparse_index import SparseIndexError
 from backend.services.retrieval_trace import finalize_chat_trace
 from backend.services.llm import (
     ask,
@@ -161,6 +162,15 @@ async def chat(request: ChatRequest, http_request: Request):
             tag_filter=tag_filter,
             runtime_config=runtime.retrieval,
         )
+    except SparseIndexError as error:
+        # P6-A：Sparse索引不可用（dirty/缺失/损坏/错配）时显式失败，
+        # 不静默降级；管理员可将检索模式切换为dense临时恢复。
+        if persistent:
+            fail_chat(request.request_id, "sparse_index_unavailable")
+        raise HTTPException(
+            status_code=503,
+            detail=f"检索索引不可用，请稍后重试或联系管理员（{type(error).__name__}: {error}）",
+        ) from error
     except Exception as error:
         if persistent:
             fail_chat(request.request_id, "retrieval_error")
@@ -349,6 +359,15 @@ async def _stream_chat_events(
                 tag_filter=tag_filter,
                 runtime_config=runtime.retrieval if runtime else None,
             )
+        except SparseIndexError as error:
+            if persistent:
+                fail_chat(request.request_id, "sparse_index_unavailable")
+            yield _ndjson(
+                "error",
+                code="sparse_index_unavailable",
+                message=f"检索索引不可用，请稍后重试（{type(error).__name__}: {error}）",
+            )
+            return
         except Exception:
             if persistent:
                 fail_chat(request.request_id, "retrieval_error")

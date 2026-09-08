@@ -14,7 +14,7 @@ from rank_bm25 import BM25Okapi
 
 from backend.config import settings
 from backend.services import vector_store
-from backend.services import bm25s_store
+from backend.services import bm25s_store, sparse_lifecycle
 from backend.services.parsers.constants import PARSER_VERSION
 from backend.services.sparse_index import (
     SparseIndexCorruptError,
@@ -35,6 +35,18 @@ _persistent_cache: dict[str, Any] = {
     "key": None,
     "index": None,
 }
+# 当前进程已确认与活动generation一致的语料revision。
+# 新进程从0开始（磁盘指针ready即代表与启动时语料一致）；后台重建在
+# 发布成功后绑定构建时的revision，使"变更→重建→恢复"在进程内闭环。
+# 缓存清理不改变已经验证过的语料绑定；绑定与mmap句柄生命周期独立。
+_bound_revision = 0
+
+
+def bind_process_revision(revision: int) -> None:
+    """后台重建发布成功后，把活动generation绑定到构建时的语料revision。"""
+    global _bound_revision
+    with _lock:
+        _bound_revision = int(revision)
 
 
 def clear_cache() -> None:
@@ -99,6 +111,11 @@ def _expected_contract(*, k1: float, b: float) -> dict[str, Any]:
     }
 
 
+def expected_contract(*, k1: float, b: float) -> dict[str, Any]:
+    """查询端与后台重建端共用的持久化索引合同。"""
+    return _expected_contract(k1=k1, b=b)
+
+
 def _active_token(root: Path) -> str | None:
     try:
         payload = (root / "active.json").read_bytes()
@@ -107,29 +124,85 @@ def _active_token(root: Path) -> str | None:
     return hashlib.sha256(payload).hexdigest()
 
 
-def _get_persistent_index(*, k1: float, b: float) -> tuple[Any, float]:
+def _check_corpus_bound() -> None:
+    """持久化generation只对它构建时所绑定的语料revision有效。
+
+    新进程绑定0：任何进程内已发生的变更（revision>0）都会先判dirty；
+    后台重建发布成功后绑定构建时revision，恢复全库查询。
+    """
+    if vector_store.get_index_revision() != _bound_revision:
+        raise SparseIndexDirtyError(
+            "当前进程Chroma语料已变化，持久化Sparse generation已失效"
+        )
+
+
+def _load_active_index(
+    *, k1: float, b: float
+) -> tuple[Any, float, tuple[Any, ...]]:
+    """加载并复核活动generation；在持锁状态下调用。
+
+    复核包含合同、manifest hash，以及manifest chunk数与当前Chroma
+    数量的绊线对照——后者以极低成本拦截"换库/换语料后指针仍旧"的错配。
+    """
     root = Path(settings.SPARSE_INDEX_ROOT).resolve()
     contract = _expected_contract(k1=k1, b=b)
+    started = perf_counter()
+    loaded = bm25s_store.load_active(root, expected_contract=contract)
+    try:
+        manifest_count = int(
+            (loaded.manifest.get("corpus") or {}).get("chunk_count", -1)
+        )
+        live_count = vector_store.get_chunk_count()
+        if manifest_count != live_count:
+            raise SparseIndexMismatchError(
+                f"持久化Sparse chunk数({manifest_count})与当前Chroma({live_count})不一致"
+            )
+    except Exception:
+        loaded.close()
+        raise
+    load_ms = (perf_counter() - started) * 1000
     key = (
         str(root),
         _active_token(root),
         json.dumps(contract, ensure_ascii=False, sort_keys=True),
+        _bound_revision,
     )
+    return loaded, load_ms, key
+
+
+def _search_persistent(
+    tokens: list[str], top_k: int, *, k1: float, b: float
+) -> tuple[list[Any], Any, float]:
+    """取回持久化索引并完成TopK评分；评分在锁内执行。
+
+    mmap句柄的关闭也持同一把锁，保证"活动指针切换→旧索引关闭"不会
+    与并发查询正在使用的索引对象竞态。
+    """
     with _lock:
-        if _persistent_cache["key"] == key:
-            return _persistent_cache["index"], 0.0
-        previous = _persistent_cache.get("index")
-        if previous is not None:
-            previous.close()
-        _persistent_cache.update(key=None, index=None)
-        started = perf_counter()
-        loaded = bm25s_store.load_active(root, expected_contract=contract)
-        load_ms = (perf_counter() - started) * 1000
-        _persistent_cache.update(key=key, index=loaded)
-        return loaded, load_ms
+        root = Path(settings.SPARSE_INDEX_ROOT).resolve()
+        contract = _expected_contract(k1=k1, b=b)
+        key = (
+            str(root),
+            _active_token(root),
+            json.dumps(contract, ensure_ascii=False, sort_keys=True),
+            _bound_revision,
+        )
+        if _persistent_cache["key"] != key:
+            previous = _persistent_cache.get("index")
+            if previous is not None:
+                previous.close()
+            _persistent_cache.update(key=None, index=None)
+            loaded, load_ms, key = _load_active_index(k1=k1, b=b)
+            _persistent_cache.update(key=key, index=loaded)
+        else:
+            loaded = _persistent_cache["index"]
+            load_ms = 0.0
+        hits = loaded.search_tokens(tokens, top_k)
+        return hits, loaded, load_ms
 
 
-def get_runtime_status() -> dict[str, Any]:
+@sparse_lifecycle.serialized
+def get_runtime_status(*, k1: float | None = None, b: float | None = None) -> dict[str, Any]:
     """返回不扫描语料的Sparse运行状态；mmap首次检查会完成一次受控加载。"""
     backend = settings.SPARSE_BACKEND
     if backend == "rank_bm25_memory":
@@ -137,12 +210,16 @@ def get_runtime_status() -> dict[str, Any]:
             backend,
             sparse_contract_version=bm25s_store.TOKENIZER_CONTRACT,
         )
-    if vector_store.get_index_revision() != 0:
+    try:
+        _check_corpus_bound()
+    except SparseIndexDirtyError:
         return _diagnostics(backend, sparse_index_status="dirty")
     try:
-        loaded, load_ms = _get_persistent_index(
-            k1=float(settings.BM25_K1),
-            b=float(settings.BM25_B),
+        # 空查询不会评分，只完成受控加载并复用缓存。
+        _hits, loaded, load_ms = _search_persistent(
+            [], 0,
+            k1=float(settings.BM25_K1 if k1 is None else k1),
+            b=float(settings.BM25_B if b is None else b),
         )
     except SparseIndexMissingError:
         return _diagnostics(backend, sparse_index_status="missing")
@@ -203,6 +280,7 @@ def _get_index(
         return _cache["chunks"], _cache["model"]
 
 
+@sparse_lifecycle.serialized
 def search(
     query: str,
     top_k: int,
@@ -229,15 +307,13 @@ def search(
         and allowed_document_ids is None
     )
     if use_persistent:
-        if vector_store.get_index_revision() != 0:
-            raise SparseIndexDirtyError(
-                "当前进程已修改Chroma语料，持久化Sparse generation已失效"
-            )
-        loaded, load_ms = _get_persistent_index(
+        _check_corpus_bound()
+        hits, loaded, load_ms = _search_persistent(
+            tokenize(query),
+            top_k,
             k1=effective_k1,
             b=effective_b,
         )
-        hits = loaded.search_tokens(tokenize(query), top_k)
         chunk_ids = [hit.chunk_id for hit in hits]
         chunks = vector_store.get_chunks_by_ids(chunk_ids)
         by_id = {row["chunk_id"]: row for row in chunks}

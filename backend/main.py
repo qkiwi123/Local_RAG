@@ -147,6 +147,19 @@ async def startup_event():
     app.state.runtime_settings_manager = RuntimeSettingsManager()
     recover_interrupted_requests()
     start_background_warmup()
+    # P6-A：Sparse后台重建协调。仅bm25s_mmap部署生效；启动时识别
+    # dirty/错配指针并自愈重建，重启不会把持久化dirty悄悄恢复成ready。
+    try:
+        from backend.services import sparse_rebuild
+
+        sparse_rebuild.configure(
+            runtime_provider=lambda: app.state.runtime_settings_manager.snapshot()
+        )
+        _sparse_worker = sparse_rebuild.start_worker(recovery=True)
+        if _sparse_worker.get("started"):
+            print("[启动] Sparse后台重建协调器已启动（bm25s_mmap）")
+    except Exception as error:  # noqa: BLE001 协调器故障不阻断服务启动
+        print(f"[启动] Sparse后台重建协调器启动失败: {error}")
     print(f"[启动] RAG Knowledge Base API v0.1.0")
     print(
         f"[启动] Embedding 模型: {settings.EMBEDDING_MODEL}; "
@@ -160,3 +173,14 @@ async def startup_event():
     print(f"[启动] LLM 模型: {settings.DEEPSEEK_MODEL}")
     print(f"[启动] Chroma 数据目录: {settings.CHROMA_PERSIST_DIR}")
     print(f"[启动] 文档元数据: {settings.METADATA_DB_PATH}")
+
+
+@app.on_event("shutdown")
+async def shutdown_event():
+    """停止后台任务；Sparse重建worker退出前不再发布新generation。"""
+    try:
+        from backend.services import sparse_rebuild
+
+        sparse_rebuild.stop_worker(timeout=5.0)
+    except Exception:  # noqa: BLE001
+        pass

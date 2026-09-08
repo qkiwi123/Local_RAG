@@ -105,6 +105,15 @@ async def patch_settings(payload: SettingsPatchRequest, request: Request):
         from backend.services.sparse_retriever import clear_cache
 
         clear_cache()
+        # P6-A：BM25参数属于持久化索引合同，变更后必须重建generation。
+        try:
+            from backend.services import sparse_rebuild
+
+            sparse_rebuild.request_rebuild(
+                "settings_changed:" + ",".join(sorted(changed_fields))
+            )
+        except Exception:  # noqa: BLE001
+            pass
         effects.append("bm25_cache_cleared")
     if llm_changed or retrieval_changed:
         effects.append("next_request")
@@ -165,6 +174,15 @@ async def reset_settings(payload: SettingsResetRequest, request: Request):
         from backend.services.sparse_retriever import clear_cache
 
         clear_cache()
+        # P6-A：BM25参数属于持久化索引合同，变更后必须重建generation。
+        try:
+            from backend.services import sparse_rebuild
+
+            sparse_rebuild.request_rebuild(
+                "settings_reset:" + ",".join(sorted(changed))
+            )
+        except Exception:  # noqa: BLE001
+            pass
         effects.append("bm25_cache_cleared")
     if llm_changed or retrieval_changed:
         effects.append("next_request")

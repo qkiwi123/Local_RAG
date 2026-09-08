@@ -274,7 +274,12 @@ def build_runtime_status(
         settings.METADATA_DB_PATH,
         settings.UPLOAD_DIR,
     )
-    sparse_status = sparse_retriever.get_runtime_status()
+    sparse_status = sparse_retriever.get_runtime_status(
+        k1=snapshot.retrieval.bm25_k1, b=snapshot.retrieval.bm25_b
+    )
+    from backend.services import sparse_rebuild
+
+    rebuild = sparse_rebuild.get_rebuild_status()
     return SettingsRuntimeStatusResponse(
         revision=snapshot.revision,
         updated_at=snapshot.updated_at,
@@ -301,5 +306,11 @@ def build_runtime_status(
             sparse_manifest_hash=sparse_status["sparse_manifest_hash"],
             sparse_index_load_ms=sparse_status["sparse_index_load_ms"],
             sparse_contract_version=sparse_status["sparse_contract_version"],
+            sparse_rebuild_enabled=rebuild["enabled"],
+            sparse_rebuild_pending=rebuild["pending"],
+            sparse_rebuild_running=rebuild["running"],
+            sparse_rebuild_last_outcome=(
+                rebuild["last_result"].get("outcome")
+            ),
         ),
     )

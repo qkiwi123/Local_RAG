@@ -12,6 +12,14 @@ from backend.services.sparse_index import (
 from backend.services.sparse_tokenizer import tokenize as pure_tokenize
 
 
+@pytest.fixture(autouse=True)
+def _isolate_revision_binding(monkeypatch):
+    monkeypatch.setattr(sparse_retriever, "_bound_revision", 0)
+    sparse_retriever.clear_cache()
+    yield
+    sparse_retriever.clear_cache()
+
+
 def _chunk(chunk_id: str, content: str) -> dict:
     return {
         "chunk_id": chunk_id,
@@ -265,6 +273,11 @@ def _install_persistent_generation(monkeypatch, tmp_path):
     monkeypatch.setattr(
         sparse_retriever.vector_store, "get_index_revision", lambda: 0
     )
+    monkeypatch.setattr(
+        sparse_retriever.vector_store,
+        "get_chunk_count",
+        lambda: len(chunks),
+    )
     sparse_retriever.clear_cache()
     return chunks
 
@@ -319,7 +332,7 @@ def test_persistent_process_revision_is_dirty(monkeypatch, tmp_path):
         sparse_retriever.vector_store, "get_index_revision", lambda: 1
     )
 
-    with pytest.raises(SparseIndexDirtyError, match="已修改"):
+    with pytest.raises(SparseIndexDirtyError, match="已变化"):
         sparse_retriever.search("二叉树", 2)
 
 
@@ -337,7 +350,7 @@ def test_persistent_empty_scope_does_not_touch_any_index(monkeypatch, tmp_path):
     _install_persistent_generation(monkeypatch, tmp_path)
     sparse_retriever.clear_cache()
     monkeypatch.setattr(
-        sparse_retriever, "_get_persistent_index", lambda **kwargs: pytest.fail()
+        sparse_retriever, "_search_persistent", lambda *args, **kwargs: pytest.fail()
     )
     monkeypatch.setattr(
         sparse_retriever, "_get_index", lambda *args, **kwargs: pytest.fail()
@@ -355,8 +368,8 @@ def test_persistent_nonempty_filter_keeps_memory_subcorpus(monkeypatch, tmp_path
     )
     monkeypatch.setattr(
         sparse_retriever,
-        "_get_persistent_index",
-        lambda **kwargs: pytest.fail("过滤范围不能使用全库持久化索引"),
+        "_search_persistent",
+        lambda *args, **kwargs: pytest.fail("过滤范围不能使用全库持久化索引"),
     )
     diagnostics = {}
 
@@ -400,6 +413,43 @@ def test_persistent_dirty_pointer_invalidates_loaded_cache(monkeypatch, tmp_path
         sparse_retriever.search("二叉树", 2)
 
     assert sparse_retriever._persistent_cache["index"] is None
+
+
+def test_persistent_bound_revision_serves_post_rebuild_queries(
+    monkeypatch, tmp_path
+):
+    """后台重建发布后绑定revision：同revision可查，再变更立刻失效。"""
+    _install_persistent_generation(monkeypatch, tmp_path)
+    monkeypatch.setattr(
+        sparse_retriever.vector_store, "get_index_revision", lambda: 3
+    )
+    sparse_retriever.bind_process_revision(3)
+
+    rows = sparse_retriever.search("二叉树", 2)
+    assert [row["chunk_id"] for row in rows] == ["c1"]
+
+    monkeypatch.setattr(
+        sparse_retriever.vector_store, "get_index_revision", lambda: 4
+    )
+    with pytest.raises(SparseIndexDirtyError, match="已失效"):
+        sparse_retriever.search("二叉树", 2)
+
+
+def test_persistent_chunk_count_tripwire_detects_swapped_corpus(
+    monkeypatch, tmp_path
+):
+    """换库后chunk数不一致：指针即使ready也显式报mismatch。"""
+    _install_persistent_generation(monkeypatch, tmp_path)
+    monkeypatch.setattr(
+        sparse_retriever.vector_store, "get_chunk_count", lambda: 999
+    )
+    sparse_retriever.clear_cache()
+
+    with pytest.raises(SparseIndexMismatchError, match="不一致"):
+        sparse_retriever.search("二叉树", 2)
+
+    status = sparse_retriever.get_runtime_status()
+    assert status["sparse_index_status"] == "mismatch"
 
 
 def test_sparse_runtime_status_reports_loaded_generation(monkeypatch, tmp_path):

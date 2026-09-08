@@ -37,6 +37,7 @@ from backend.services.parsers import (
     PARSER_VERSION,
     parse_document_structure,
 )
+from backend.services import sparse_rebuild, sparse_lifecycle
 from backend.services.tag_store import (
     TagValidationError,
     delete_document_tags,
@@ -115,6 +116,12 @@ def _cleanup_failed_ingest(
             mark_failed(document_id, str(error))
         except Exception:
             pass
+    # 失败清理也可能已经动过语料（部分写入后回滚）；请求一次后台重建，
+    # 若语料已回到原状，协调器会翻回ready而不是重复构建。
+    try:
+        sparse_rebuild.request_rebuild(f"ingest_failed:{document_id}")
+    except Exception:  # noqa: BLE001
+        logger.exception("Sparse重建触发失败: document_id=%s", document_id)
 
 
 def _normalize_tags(tags: list[str] | None) -> list[str]:
@@ -159,6 +166,9 @@ async def upload_document(
     final_path = upload_dir / stored_name
     record_created = False
 
+    # file.read()已完成；以下提交/补偿区间没有await，不跨异步挂起持线程锁。
+    transaction = sparse_lifecycle.document_transaction(f"upload:{document_id}")
+    transaction.__enter__()
     try:
         with open(temp_path, "xb") as output:
             output.write(content)
@@ -220,6 +230,12 @@ async def upload_document(
         )
         os.replace(temp_path, final_path)
         mark_ready(document_id, chunk_count)
+        # P6-A：事务完成后请求后台重建；连续上传合并为一代。
+        # 重建触发失败不能回滚一次已成功的入库。
+        try:
+            sparse_rebuild.request_rebuild(f"upload:{document_id}")
+        except Exception:  # noqa: BLE001
+            logger.exception("Sparse重建触发失败: document_id=%s", document_id)
 
         return UploadResponse(
             message="上传成功，文档已入库",
@@ -253,6 +269,8 @@ async def upload_document(
             record_created,
         )
         raise HTTPException(status_code=500, detail=f"文档处理失败: {error}") from error
+    finally:
+        transaction.__exit__(None, None, None)
 
 
 @router.get("/documents")
@@ -420,6 +438,7 @@ async def preview_document(document_id: str):
     )
 
 
+@sparse_lifecycle.transaction
 def _delete_registered_document(document_id: str) -> dict:
     record = get_document(document_id)
     if not record:
@@ -439,6 +458,11 @@ def _delete_registered_document(document_id: str) -> dict:
     upload_dir = Path(settings.UPLOAD_DIR)
     _safe_unlink(upload_dir / record["stored_name"], upload_dir)
     delete_record(document_id)
+    # P6-A：删除事务完成后请求后台重建；触发失败不回滚已成功的删除。
+    try:
+        sparse_rebuild.request_rebuild(f"delete:{document_id}")
+    except Exception:  # noqa: BLE001
+        logger.exception("Sparse重建触发失败: document_id=%s", document_id)
     return record
 
 
