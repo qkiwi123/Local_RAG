@@ -182,6 +182,12 @@ def test_retrieve_only_trace_is_explicit_serialized_and_does_not_change_rows(
     assert traced["trace"]["stages"][3]["candidates"][0]["reranker_score"] == 2.4
     assert traced["trace"]["selected_chunk_ids"] == ["c1"]
     assert traced["trace"]["timings_ms"]["total"] >= 0.0
+    assert "followup_rewrite" not in traced["trace"]["timings_ms"]
+    assert "citation_extraction" not in traced["trace"]["timings_ms"]
+    assert "persistence" not in traced["trace"]["timings_ms"]
+    assert "timing_contract_version" not in traced["trace"]
+    assert traced["trace"]["settings_revision"] is None
+    assert traced["trace"]["filtered_document_count"] is None
 
 
 def test_retrieve_only_forwards_explicit_runtime_config_without_global_mutation(

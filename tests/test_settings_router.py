@@ -618,6 +618,11 @@ def test_retrieval_only_sync_stream_and_followup_make_zero_llm_calls(
         assert "生成模型已关闭" in payload["answer"]
         assert payload["citations"][0]["document_name"] == "handbook.pdf"
         assert payload["trace"]["timings_ms"]["llm_generation"] == 0
+        assert payload["trace"]["timing_contract_version"] == "chat-v2"
+        assert payload["trace"]["followup_rewrite_status"] == "not_applicable"
+        assert payload["trace"]["timings_ms"]["followup_rewrite"] is None
+        assert payload["trace"]["timings_ms"]["citation_extraction"] is not None
+        assert payload["trace"]["timings_ms"]["persistence"] is not None
         assert payload["trace"]["settings_revision"] == 1
         assert payload["trace"]["llm"] == {
             "called": False,
@@ -643,6 +648,10 @@ def test_retrieval_only_sync_stream_and_followup_make_zero_llm_calls(
     assert events[2]["citations"][0]["document_name"] == "handbook.pdf"
     assert events[-1]["trace"]["settings_revision"] == 1
     assert events[-1]["trace"]["llm"]["called"] is False
+    assert events[-1]["trace"]["timings_ms"]["llm_generation"] == 0
+    assert events[-1]["trace"]["timings_ms"]["persistence"] is None
+    assert events[-1]["trace"]["timings_ms"]["time_to_first_delta"] is not None
+    assert events[-1]["trace"]["timings_ms"]["delta_window"] == 0
 
 
 def test_chat_endpoints_use_the_effective_retrieval_snapshot(

@@ -7,6 +7,8 @@ import { TraceDrawer } from "../components/TraceDrawer";
 const trace: RetrievalTrace = {
   retrieval_mode: "dense",
   reranker_enabled: true,
+  timing_contract_version: "chat-v2",
+  followup_rewrite_status: "succeeded",
   settings_revision: 7,
   effective_config: {
     retrieval_mode: "hybrid",
@@ -54,7 +56,12 @@ const trace: RetrievalTrace = {
   timings_ms: {
     query_embedding: 20,
     dense_retrieval: 30,
-    total: 60,
+    followup_rewrite: 5,
+    citation_extraction: 2,
+    persistence: 3,
+    time_to_first_delta: 70,
+    delta_window: 20,
+    total: 100,
   },
   tag_filter: ["课程"],
   sparse_backend: "bm25s_mmap",
@@ -103,9 +110,16 @@ describe("TraceDrawer 检索详情", () => {
     expect(screen.getByText("bm25s_mmap")).toBeVisible();
     expect(screen.getByText("generation-1")).toBeVisible();
     expect(screen.getByText("加载 4.5 ms")).toBeVisible();
-    expect(screen.getByText("20.0 ms")).toBeVisible();
-    expect(screen.getByText("其他阶段（追问改写/历史/引用提取/持久化等）")).toBeVisible();
-    expect(document.querySelectorAll(".trace-timing-row")).toHaveLength(4);
+    expect(screen.getAllByText("20.0 ms")).toHaveLength(2);
+    expect(screen.getByText("chat-v2 · 请求入口至持久化前")).toBeVisible();
+    expect(screen.getByText("成功")).toBeVisible();
+    expect(screen.getAllByText("追问改写")).toHaveLength(2);
+    expect(screen.getByText("引用提取")).toBeVisible();
+    expect(screen.getByText("总耗时内未拆分 / 调度开销")).toBeVisible();
+    expect(screen.getByText("会话提交（不含 Trace 写入）")).toBeVisible();
+    expect(screen.getByText("请求入口到首个 Delta")).toBeVisible();
+    expect(screen.getByText("首个到最后一个 Delta 窗口")).toBeVisible();
+    expect(screen.queryByText(/其他阶段/)).not.toBeInTheDocument();
     expect(
       document.querySelector(
         ".trace-drawer.ant-drawer-open .app-drawer-resizer",
@@ -124,9 +138,16 @@ describe("TraceDrawer 检索详情", () => {
       <TraceDrawer
         trace={{
           ...trace,
+          timing_contract_version: null,
+          followup_rewrite_status: null,
           settings_revision: null,
           effective_config: null,
           llm: null,
+          timings_ms: {
+            query_embedding: 20,
+            dense_retrieval: 30,
+            total: 60,
+          },
         }}
         onClose={() => undefined}
       />,
@@ -134,5 +155,10 @@ describe("TraceDrawer 检索详情", () => {
 
     expect(screen.getAllByText("旧 Trace 未记录").length).toBeGreaterThan(1);
     expect(screen.getByText("dense / 未记录")).toBeVisible();
+    expect(screen.getByText("总耗时（旧口径）")).toBeVisible();
+    expect(
+      screen.getByText("旧 Trace 未记录统一计量边界，不计算或归因阶段差值。"),
+    ).toBeVisible();
+    expect(screen.queryByText(/其他阶段/)).not.toBeInTheDocument();
   });
 });

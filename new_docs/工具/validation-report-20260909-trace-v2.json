@@ -1,0 +1,78 @@
+{
+  "status": "passed",
+  "markdown_files": 61,
+  "core_documents": 51,
+  "core_by_prefix": {
+    "BUG": 4,
+    "DES": 8,
+    "DEV": 13,
+    "OPS": 4,
+    "OPT": 6,
+    "REQ": 7,
+    "TEST": 9
+  },
+  "links_checked": 1919,
+  "directed_core_relations": 412,
+  "old_docs_mapped": 24,
+  "source_files_checked": 0,
+  "errors": [],
+  "checked_at": "2026-09-09T13:38:20+00:00",
+  "scope": "Documentation static checks only; no product test or model run.",
+  "self_tests": [
+    {
+      "case": "missing_target",
+      "passed": true,
+      "expected_error": "broken_link"
+    },
+    {
+      "case": "missing_anchor",
+      "passed": true,
+      "expected_error": "broken_anchor"
+    },
+    {
+      "case": "duplicate_id",
+      "passed": true,
+      "expected_error": "duplicate_id"
+    },
+    {
+      "case": "missing_metadata",
+      "passed": true,
+      "expected_error": "metadata"
+    },
+    {
+      "case": "invalid_status",
+      "passed": true,
+      "expected_error": "status"
+    },
+    {
+      "case": "absolute_path",
+      "passed": true,
+      "expected_error": "absolute_link"
+    },
+    {
+      "case": "navigation_gap",
+      "passed": true,
+      "expected_error": "navigation"
+    },
+    {
+      "case": "missing_upstream",
+      "passed": true,
+      "expected_error": "upstream"
+    },
+    {
+      "case": "missing_reverse",
+      "passed": true,
+      "expected_error": "backlink"
+    },
+    {
+      "case": "missing_mapping",
+      "passed": true,
+      "expected_error": "mapping"
+    },
+    {
+      "case": "fenced_example_ignored",
+      "passed": true,
+      "expected_error": null
+    }
+  ]
+}

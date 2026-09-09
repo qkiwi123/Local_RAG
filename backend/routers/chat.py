@@ -11,6 +11,7 @@ import asyncio
 import json
 import logging
 from time import perf_counter
+from typing import Literal
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import StreamingResponse
@@ -92,13 +93,19 @@ def _complete_chat_with_trace(
     citations,
     trace,
 ) -> dict:
-    """在同一工作线程内完成会话并保存 Trace，保持原有写入顺序。"""
+    """提交会话并保存 Trace；persistence 只计 complete_chat 事务。"""
+    persistence_started = perf_counter()
     response_fields = complete_chat(
         request_id=request_id,
         standalone_question=standalone_question,
         answer=answer,
         citations=citations,
     )
+    if trace is not None:
+        trace.timings_ms.persistence = round(
+            (perf_counter() - persistence_started) * 1000,
+            3,
+        )
     save_persistent_trace(response_fields, trace)
     return response_fields
 
@@ -115,9 +122,11 @@ async def chat(request: ChatRequest, http_request: Request):
     4. citation.extract_citations(answer, results) → 提取引用
     5. 返回 ChatResponse（answer + citations）
     """
-    total_started = perf_counter()
+    request_started = perf_counter()
     runtime = _runtime_snapshot(http_request)
     llm_called = False
+    followup_rewrite_ms = None
+    followup_rewrite_status = "not_applicable"
     question = request.question.strip()
 
     if not question:
@@ -164,6 +173,7 @@ async def chat(request: ChatRequest, http_request: Request):
         )
         if history_rows and runtime.llm.enabled:
             history_text = format_history(bounded_history(history_rows))
+            rewrite_started = perf_counter()
             try:
                 llm_called = True
                 standalone_question = await asyncio.to_thread(
@@ -172,7 +182,9 @@ async def chat(request: ChatRequest, http_request: Request):
                     history_text,
                     runtime,
                 )
+                followup_rewrite_status = "succeeded"
             except Exception as error:
+                followup_rewrite_status = "failed"
                 logger.warning(
                     "Follow-up rewrite failed: conversation_id=%s request_id=%s error=%s",
                     request.conversation_id,
@@ -180,6 +192,10 @@ async def chat(request: ChatRequest, http_request: Request):
                     type(error).__name__,
                 )
                 standalone_question = question
+            finally:
+                followup_rewrite_ms = (
+                    perf_counter() - rewrite_started
+                ) * 1000
 
     # 1. 语义检索
     try:
@@ -220,7 +236,10 @@ async def chat(request: ChatRequest, http_request: Request):
             context="",
             context_formatting_ms=0.0,
             llm_generation_ms=0.0,
-            total_ms=(perf_counter() - total_started) * 1000,
+            followup_rewrite_ms=followup_rewrite_ms,
+            followup_rewrite_status=followup_rewrite_status,
+            citation_extraction_ms=None,
+            total_ms=(perf_counter() - request_started) * 1000,
             runtime=runtime,
             llm_called=llm_called,
         )
@@ -265,7 +284,10 @@ async def chat(request: ChatRequest, http_request: Request):
 
     # 2. 格式化上下文
     context_started = perf_counter()
-    context = format_retrieval_context(retrieval_results)
+    context = await asyncio.to_thread(
+        format_retrieval_context,
+        retrieval_results,
+    )
     context_ms = (perf_counter() - context_started) * 1000
 
     # 3. 调用 LLM 生成答案
@@ -307,18 +329,23 @@ async def chat(request: ChatRequest, http_request: Request):
         llm_ms = (perf_counter() - llm_started) * 1000
 
     # 4. 提取引用来源
+    citation_started = perf_counter()
     citations = await asyncio.to_thread(
         extract_citations,
         answer,
         retrieval_results,
         preview_enabled=settings.CITATION_PREVIEW_ENABLED,
     )
+    citation_ms = (perf_counter() - citation_started) * 1000
     trace = finalize_chat_trace(
         retrieval.trace,
         context=context,
         context_formatting_ms=context_ms,
         llm_generation_ms=llm_ms,
-        total_ms=(perf_counter() - total_started) * 1000,
+        followup_rewrite_ms=followup_rewrite_ms,
+        followup_rewrite_status=followup_rewrite_status,
+        citation_extraction_ms=citation_ms,
+        total_ms=(perf_counter() - request_started) * 1000,
         runtime=runtime,
         llm_called=llm_called,
     )
@@ -364,6 +391,11 @@ async def _stream_chat_events(
     standalone_question: str,
     tag_filter: list[str],
     allowed_document_ids,
+    request_started: float,
+    followup_rewrite_ms: float | None = None,
+    followup_rewrite_status: Literal[
+        "not_applicable", "succeeded", "failed"
+    ] = "not_applicable",
     runtime: EffectiveSettingsSnapshot | None = None,
     llm_called: bool = False,
 ) -> "AsyncGenerator[str, None]":
@@ -375,6 +407,16 @@ async def _stream_chat_events(
     """
     persistent = request.conversation_id is not None
     completed = False
+    first_delta_at = None
+    last_delta_at = None
+
+    def mark_delta() -> None:
+        nonlocal first_delta_at, last_delta_at
+        now = perf_counter()
+        if first_delta_at is None:
+            first_delta_at = now
+        last_delta_at = now
+
     try:
         replay = started.get("replay")
         if replay:
@@ -401,7 +443,6 @@ async def _stream_chat_events(
             return
 
         user_message_id = started.get("user_message_id")
-        total_started = perf_counter()
         yield _ndjson(
             "meta",
             conversation_id=request.conversation_id,
@@ -447,15 +488,6 @@ async def _stream_chat_events(
 
         retrieval_results = retrieval.results
         if not retrieval_results:
-            trace = finalize_chat_trace(
-                retrieval.trace,
-                context="",
-                context_formatting_ms=0.0,
-                llm_generation_ms=0.0,
-                total_ms=(perf_counter() - total_started) * 1000,
-                runtime=runtime,
-                llm_called=llm_called,
-            )
             if tag_filter:
                 answer = (
                     "当前筛选范围内未找到与您问题相关的文档内容。"
@@ -466,6 +498,26 @@ async def _stream_chat_events(
                     "未找到与您问题相关的文档内容。"
                     "请确认已上传相关文档，或尝试换个问法。"
                 )
+            mark_delta()
+            trace = finalize_chat_trace(
+                retrieval.trace,
+                context="",
+                context_formatting_ms=0.0,
+                llm_generation_ms=0.0,
+                followup_rewrite_ms=followup_rewrite_ms,
+                followup_rewrite_status=followup_rewrite_status,
+                citation_extraction_ms=None,
+                time_to_first_delta_ms=(
+                    (first_delta_at - request_started) * 1000
+                    if first_delta_at is not None
+                    else None
+                ),
+                delta_window_ms=0.0,
+                total_ms=(perf_counter() - request_started) * 1000,
+                runtime=runtime,
+                llm_called=llm_called,
+            )
+            yield _ndjson("delta", text=answer)
             response_fields = {}
             if persistent:
                 response_fields = await asyncio.to_thread(
@@ -476,7 +528,6 @@ async def _stream_chat_events(
                     citations=[],
                     trace=trace,
                 )
-            yield _ndjson("delta", text=answer)
             yield _ndjson("citations", citations=[])
             completed = True
             yield _ndjson(
@@ -486,14 +537,18 @@ async def _stream_chat_events(
             )
             return
 
+        context_started = perf_counter()
         context = await asyncio.to_thread(
             format_retrieval_context,
             retrieval_results,
         )
+        context_ms = (perf_counter() - context_started) * 1000
         collected: list[str] = []
+        llm_ms = 0.0
         if runtime is not None and not runtime.llm.enabled:
             piece = build_retrieval_only_answer(len(retrieval_results))
             collected.append(piece)
+            mark_delta()
             yield _ndjson("delta", text=piece)
         elif persistent:
             llm_called = True
@@ -502,6 +557,7 @@ async def _stream_chat_events(
                 request.conversation_id,
             )
             history_text = format_history(bounded_history(history_rows))
+            llm_started = perf_counter()
             pieces = ask_with_history_stream_async(
                 request.question.strip(),
                 standalone_question,
@@ -511,27 +567,47 @@ async def _stream_chat_events(
             )
             async for piece in pieces:
                 collected.append(piece)
+                mark_delta()
                 yield _ndjson("delta", text=piece)
+            llm_ms = (perf_counter() - llm_started) * 1000
         else:
             llm_called = True
+            llm_started = perf_counter()
             pieces = ask_stream_async(request.question.strip(), context, runtime)
             async for piece in pieces:
                 collected.append(piece)
+                mark_delta()
                 yield _ndjson("delta", text=piece)
+            llm_ms = (perf_counter() - llm_started) * 1000
 
         answer = "".join(collected)
+        citation_started = perf_counter()
         citations = await asyncio.to_thread(
             extract_citations,
             answer,
             retrieval_results,
             preview_enabled=settings.CITATION_PREVIEW_ENABLED,
         )
+        citation_ms = (perf_counter() - citation_started) * 1000
         trace = finalize_chat_trace(
             retrieval.trace,
             context=context,
-            context_formatting_ms=0.0,
-            llm_generation_ms=0.0,
-            total_ms=(perf_counter() - total_started) * 1000,
+            context_formatting_ms=context_ms,
+            llm_generation_ms=llm_ms,
+            followup_rewrite_ms=followup_rewrite_ms,
+            followup_rewrite_status=followup_rewrite_status,
+            citation_extraction_ms=citation_ms,
+            time_to_first_delta_ms=(
+                (first_delta_at - request_started) * 1000
+                if first_delta_at is not None
+                else None
+            ),
+            delta_window_ms=(
+                (last_delta_at - first_delta_at) * 1000
+                if first_delta_at is not None and last_delta_at is not None
+                else None
+            ),
+            total_ms=(perf_counter() - request_started) * 1000,
             runtime=runtime,
             llm_called=llm_called,
         )
@@ -597,9 +673,12 @@ async def chat_stream(request: ChatRequest, http_request: Request):
     协议错误（会话不存在/冲突、非法标签、空问题）仍返回常规 HTTP 状态码；
     检索/生成期错误以 `error` 事件返回。中断采用方案甲：按失败处理。
     """
+    request_started = perf_counter()
     question = request.question.strip()
     runtime = _runtime_snapshot(http_request)
     llm_called = False
+    followup_rewrite_ms = None
+    followup_rewrite_status = "not_applicable"
     if not question:
         raise HTTPException(status_code=422, detail="问题不能为空")
     if len(question) > settings.CONVERSATION_MESSAGE_MAX_CHARS:
@@ -638,6 +717,7 @@ async def chat_stream(request: ChatRequest, http_request: Request):
             )
             if history_rows and runtime.llm.enabled:
                 history_text = format_history(bounded_history(history_rows))
+                rewrite_started = perf_counter()
                 try:
                     llm_called = True
                     standalone_question = await asyncio.to_thread(
@@ -646,7 +726,9 @@ async def chat_stream(request: ChatRequest, http_request: Request):
                         history_text,
                         runtime,
                     )
+                    followup_rewrite_status = "succeeded"
                 except Exception as error:
+                    followup_rewrite_status = "failed"
                     logger.warning(
                         "Follow-up rewrite failed: conversation_id=%s request_id=%s error=%s",
                         request.conversation_id,
@@ -654,6 +736,10 @@ async def chat_stream(request: ChatRequest, http_request: Request):
                         type(error).__name__,
                     )
                     standalone_question = question
+                finally:
+                    followup_rewrite_ms = (
+                        perf_counter() - rewrite_started
+                    ) * 1000
 
     return StreamingResponse(
         _stream_chat_events(
@@ -662,6 +748,9 @@ async def chat_stream(request: ChatRequest, http_request: Request):
             standalone_question,
             tag_filter,
             allowed_document_ids,
+            request_started,
+            followup_rewrite_ms,
+            followup_rewrite_status,
             runtime,
             llm_called,
         ),

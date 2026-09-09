@@ -1,6 +1,6 @@
 """检索 Trace 构造：快照候选而不修改业务检索结果。"""
 
-from typing import Any
+from typing import Any, Literal
 
 from backend.models.schemas import (
     RetrievalContextStats,
@@ -172,6 +172,13 @@ def finalize_chat_trace(
     context: str,
     context_formatting_ms: float,
     llm_generation_ms: float,
+    followup_rewrite_ms: float | None = None,
+    followup_rewrite_status: Literal[
+        "not_applicable", "succeeded", "failed"
+    ] = "not_applicable",
+    citation_extraction_ms: float | None = None,
+    time_to_first_delta_ms: float | None = None,
+    delta_window_ms: float | None = None,
     total_ms: float,
     runtime: EffectiveSettingsSnapshot | None = None,
     llm_called: bool | None = None,
@@ -187,7 +194,19 @@ def finalize_chat_trace(
     )
     trace.timings_ms.context_formatting = round(context_formatting_ms, 3)
     trace.timings_ms.llm_generation = round(llm_generation_ms, 3)
+    trace.timings_ms.followup_rewrite = _optional_milliseconds(
+        followup_rewrite_ms
+    )
+    trace.timings_ms.citation_extraction = _optional_milliseconds(
+        citation_extraction_ms
+    )
+    trace.timings_ms.time_to_first_delta = _optional_milliseconds(
+        time_to_first_delta_ms
+    )
+    trace.timings_ms.delta_window = _optional_milliseconds(delta_window_ms)
     trace.timings_ms.total = round(total_ms, 3)
+    trace.timing_contract_version = "chat-v2"
+    trace.followup_rewrite_status = followup_rewrite_status
     if runtime is not None:
         trace.settings_revision = runtime.revision
         if trace.effective_config is None:
@@ -200,3 +219,8 @@ def finalize_chat_trace(
             model=runtime.llm.model,
         )
     return trace
+
+
+def _optional_milliseconds(value: float | None) -> float | None:
+    """保留未执行的 None；执行过的0毫秒仍是有效测量。"""
+    return None if value is None else round(max(0.0, value), 3)

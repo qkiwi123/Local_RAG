@@ -30,6 +30,8 @@ export interface Citation {
 export interface RetrievalTrace {
   retrieval_mode: string;
   reranker_enabled: boolean;
+  timing_contract_version?: "chat-v2" | null;
+  followup_rewrite_status?: "not_applicable" | "succeeded" | "failed" | null;
   settings_revision?: number | null;
   effective_config?: {
     retrieval_mode: string;
@@ -54,7 +56,22 @@ export interface RetrievalTrace {
   stages: Array<{ name: string; candidates: Array<Record<string, unknown>> }>;
   selected_chunk_ids: string[];
   context: { chunk_count: number; char_count: number; token_count: number };
-  timings_ms: Record<string, number>;
+  timings_ms: {
+    query_embedding?: number;
+    dense_retrieval?: number;
+    sparse_retrieval?: number;
+    rrf?: number;
+    rerank?: number;
+    context_formatting?: number;
+    llm_generation?: number;
+    followup_rewrite?: number | null;
+    citation_extraction?: number | null;
+    persistence?: number | null;
+    time_to_first_delta?: number | null;
+    delta_window?: number | null;
+    total?: number;
+    [key: string]: number | null | undefined;
+  };
   tag_filter: string[];
   filtered_document_count?: number | null;
   sparse_backend?: "rank_bm25_memory" | "bm25s_mmap" | null;

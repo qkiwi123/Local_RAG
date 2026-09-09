@@ -348,6 +348,87 @@ class TestChatAPI:
 
 
 class TestPersistentConversationAPI:
+    @pytest.mark.parametrize(
+        ("rewrite_fails", "expected_status"),
+        [(False, "succeeded"), (True, "failed")],
+    )
+    def test_followup_trace_records_rewrite_status_and_timing(
+        self,
+        client,
+        monkeypatch,
+        rewrite_fails,
+        expected_status,
+    ):
+        from backend.models.schemas import RetrievalTrace
+        from backend.routers import chat as chat_router
+
+        original_retrieve = chat_router.retrieve_with_trace
+
+        def retrieve_with_trace(*args, **kwargs):
+            response = original_retrieve(*args, **kwargs)
+            return response.model_copy(
+                update={
+                    "trace": RetrievalTrace(
+                        retrieval_mode="dense",
+                        reranker_enabled=False,
+                    )
+                }
+            )
+
+        def rewrite(question, history, runtime=None):
+            if rewrite_fails:
+                raise RuntimeError("改写失败")
+            return "独立检索问题"
+
+        monkeypatch.setattr(chat_router, "retrieve_with_trace", retrieve_with_trace)
+        monkeypatch.setattr(chat_router, "rewrite_followup", rewrite)
+        monkeypatch.setattr(
+            chat_router,
+            "ask_with_history",
+            lambda *args, **kwargs: "回答【来源1】",
+        )
+
+        conversation_id = client.post("/api/conversations", json={}).json()[
+            "conversation_id"
+        ]
+        first = client.post(
+            "/api/chat",
+            json={
+                "question": "第一问",
+                "conversation_id": conversation_id,
+                "request_id": "rewrite-trace-first",
+                "expected_last_message_id": None,
+            },
+        )
+        assert first.status_code == 200, first.text
+        second = client.post(
+            "/api/chat",
+            json={
+                "question": "那它呢？",
+                "conversation_id": conversation_id,
+                "request_id": "rewrite-trace-second",
+                "expected_last_message_id": first.json()["assistant_message_id"],
+            },
+        )
+
+        assert second.status_code == 200, second.text
+        trace = second.json()["trace"]
+        timings = trace["timings_ms"]
+        assert trace["timing_contract_version"] == "chat-v2"
+        assert trace["followup_rewrite_status"] == expected_status
+        assert timings["followup_rewrite"] is not None
+        assert timings["total"] >= timings["followup_rewrite"]
+        assert timings["persistence"] is not None
+        assert second.json()["standalone_question"] == (
+            "那它呢？" if rewrite_fails else "独立检索问题"
+        )
+
+        detail = client.get(f"/api/conversations/{conversation_id}").json()
+        persisted_trace = detail["messages"][-1]["trace"]
+        assert persisted_trace["followup_rewrite_status"] == expected_status
+        assert persisted_trace["timings_ms"]["followup_rewrite"] is not None
+        assert persisted_trace["timings_ms"]["persistence"] is not None
+
     def test_two_turn_conversation_persists_rewrites_and_replays(
         self,
         client,
@@ -519,17 +600,24 @@ class TestPersistentConversationAPI:
         assert first.json()["trace"]["retrieval_mode"] == "dense"
         assert first.json()["trace"]["settings_revision"] == 0
         assert first.json()["trace"]["llm"]["called"] is True
+        assert first.json()["trace"]["timing_contract_version"] == "chat-v2"
+        assert first.json()["trace"]["followup_rewrite_status"] == "not_applicable"
+        assert first.json()["trace"]["timings_ms"]["citation_extraction"] is not None
+        assert first.json()["trace"]["timings_ms"]["persistence"] is not None
+        assert first.json()["trace"]["timings_ms"]["time_to_first_delta"] is None
 
         detail = client.get(f"/api/conversations/{conversation_id}").json()
         assistant = detail["messages"][1]
         assert assistant["trace"]["retrieval_mode"] == "dense"
         assert assistant["trace"]["settings_revision"] == 0
+        assert assistant["trace"]["timings_ms"]["persistence"] is not None
 
         replay = client.post("/api/chat", json=payload)
         assert replay.status_code == 200
         assert replay.json()["trace"]["retrieval_mode"] == "dense"
         assert replay.json()["trace"]["settings_revision"] == 0
         assert replay.json()["trace"]["llm"]["called"] is True
+        assert replay.json()["trace"]["timings_ms"]["persistence"] is not None
 
         deleted = client.delete(f"/api/conversations/{conversation_id}")
         assert deleted.status_code == 200

@@ -120,6 +120,16 @@ def _mock_stream(monkeypatch, pieces, raise_after=0):
     monkeypatch.setattr(chat_router, "ask_with_history_stream_async", fake_stream)
 
 
+def _trace():
+    from backend.models.schemas import RetrievalTrace
+
+    return RetrievalTrace(
+        retrieval_mode="dense",
+        reranker_enabled=False,
+        selected_chunk_ids=["unit-1_s0_e49"],
+    )
+
+
 def test_stream_event_sequence_and_answer_assembly(client, monkeypatch):
     _mock_retrieval(monkeypatch, rows=[_retrieval_row()])
     _mock_stream(monkeypatch, ["员工", "有", "5 天年假。"])
@@ -230,6 +240,92 @@ def test_live_http_stream_is_incremental_and_does_not_block_health(
     assert delta_times[-1] - delta_times[0] >= 0.1
 
 
+def test_stream_trace_records_generation_stages_and_server_milestones(
+    client,
+    monkeypatch,
+):
+    from backend.models.schemas import RetrievalResponse
+    from backend.routers import chat as chat_router
+
+    monkeypatch.setattr(
+        chat_router,
+        "retrieve_with_trace",
+        lambda *args, **kwargs: RetrievalResponse(
+            results=[_retrieval_row()],
+            trace=_trace(),
+        ),
+    )
+
+    async def delayed_stream(*args, **kwargs):
+        for piece in ("员工", "有年假【来源1】"):
+            await asyncio.sleep(0.02)
+            yield piece
+
+    monkeypatch.setattr(chat_router, "ask_stream_async", delayed_stream)
+
+    events = _events(
+        client.post("/api/chat/stream", json={"question": "年假？"})
+    )
+    trace = events[-1]["trace"]
+    timings = trace["timings_ms"]
+
+    assert trace["timing_contract_version"] == "chat-v2"
+    assert trace["followup_rewrite_status"] == "not_applicable"
+    assert timings["context_formatting"] >= 0
+    assert timings["llm_generation"] >= 30
+    assert timings["citation_extraction"] is not None
+    assert timings["persistence"] is None
+    assert timings["time_to_first_delta"] > 0
+    assert timings["delta_window"] >= 15
+    assert timings["total"] >= timings["time_to_first_delta"]
+
+
+def test_persistent_stream_saves_v2_timings_for_reload_and_replay(
+    client,
+    monkeypatch,
+):
+    from backend.models.schemas import RetrievalResponse
+    from backend.routers import chat as chat_router
+
+    monkeypatch.setattr(
+        chat_router,
+        "retrieve_with_trace",
+        lambda *args, **kwargs: RetrievalResponse(
+            results=[_retrieval_row()],
+            trace=_trace(),
+        ),
+    )
+    _mock_stream(monkeypatch, ["员工有", "5天年假【来源1】"])
+    conversation_id = client.post("/api/conversations", json={}).json()[
+        "conversation_id"
+    ]
+    payload = {
+        "question": "年假？",
+        "conversation_id": conversation_id,
+        "request_id": "stream-trace-v2-persistent",
+        "expected_last_message_id": None,
+    }
+
+    first_events = _events(client.post("/api/chat/stream", json=payload))
+    first_trace = first_events[-1]["trace"]
+    assert first_trace["timing_contract_version"] == "chat-v2"
+    assert first_trace["timings_ms"]["persistence"] is not None
+    assert first_trace["timings_ms"]["time_to_first_delta"] is not None
+    assert first_trace["timings_ms"]["delta_window"] is not None
+
+    detail = client.get(f"/api/conversations/{conversation_id}").json()
+    persisted_trace = detail["messages"][-1]["trace"]
+    assert persisted_trace["timings_ms"]["persistence"] == first_trace[
+        "timings_ms"
+    ]["persistence"]
+    assert persisted_trace["timings_ms"]["time_to_first_delta"] == first_trace[
+        "timings_ms"
+    ]["time_to_first_delta"]
+
+    replay_events = _events(client.post("/api/chat/stream", json=payload))
+    assert replay_events[-1]["trace"] == first_trace
+
+
 def test_stream_empty_retrieval_uses_fixed_message(client, monkeypatch):
     _mock_retrieval(monkeypatch, rows=[])
 
@@ -243,6 +339,36 @@ def test_stream_empty_retrieval_uses_fixed_message(client, monkeypatch):
     )
     assert "未找到与您问题相关的文档内容" in answer
     assert events[-1]["event"] == "done"
+
+
+def test_stream_empty_retrieval_trace_marks_unexecuted_stages(
+    client,
+    monkeypatch,
+):
+    from backend.models.schemas import RetrievalResponse
+    from backend.routers import chat as chat_router
+
+    monkeypatch.setattr(
+        chat_router,
+        "retrieve_with_trace",
+        lambda *args, **kwargs: RetrievalResponse(results=[], trace=_trace()),
+    )
+
+    events = _events(
+        client.post("/api/chat/stream", json={"question": "无答案问题"})
+    )
+    trace = events[-1]["trace"]
+    timings = trace["timings_ms"]
+
+    assert trace["timing_contract_version"] == "chat-v2"
+    assert trace["followup_rewrite_status"] == "not_applicable"
+    assert timings["context_formatting"] == 0
+    assert timings["llm_generation"] == 0
+    assert timings["followup_rewrite"] is None
+    assert timings["citation_extraction"] is None
+    assert timings["persistence"] is None
+    assert timings["time_to_first_delta"] is not None
+    assert timings["delta_window"] == 0
 
 
 def test_stream_tag_filter_empty_message_distinguishes_scope(client, monkeypatch):
@@ -380,7 +506,12 @@ def test_stream_interrupt_fails_chat_and_keeps_no_partial_answer(
 
     async def consume_partial():
         generator = chat_router._stream_chat_events(
-            request, started, "问题", [], None
+            request,
+            started,
+            "问题",
+            [],
+            None,
+            time.perf_counter(),
         )
         first = await generator.__anext__()
         second = await generator.__anext__()

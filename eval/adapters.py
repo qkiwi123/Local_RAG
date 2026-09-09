@@ -434,7 +434,24 @@ def _dump_retrieval_trace(trace) -> dict | None:
     if trace is None:
         return None
     if hasattr(trace, "model_dump"):
-        return trace.model_dump(mode="json")
+        payload = trace.model_dump(mode="json")
+        # 纯检索评测不执行聊天阶段；只省略本次新增的可选空字段，
+        # 避免历史动态聚合脚本调用 float(None)，同时保持既有空字段形状。
+        timings = payload.get("timings_ms")
+        if isinstance(timings, dict):
+            for field in (
+                "followup_rewrite",
+                "citation_extraction",
+                "persistence",
+                "time_to_first_delta",
+                "delta_window",
+            ):
+                if timings.get(field) is None:
+                    timings.pop(field, None)
+        for field in ("timing_contract_version", "followup_rewrite_status"):
+            if payload.get(field) is None:
+                payload.pop(field, None)
+        return payload
     if isinstance(trace, dict):
         return trace
     raise TypeError(f"不支持的 RetrievalTrace 类型：{type(trace)!r}")

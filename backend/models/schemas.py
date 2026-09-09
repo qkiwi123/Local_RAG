@@ -237,6 +237,11 @@ class RetrievalTraceTimings(BaseModel):
     rerank: float = 0.0
     context_formatting: float = 0.0
     llm_generation: float = 0.0
+    followup_rewrite: Optional[float] = Field(default=None, ge=0)
+    citation_extraction: Optional[float] = Field(default=None, ge=0)
+    persistence: Optional[float] = Field(default=None, ge=0)
+    time_to_first_delta: Optional[float] = Field(default=None, ge=0)
+    delta_window: Optional[float] = Field(default=None, ge=0)
     total: float = 0.0
 
 
@@ -273,6 +278,19 @@ class RetrievalTrace(BaseModel):
     """一次问答实际执行的完整检索链路。"""
     retrieval_mode: str
     reranker_enabled: bool
+    timing_contract_version: Optional[Literal["chat-v2"]] = Field(
+        default=None,
+        description=(
+            "聊天计量合同版本；chat-v2 的 total 为请求入口到持久化前，"
+            "旧 Trace 为 null"
+        ),
+    )
+    followup_rewrite_status: Optional[
+        Literal["not_applicable", "succeeded", "failed"]
+    ] = Field(
+        default=None,
+        description="追问改写状态；旧 Trace 为 null",
+    )
     settings_revision: Optional[int] = Field(
         default=None,
         ge=0,

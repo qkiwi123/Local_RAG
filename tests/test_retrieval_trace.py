@@ -141,13 +141,47 @@ def test_finalize_chat_trace_records_context_and_llm_timing(monkeypatch):
         context="上下文",
         context_formatting_ms=1.2,
         llm_generation_ms=3.4,
+        followup_rewrite_ms=0.8,
+        followup_rewrite_status="succeeded",
+        citation_extraction_ms=0.6,
+        time_to_first_delta_ms=4.2,
+        delta_window_ms=1.1,
         total_ms=5.6,
     )
 
     assert completed.context.char_count == 3
     assert completed.context.token_count == 9
     assert completed.timings_ms.llm_generation == 3.4
+    assert completed.timings_ms.followup_rewrite == 0.8
+    assert completed.timings_ms.citation_extraction == 0.6
+    assert completed.timings_ms.persistence is None
+    assert completed.timings_ms.time_to_first_delta == 4.2
+    assert completed.timings_ms.delta_window == 1.1
     assert completed.timings_ms.total == 5.6
+    assert completed.timing_contract_version == "chat-v2"
+    assert completed.followup_rewrite_status == "succeeded"
+
+
+def test_legacy_trace_without_v2_timings_remains_readable():
+    legacy = RetrievalTrace.model_validate(
+        {
+            "retrieval_mode": "dense",
+            "reranker_enabled": False,
+            "timings_ms": {
+                "query_embedding": 1.0,
+                "dense_retrieval": 2.0,
+                "total": 5.0,
+            },
+        }
+    )
+
+    assert legacy.timing_contract_version is None
+    assert legacy.followup_rewrite_status is None
+    assert legacy.timings_ms.followup_rewrite is None
+    assert legacy.timings_ms.citation_extraction is None
+    assert legacy.timings_ms.persistence is None
+    assert legacy.timings_ms.time_to_first_delta is None
+    assert legacy.timings_ms.delta_window is None
 
 
 def test_finalize_chat_trace_records_runtime_without_secret(monkeypatch):

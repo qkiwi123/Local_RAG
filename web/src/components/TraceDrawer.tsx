@@ -10,7 +10,7 @@ const STAGE_LABELS: Record<string, string> = {
   selected: "最终上下文",
 };
 
-const TIMING_LABELS: Record<string, string> = {
+const CORE_TIMING_LABELS: Record<string, string> = {
   query_embedding: "查询向量化",
   dense_retrieval: "Dense 检索",
   sparse_retrieval: "Sparse 检索",
@@ -19,6 +19,49 @@ const TIMING_LABELS: Record<string, string> = {
   context_formatting: "上下文组装",
   llm_generation: "LLM 生成",
 };
+
+const OPTIONAL_STAGE_LABELS: Record<string, string> = {
+  followup_rewrite: "追问改写",
+  citation_extraction: "引用提取",
+};
+
+const MILESTONE_LABELS: Record<string, string> = {
+  time_to_first_delta: "请求入口到首个 Delta",
+  delta_window: "首个到最后一个 Delta 窗口",
+};
+
+function TimingRow({
+  label,
+  value,
+  total,
+  emptyLabel,
+  progress = true,
+}: {
+  label: string;
+  value: number | null;
+  total: number;
+  emptyLabel: string;
+  progress?: boolean;
+}) {
+  return (
+    <div className="trace-timing-row">
+      <div className="trace-timing-row__header">
+        <span>{label}</span>
+        {value === null ? (
+          <Typography.Text type="secondary">{emptyLabel}</Typography.Text>
+        ) : (
+          <span>{value.toFixed(1)} ms</span>
+        )}
+      </div>
+      {progress && value !== null && (
+        <Progress
+          percent={Math.min(100, (value / Math.max(total, 1)) * 100)}
+          showInfo={false}
+        />
+      )}
+    </div>
+  );
+}
 
 export function TraceDrawer({
   trace,
@@ -30,12 +73,29 @@ export function TraceDrawer({
   const stages = trace.stages.filter((stage) => STAGE_LABELS[stage.name]);
   const timings = trace.timings_ms ?? {};
   const config = trace.effective_config;
-  const knownSum = Object.keys(TIMING_LABELS).reduce(
-    (sum, key) => sum + (Number(timings[key]) || 0),
+  const contractV2 = trace.timing_contract_version === "chat-v2";
+  const timingValue = (key: string): number | null => {
+    const value = timings[key];
+    return typeof value === "number" && Number.isFinite(value) ? value : null;
+  };
+  const inTotalLabels = {
+    ...CORE_TIMING_LABELS,
+    ...OPTIONAL_STAGE_LABELS,
+  };
+  const knownSum = Object.keys(inTotalLabels).reduce(
+    (sum, key) => sum + (timingValue(key) ?? 0),
     0,
   );
-  const total = Number(timings.total) || 0;
-  const other = Math.max(0, total - knownSum);
+  const total = timingValue("total") ?? 0;
+  const boundaryDifference = Math.max(0, total - knownSum);
+  const optionalEmptyLabel = contractV2 ? "本次未执行" : "旧 Trace 未记录";
+  const rewriteStatusLabels: Record<string, string> = {
+    succeeded: "成功",
+    failed: "失败，已回退原问题",
+    not_applicable: "本次不适用",
+  };
+  const rewriteStatus =
+    rewriteStatusLabels[trace.followup_rewrite_status ?? ""] ?? "旧 Trace 未记录";
 
   return (
     <ResizableDrawer
@@ -70,6 +130,18 @@ export function TraceDrawer({
               trace.settings_revision === null || trace.settings_revision === undefined
                 ? <Typography.Text type="secondary">旧 Trace 未记录</Typography.Text>
                 : <Tag color="blue">revision {trace.settings_revision}</Tag>,
+          },
+          {
+            key: "timing-contract",
+            label: "计量合同",
+            children: contractV2
+              ? "chat-v2 · 请求入口至持久化前"
+              : <Typography.Text type="secondary">旧 Trace 未记录</Typography.Text>,
+          },
+          {
+            key: "rewrite-status",
+            label: "追问改写",
+            children: rewriteStatus,
           },
           {
             key: "llm",
@@ -150,42 +222,77 @@ export function TraceDrawer({
 
       <Typography.Title level={5}>阶段耗时</Typography.Title>
       <div className="trace-timing-list">
-        {Object.entries(TIMING_LABELS).map(([key, label]) => {
-          const value = Number(timings[key]) || 0;
-          if (value <= 0) return null;
-          return (
-            <div className="trace-timing-row" key={key}>
-              <div className="trace-timing-row__header">
-                <span>{label}</span>
-                <span>{value.toFixed(1)} ms</span>
-              </div>
-              <Progress
-                percent={(value / Math.max(total, 1)) * 100}
-                showInfo={false}
-              />
-            </div>
-          );
-        })}
-        {other > 0 && (
-          <div className="trace-timing-row">
-            <div className="trace-timing-row__header">
-              <span>其他阶段（追问改写/历史/引用提取/持久化等）</span>
-              <span>{other.toFixed(1)} ms</span>
-            </div>
-            <Progress
-              percent={(other / Math.max(total, 1)) * 100}
-              showInfo={false}
+        {Object.entries(CORE_TIMING_LABELS).map(([key, label]) => {
+          const value = timingValue(key);
+          return value !== null && value > 0 ? (
+            <TimingRow
+              key={key}
+              label={label}
+              value={value}
+              total={total}
+              emptyLabel={optionalEmptyLabel}
             />
-          </div>
+          ) : null;
+        })}
+        {Object.entries(OPTIONAL_STAGE_LABELS).map(([key, label]) => (
+          <TimingRow
+            key={key}
+            label={label}
+            value={timingValue(key)}
+            total={total}
+            emptyLabel={optionalEmptyLabel}
+          />
+        ))}
+        {contractV2 && boundaryDifference > 0 && (
+          <TimingRow
+            label="总耗时内未拆分 / 调度开销"
+            value={boundaryDifference}
+            total={total}
+            emptyLabel={optionalEmptyLabel}
+          />
+        )}
+        {!contractV2 && (
+          <Typography.Paragraph type="secondary">
+            旧 Trace 未记录统一计量边界，不计算或归因阶段差值。
+          </Typography.Paragraph>
         )}
         <div className="trace-timing-row trace-timing-row--total">
           <div className="trace-timing-row__header">
-            <span>总耗时</span>
+            <span>{contractV2 ? "总耗时（持久化前）" : "总耗时（旧口径）"}</span>
             <span>{total.toFixed(1)} ms</span>
           </div>
           <Progress percent={100} strokeColor="#1677ff" showInfo={false} />
         </div>
       </div>
+
+      <Typography.Title level={5}>边界外阶段</Typography.Title>
+      <TimingRow
+        label="会话提交（不含 Trace 写入）"
+        value={timingValue("persistence")}
+        total={total}
+        emptyLabel={optionalEmptyLabel}
+        progress={false}
+      />
+      <Typography.Paragraph type="secondary">
+        会话提交发生在上述总耗时之后；为避免计量自引用，不包含保存 Trace 自身。
+      </Typography.Paragraph>
+
+      <Typography.Title level={5}>用户可见里程碑</Typography.Title>
+      <div className="trace-timing-list">
+        {Object.entries(MILESTONE_LABELS).map(([key, label]) => (
+          <TimingRow
+            key={key}
+            label={label}
+            value={timingValue(key)}
+            total={total}
+            emptyLabel={optionalEmptyLabel}
+            progress={false}
+          />
+        ))}
+      </div>
+      <Typography.Paragraph type="secondary">
+        里程碑在服务端记录，不等于浏览器实际收到数据的时间。
+      </Typography.Paragraph>
 
       <Typography.Title level={5} style={{ marginTop: 16 }}>
         候选阶段
