@@ -15,10 +15,10 @@ from dataclasses import dataclass, field
 from hashlib import sha256
 from threading import RLock
 from time import perf_counter
-from typing import Generator, List
+from typing import AsyncGenerator, Generator, List
 from urllib.parse import urlsplit
 
-from openai import OpenAI
+from openai import AsyncOpenAI, OpenAI
 from pydantic import SecretStr
 
 from backend.config import settings
@@ -47,6 +47,7 @@ class LLMDisabledError(RuntimeError):
 
 _CLIENT_CACHE_LIMIT = 4
 _CLIENT_CACHE: OrderedDict[tuple, OpenAI] = OrderedDict()
+_ASYNC_CLIENT_CACHE: OrderedDict[tuple, AsyncOpenAI] = OrderedDict()
 _CLIENT_CACHE_LOCK = RLock()
 
 
@@ -115,6 +116,20 @@ def _create_client(config: LLMCallConfig) -> OpenAI:
     )
 
 
+def _create_async_client(config: LLMCallConfig) -> AsyncOpenAI:
+    """创建原生异步客户端，避免流式迭代阻塞 ASGI 事件循环。"""
+    if config.api_key is None:
+        raise ValueError("未配置 LLM API Key")
+    secret = config.api_key.get_secret_value().strip()
+    if not secret:
+        raise ValueError("未配置 LLM API Key")
+    return AsyncOpenAI(
+        api_key=secret,
+        base_url=config.base_url,
+        timeout=config.timeout_seconds,
+    )
+
+
 def _get_client(config: LLMCallConfig | None = None) -> OpenAI:
     """按 revision 和连接参数惰性复用客户端，不把明文 Key 作为键。"""
     resolved = config or call_config_from_snapshot()
@@ -131,10 +146,29 @@ def _get_client(config: LLMCallConfig | None = None) -> OpenAI:
         return client
 
 
+def _get_async_client(
+    config: LLMCallConfig | None = None,
+) -> AsyncOpenAI:
+    """按同步客户端相同的安全键策略复用异步客户端。"""
+    resolved = config or call_config_from_snapshot()
+    key = _client_key(resolved)
+    with _CLIENT_CACHE_LOCK:
+        cached = _ASYNC_CLIENT_CACHE.get(key)
+        if cached is not None:
+            _ASYNC_CLIENT_CACHE.move_to_end(key)
+            return cached
+        client = _create_async_client(resolved)
+        _ASYNC_CLIENT_CACHE[key] = client
+        while len(_ASYNC_CLIENT_CACHE) > _CLIENT_CACHE_LIMIT:
+            _ASYNC_CLIENT_CACHE.popitem(last=False)
+        return client
+
+
 def clear_llm_client_cache() -> None:
     """保存 LLM 设置后释放缓存引用；已持有旧客户端的请求可继续完成。"""
     with _CLIENT_CACHE_LOCK:
         _CLIENT_CACHE.clear()
+        _ASYNC_CLIENT_CACHE.clear()
 
 
 def _require_enabled(config: LLMCallConfig) -> None:
@@ -250,6 +284,33 @@ def build_messages(question: str, context: str) -> List[dict]:
     ]
 
 
+def _build_history_messages(
+    question: str,
+    standalone_question: str,
+    context: str,
+    history: str,
+) -> List[dict]:
+    """构造带历史的统一消息，确保同步与异步入口使用相同提示词。"""
+    return [
+        {
+            "role": "system",
+            "content": SYSTEM_PROMPT + (
+                "\n7. 对话历史只用于理解指代和保持表达连贯，不能作为事实证据；"
+                "事实仍必须由本轮文档内容支持。"
+            ),
+        },
+        {
+            "role": "user",
+            "content": (
+                f"对话历史：\n{history or '（无）'}\n\n"
+                f"本轮检索问题：{standalone_question}\n\n"
+                f"本轮文档内容：\n{context}\n\n"
+                f"用户当前原始问题：{question}"
+            ),
+        },
+    ]
+
+
 def ask(
     question: str,
     context: str,
@@ -326,24 +387,12 @@ def ask_with_history(
     _require_enabled(config)
     response = _get_client(config).chat.completions.create(
         model=config.model,
-        messages=[
-            {
-                "role": "system",
-                "content": SYSTEM_PROMPT + (
-                    "\n7. 对话历史只用于理解指代和保持表达连贯，不能作为事实证据；"
-                    "事实仍必须由本轮文档内容支持。"
-                ),
-            },
-            {
-                "role": "user",
-                "content": (
-                    f"对话历史：\n{history or '（无）'}\n\n"
-                    f"本轮检索问题：{standalone_question}\n\n"
-                    f"本轮文档内容：\n{context}\n\n"
-                    f"用户当前原始问题：{question}"
-                ),
-            },
-        ],
+        messages=_build_history_messages(
+            question,
+            standalone_question,
+            context,
+            history,
+        ),
         temperature=config.temperature,
         max_tokens=config.max_tokens,
     )
@@ -362,24 +411,12 @@ def ask_with_history_stream(
     _require_enabled(config)
     stream = _get_client(config).chat.completions.create(
         model=config.model,
-        messages=[
-            {
-                "role": "system",
-                "content": SYSTEM_PROMPT + (
-                    "\n7. 对话历史只用于理解指代和保持表达连贯，不能作为事实证据；"
-                    "事实仍必须由本轮文档内容支持。"
-                ),
-            },
-            {
-                "role": "user",
-                "content": (
-                    f"对话历史：\n{history or '（无）'}\n\n"
-                    f"本轮检索问题：{standalone_question}\n\n"
-                    f"本轮文档内容：\n{context}\n\n"
-                    f"用户当前原始问题：{question}"
-                ),
-            },
-        ],
+        messages=_build_history_messages(
+            question,
+            standalone_question,
+            context,
+            history,
+        ),
         temperature=config.temperature,
         max_tokens=config.max_tokens,
         stream=True,
@@ -388,6 +425,37 @@ def ask_with_history_stream(
     for chunk in stream:
         if chunk.choices[0].delta.content is not None:
             yield chunk.choices[0].delta.content
+
+
+async def ask_with_history_stream_async(
+    question: str,
+    standalone_question: str,
+    context: str,
+    history: str,
+    runtime: EffectiveSettingsSnapshot | None = None,
+) -> AsyncGenerator[str, None]:
+    """原生异步流式问答；每次上游读取都会把控制权交还事件循环。"""
+    config = call_config_from_snapshot(runtime)
+    _require_enabled(config)
+    stream = await _get_async_client(config).chat.completions.create(
+        model=config.model,
+        messages=_build_history_messages(
+            question,
+            standalone_question,
+            context,
+            history,
+        ),
+        temperature=config.temperature,
+        max_tokens=config.max_tokens,
+        stream=True,
+    )
+
+    try:
+        async for chunk in stream:
+            if chunk.choices[0].delta.content is not None:
+                yield chunk.choices[0].delta.content
+    finally:
+        await stream.close()
 
 
 def ask_stream(
@@ -423,3 +491,29 @@ def ask_stream(
     for chunk in stream:
         if chunk.choices[0].delta.content is not None:
             yield chunk.choices[0].delta.content
+
+
+async def ask_stream_async(
+    question: str,
+    context: str,
+    runtime: EffectiveSettingsSnapshot | None = None,
+) -> AsyncGenerator[str, None]:
+    """原生异步流式问答，供 ASGI 流式端点逐块发送。"""
+    config = call_config_from_snapshot(runtime)
+    _require_enabled(config)
+    messages = build_messages(question, context)
+
+    stream = await _get_async_client(config).chat.completions.create(
+        model=config.model,
+        messages=messages,
+        temperature=config.temperature,
+        max_tokens=config.max_tokens,
+        stream=True,
+    )
+
+    try:
+        async for chunk in stream:
+            if chunk.choices[0].delta.content is not None:
+                yield chunk.choices[0].delta.content
+    finally:
+        await stream.close()

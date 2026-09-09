@@ -7,6 +7,7 @@
 路由层保持轻薄：只做参数校验和调用 services。
 """
 
+import asyncio
 import json
 import logging
 from time import perf_counter
@@ -23,9 +24,9 @@ from backend.services.sparse_index import SparseIndexError
 from backend.services.retrieval_trace import finalize_chat_trace
 from backend.services.llm import (
     ask,
-    ask_stream,
+    ask_stream_async,
     ask_with_history,
-    ask_with_history_stream,
+    ask_with_history_stream_async,
     build_retrieval_only_answer,
     rewrite_followup,
 )
@@ -83,6 +84,25 @@ def save_persistent_trace(response_fields: dict, trace) -> None:
         )
 
 
+def _complete_chat_with_trace(
+    *,
+    request_id: str,
+    standalone_question: str,
+    answer: str,
+    citations,
+    trace,
+) -> dict:
+    """在同一工作线程内完成会话并保存 Trace，保持原有写入顺序。"""
+    response_fields = complete_chat(
+        request_id=request_id,
+        standalone_question=standalone_question,
+        answer=answer,
+        citations=citations,
+    )
+    save_persistent_trace(response_fields, trace)
+    return response_fields
+
+
 @router.post("/chat", response_model=ChatResponse)
 async def chat(request: ChatRequest, http_request: Request):
     """
@@ -107,7 +127,9 @@ async def chat(request: ChatRequest, http_request: Request):
 
     tag_filter = _normalize_tag_filter(request.tags)
     allowed_document_ids = (
-        resolve_document_ids(tag_filter) if tag_filter else None
+        await asyncio.to_thread(resolve_document_ids, tag_filter)
+        if tag_filter
+        else None
     )
 
     persistent = request.conversation_id is not None
@@ -118,7 +140,8 @@ async def chat(request: ChatRequest, http_request: Request):
         if not request.request_id:
             raise HTTPException(status_code=422, detail="持久化对话必须提供 request_id")
         try:
-            started = begin_chat(
+            started = await asyncio.to_thread(
+                begin_chat,
                 conversation_id=request.conversation_id,
                 request_id=request.request_id,
                 question=question,
@@ -135,12 +158,16 @@ async def chat(request: ChatRequest, http_request: Request):
             persisted_trace = replay.pop("trace", None)
             return ChatResponse(**replay, trace=persisted_trace)
         user_message_id = started["user_message_id"]
-        history_rows = complete_history(request.conversation_id)
+        history_rows = await asyncio.to_thread(
+            complete_history,
+            request.conversation_id,
+        )
         if history_rows and runtime.llm.enabled:
             history_text = format_history(bounded_history(history_rows))
             try:
                 llm_called = True
-                standalone_question = rewrite_followup(
+                standalone_question = await asyncio.to_thread(
+                    rewrite_followup,
                     question,
                     history_text,
                     runtime,
@@ -156,7 +183,8 @@ async def chat(request: ChatRequest, http_request: Request):
 
     # 1. 语义检索
     try:
-        retrieval = retrieve_with_trace(
+        retrieval = await asyncio.to_thread(
+            retrieve_with_trace,
             standalone_question,
             allowed_document_ids=allowed_document_ids,
             tag_filter=tag_filter,
@@ -166,14 +194,22 @@ async def chat(request: ChatRequest, http_request: Request):
         # P6-A：Sparse索引不可用（dirty/缺失/损坏/错配）时显式失败，
         # 不静默降级；管理员可将检索模式切换为dense临时恢复。
         if persistent:
-            fail_chat(request.request_id, "sparse_index_unavailable")
+            await asyncio.to_thread(
+                fail_chat,
+                request.request_id,
+                "sparse_index_unavailable",
+            )
         raise HTTPException(
             status_code=503,
             detail=f"检索索引不可用，请稍后重试或联系管理员（{type(error).__name__}: {error}）",
         ) from error
     except Exception as error:
         if persistent:
-            fail_chat(request.request_id, "retrieval_error")
+            await asyncio.to_thread(
+                fail_chat,
+                request.request_id,
+                "retrieval_error",
+            )
         raise HTTPException(status_code=500, detail="检索执行失败") from error
     retrieval_results = retrieval.results
 
@@ -201,15 +237,20 @@ async def chat(request: ChatRequest, http_request: Request):
         response_fields = {}
         if persistent:
             try:
-                response_fields = complete_chat(
+                response_fields = await asyncio.to_thread(
+                    _complete_chat_with_trace,
                     request_id=request.request_id,
                     standalone_question=standalone_question,
                     answer=answer,
                     citations=[],
+                    trace=trace,
                 )
-                save_persistent_trace(response_fields, trace)
             except Exception as error:
-                fail_chat(request.request_id, "persistence_error")
+                await asyncio.to_thread(
+                    fail_chat,
+                    request.request_id,
+                    "persistence_error",
+                )
                 raise HTTPException(
                     status_code=500,
                     detail="对话保存失败",
@@ -237,7 +278,8 @@ async def chat(request: ChatRequest, http_request: Request):
             llm_called = True
             if persistent:
                 history_text = format_history(bounded_history(history_rows))
-                answer = ask_with_history(
+                answer = await asyncio.to_thread(
+                    ask_with_history,
                     question,
                     standalone_question,
                     context,
@@ -245,10 +287,19 @@ async def chat(request: ChatRequest, http_request: Request):
                     runtime,
                 )
             else:
-                answer = ask(question, context, runtime)
+                answer = await asyncio.to_thread(
+                    ask,
+                    question,
+                    context,
+                    runtime,
+                )
         except Exception as error:
             if persistent:
-                fail_chat(request.request_id, "llm_error")
+                await asyncio.to_thread(
+                    fail_chat,
+                    request.request_id,
+                    "llm_error",
+                )
             raise HTTPException(
                 status_code=502,
                 detail=f"LLM 调用失败: {type(error).__name__}",
@@ -256,8 +307,10 @@ async def chat(request: ChatRequest, http_request: Request):
         llm_ms = (perf_counter() - llm_started) * 1000
 
     # 4. 提取引用来源
-    citations = extract_citations(
-        answer, retrieval_results,
+    citations = await asyncio.to_thread(
+        extract_citations,
+        answer,
+        retrieval_results,
         preview_enabled=settings.CITATION_PREVIEW_ENABLED,
     )
     trace = finalize_chat_trace(
@@ -273,15 +326,20 @@ async def chat(request: ChatRequest, http_request: Request):
     response_fields = {}
     if persistent:
         try:
-            response_fields = complete_chat(
+            response_fields = await asyncio.to_thread(
+                _complete_chat_with_trace,
                 request_id=request.request_id,
                 standalone_question=standalone_question,
                 answer=answer,
                 citations=citations,
+                trace=trace,
             )
-            save_persistent_trace(response_fields, trace)
         except Exception as error:
-            fail_chat(request.request_id, "persistence_error")
+            await asyncio.to_thread(
+                fail_chat,
+                request.request_id,
+                "persistence_error",
+            )
             raise HTTPException(status_code=500, detail="对话保存失败") from error
     return ChatResponse(
         answer=answer,
@@ -353,7 +411,8 @@ async def _stream_chat_events(
         )
 
         try:
-            retrieval = retrieve_with_trace(
+            retrieval = await asyncio.to_thread(
+                retrieve_with_trace,
                 standalone_question,
                 allowed_document_ids=allowed_document_ids,
                 tag_filter=tag_filter,
@@ -361,7 +420,11 @@ async def _stream_chat_events(
             )
         except SparseIndexError as error:
             if persistent:
-                fail_chat(request.request_id, "sparse_index_unavailable")
+                await asyncio.to_thread(
+                    fail_chat,
+                    request.request_id,
+                    "sparse_index_unavailable",
+                )
             yield _ndjson(
                 "error",
                 code="sparse_index_unavailable",
@@ -370,7 +433,11 @@ async def _stream_chat_events(
             return
         except Exception:
             if persistent:
-                fail_chat(request.request_id, "retrieval_error")
+                await asyncio.to_thread(
+                    fail_chat,
+                    request.request_id,
+                    "retrieval_error",
+                )
             yield _ndjson(
                 "error",
                 code="retrieval_error",
@@ -401,13 +468,14 @@ async def _stream_chat_events(
                 )
             response_fields = {}
             if persistent:
-                response_fields = complete_chat(
+                response_fields = await asyncio.to_thread(
+                    _complete_chat_with_trace,
                     request_id=request.request_id,
                     standalone_question=standalone_question,
                     answer=answer,
                     citations=[],
+                    trace=trace,
                 )
-                save_persistent_trace(response_fields, trace)
             yield _ndjson("delta", text=answer)
             yield _ndjson("citations", citations=[])
             completed = True
@@ -418,31 +486,42 @@ async def _stream_chat_events(
             )
             return
 
-        context = format_retrieval_context(retrieval_results)
+        context = await asyncio.to_thread(
+            format_retrieval_context,
+            retrieval_results,
+        )
+        collected: list[str] = []
         if runtime is not None and not runtime.llm.enabled:
-            pieces = [build_retrieval_only_answer(len(retrieval_results))]
+            piece = build_retrieval_only_answer(len(retrieval_results))
+            collected.append(piece)
+            yield _ndjson("delta", text=piece)
         elif persistent:
             llm_called = True
-            history_rows = complete_history(request.conversation_id)
+            history_rows = await asyncio.to_thread(
+                complete_history,
+                request.conversation_id,
+            )
             history_text = format_history(bounded_history(history_rows))
-            pieces = ask_with_history_stream(
+            pieces = ask_with_history_stream_async(
                 request.question.strip(),
                 standalone_question,
                 context,
                 history_text,
                 runtime,
             )
+            async for piece in pieces:
+                collected.append(piece)
+                yield _ndjson("delta", text=piece)
         else:
             llm_called = True
-            pieces = ask_stream(request.question.strip(), context, runtime)
-
-        collected: list[str] = []
-        for piece in pieces:
-            collected.append(piece)
-            yield _ndjson("delta", text=piece)
+            pieces = ask_stream_async(request.question.strip(), context, runtime)
+            async for piece in pieces:
+                collected.append(piece)
+                yield _ndjson("delta", text=piece)
 
         answer = "".join(collected)
-        citations = extract_citations(
+        citations = await asyncio.to_thread(
+            extract_citations,
             answer,
             retrieval_results,
             preview_enabled=settings.CITATION_PREVIEW_ENABLED,
@@ -458,13 +537,14 @@ async def _stream_chat_events(
         )
         response_fields = {}
         if persistent:
-            response_fields = complete_chat(
+            response_fields = await asyncio.to_thread(
+                _complete_chat_with_trace,
                 request_id=request.request_id,
                 standalone_question=standalone_question,
                 answer=answer,
                 citations=citations,
+                trace=trace,
             )
-            save_persistent_trace(response_fields, trace)
         yield _ndjson(
             "citations",
             citations=[citation.model_dump(mode="json") for citation in citations],
@@ -475,11 +555,17 @@ async def _stream_chat_events(
             assistant_message_id=response_fields.get("assistant_message_id"),
             trace=_trace_dump(trace),
         )
-    except GeneratorExit:
+    except (GeneratorExit, asyncio.CancelledError):
         # 方案甲：客户端断开 → 按失败处理，不保存半截答案。
         if persistent and not completed:
             try:
-                fail_chat(request.request_id, "interrupted")
+                await asyncio.shield(
+                    asyncio.to_thread(
+                        fail_chat,
+                        request.request_id,
+                        "interrupted",
+                    )
+                )
             except Exception as error:
                 logger.warning(
                     "Interrupt fail_chat failed: request_id=%s error=%s",
@@ -490,7 +576,11 @@ async def _stream_chat_events(
     except Exception as error:
         if persistent and not completed:
             try:
-                fail_chat(request.request_id, "llm_error")
+                await asyncio.to_thread(
+                    fail_chat,
+                    request.request_id,
+                    "llm_error",
+                )
             except Exception:
                 pass
         yield _ndjson(
@@ -516,7 +606,9 @@ async def chat_stream(request: ChatRequest, http_request: Request):
         raise HTTPException(status_code=422, detail="问题超过最大长度")
     tag_filter = _normalize_tag_filter(request.tags)
     allowed_document_ids = (
-        resolve_document_ids(tag_filter) if tag_filter else None
+        await asyncio.to_thread(resolve_document_ids, tag_filter)
+        if tag_filter
+        else None
     )
 
     persistent = request.conversation_id is not None
@@ -526,7 +618,8 @@ async def chat_stream(request: ChatRequest, http_request: Request):
         if not request.request_id:
             raise HTTPException(status_code=422, detail="持久化对话必须提供 request_id")
         try:
-            started = begin_chat(
+            started = await asyncio.to_thread(
+                begin_chat,
                 conversation_id=request.conversation_id,
                 request_id=request.request_id,
                 question=question,
@@ -539,12 +632,16 @@ async def chat_stream(request: ChatRequest, http_request: Request):
                 detail={"code": error.code, "message": str(error)},
             ) from error
         if "replay" not in started:
-            history_rows = complete_history(request.conversation_id)
+            history_rows = await asyncio.to_thread(
+                complete_history,
+                request.conversation_id,
+            )
             if history_rows and runtime.llm.enabled:
                 history_text = format_history(bounded_history(history_rows))
                 try:
                     llm_called = True
-                    standalone_question = rewrite_followup(
+                    standalone_question = await asyncio.to_thread(
+                        rewrite_followup,
                         question,
                         history_text,
                         runtime,

@@ -6,8 +6,8 @@
 - 文档类型：测试
 - 状态：测试中
 - 创建日期：2026-08-27
-- 最后更新：2026-08-27
-- 证据口径：当前文件静态核对；历史验证与待验证事项在正文区分，本次未重跑产品测试。
+- 最后更新：2026-09-09
+- 证据口径：当前文件静态核对，并纳入2026-09-09对Trace计时边界的代码核对与全量自动化回归；历史验证与待验证事项在正文区分，BUG-004流式修复已回归，OPT-006新增计量字段尚未实施。
 - 导航：[本类目录](./README.md) · [文档中心](../README.md)
 
 ## 1. 目标与环境
@@ -19,14 +19,16 @@
 
 | 用例 | 输入/操作 | 预期 | 代码 | 本次实际 |
 |---|---|---|---|---|
-| S01 | 保存、旧revision、失败提交 | 快照固定、冲突拒绝、不半提交 | [runtime](../../tests/test_runtime_settings.py) | 未执行 |
-| S02 | Key三态、敏感422 | 不回显、不写普通SQLite | [secret](../../tests/test_secret_store.py)、[router](../../tests/test_settings_router.py) | 未执行 |
-| S03 | GET状态 | 不冷加载模型 | [router](../../tests/test_settings_router.py) | 未执行 |
-| S04 | 草稿测试、reset | 使用草稿、不改.env/索引 | [LLM](../../tests/test_llm_runtime.py)、[设置页](../../web/src/__tests__/settingsPage.test.tsx) | 未执行 |
-| S05 | 保存前后chat/重放 | 首次revision/实际参数一致 | [API](../../tests/test_api.py)、[retrieval](../../tests/test_retrieval_runtime.py) | 未执行 |
-| S06 | LLM关闭/先改写后空检索 | called准确、无Key | [Trace](../../tests/test_retrieval_trace.py) | 未执行 |
-| S07 | 旧Trace缺新字段 | 可读并显示未记录 | [Drawer](../../web/src/__tests__/traceDrawer.test.tsx) | 未执行 |
-| S08 | 启用refusal gate | 校准前拒绝 | [runtime](../../tests/test_runtime_settings.py) | 未执行 |
+| S01 | 保存、旧revision、失败提交 | 快照固定、冲突拒绝、不半提交 | [runtime](../../tests/test_runtime_settings.py) | 2026-09-09全量通过 |
+| S02 | Key三态、敏感422 | 不回显、不写普通SQLite | [secret](../../tests/test_secret_store.py)、[router](../../tests/test_settings_router.py) | 2026-09-09全量通过 |
+| S03 | GET状态 | 不冷加载模型 | [router](../../tests/test_settings_router.py) | 2026-09-09全量通过 |
+| S04 | 草稿测试、reset | 使用草稿、不改.env/索引 | [LLM](../../tests/test_llm_runtime.py)、[设置页](../../web/src/__tests__/settingsPage.test.tsx) | 2026-09-09全量通过 |
+| S05 | 保存前后chat/重放 | 首次revision/实际参数一致 | [API](../../tests/test_api.py)、[retrieval](../../tests/test_retrieval_runtime.py) | 2026-09-09全量通过 |
+| S06 | LLM关闭/先改写后空检索 | called准确、无Key | [Trace](../../tests/test_retrieval_trace.py) | 2026-09-09全量通过 |
+| S07 | 旧Trace缺新字段 | 可读并显示未记录 | [Drawer](../../web/src/__tests__/traceDrawer.test.tsx) | 2026-09-09全量通过 |
+| S08 | 启用refusal gate | 校准前拒绝 | [runtime](../../tests/test_runtime_settings.py) | 2026-09-09全量通过 |
+| S09 | 新增改写/引用提取/持久化/首字里程碑字段 | 已执行、未执行、不适用和旧Trace分别有明确语义，不用0伪造测量 | [OPT-006验收](../优化/OPT-006-Trace计量拆分与首字延迟优化.md#acceptance) | 未执行 |
+| S10 | 同步/流式总耗时边界 | 改写在流式计时起点前、持久化在当前total后；不把差值桶归因成阶段 | [DEV-010限制](../开发/DEV-010-检索Trace与配置追溯.md#limitations)、[OPT-006方案](../优化/OPT-006-Trace计量拆分与首字延迟优化.md#plan) | 未执行 |
 
 <a id="evidence"></a>
 ## 3. 历史执行证据：2026-08-25 S6
@@ -44,6 +46,13 @@
 
 本次读取原记录并核对S6实现，没有重跑；不得标为2026-08-27新结果。
 
+### 2026-09-09当前回归
+
+- 后端全量：821 passed、3 skipped；首次使用系统临时目录时，v3.1发布器路径前置条件导致1项环境失败，改用该测试要求的仓库内独立临时目录后全量通过。
+- 前端全量：9个测试文件、41项测试通过；lint与生产构建通过。构建仍提示主JavaScript chunk超过500 kB。
+- BUG-004专项：真实本地TCP/uvicorn逐事件测试验证3个delta分批到达，并验证检索同步阶段阻塞时健康检查仍可响应；异步上游流缓存、取消关闭和前端响应头前Abort均有自动化覆盖。
+- 边界：未连接外部LLM、未经过生产反向代理，也未执行人工浏览器验收；这些结果不能外推为生产首字延迟指标。
+
 ## 4. 复跑与外部门禁
 
 ```powershell
@@ -52,9 +61,11 @@
 
 真实连接测试需显式允许，dummy Key不能证明认证成功。CPU隔离验收显式关闭RERANKER_USE_FP16，历史曾因继承GPU配置导致启动校验失败。
 
+2026-09-09代码核对补充的当前缺口：流式有结果路径将`context_formatting_ms`和`llm_generation_ms`填为0；`TraceDrawer`用`total - knownSum`显示“其他阶段”。流式追问改写发生在生成器计时起点之前，`complete_chat`/`save_persistent_trace`发生在Trace计算之后；因此S09/S10必须验证字段边界和“不适用/未记录”语义，不能用一次生产Trace差值替代正式测量。
+
 ## 5. 结论与待验收
 
-S1—S6有实现与历史工程验证；S6未提交。S7不在完成范围。多进程热同步、当前真实服务/Key与外部可用性本次未验证。
+S01—S08相关代码已在当前分支，并通过2026-09-09全量自动化回归；2026-08-25历史工程验证继续作为独立证据保留。BUG-004关联的流式时序回归已完成，S09/S10所指向的OPT-006字段扩展和计量边界仍未实施。多进程热同步、当前真实服务/Key、生产代理和外部可用性本次未验证。
 
 ## 关联文档
 
@@ -67,9 +78,13 @@ S1—S6有实现与历史工程验证；S6未提交。S7不在完成范围。多
 - 关系：关联引用；[TEST-003 会话引用与流式协议](../测试/TEST-003-会话引用与流式协议.md)
 - 关系：关联引用；[TEST-004 标签与React交互](../测试/TEST-004-标签与React交互.md)
 - 关系：关联引用；[TEST-007 缺陷与历史反馈追踪](../测试/TEST-007-缺陷与历史反馈追踪.md)
+- 关系：缺陷回归；[BUG-004 流式响应缓冲至完成时一次性输出](../测试/BUG-004-流式响应缓冲至完成时一次性输出.md)
+- 关系：后续优化验证；[OPT-006 Trace计量拆分与首字延迟优化](../优化/OPT-006-Trace计量拆分与首字延迟优化.md#acceptance)
 
 ## 变更记录
 
 | 日期 | 内容 | 原因 |
 |---|---|---|
+| 2026-09-09 | 补记BUG-004完成后的后端821/前端41项全量结果、真实本地TCP逐事件回归与外部边界；S09/S10保持未执行 | 区分已完成的传输修复与尚未实施的Trace计量扩展 |
+| 2026-09-09 | 增加S09/S10计量边界用例，记录流式0值和前端差值桶的当前缺口，修正S6提交状态表述，并关联BUG-004/OPT-006 | 将历史设置回归与本次尚未执行的Trace计量/流式时序验收分开 |
 | 2026-08-27 | 从当前代码与原资料整理，补充证据边界和双向链接 | 建立独立new_docs对照体系，保留原文件 |

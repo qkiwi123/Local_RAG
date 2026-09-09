@@ -570,9 +570,9 @@ def test_retrieval_only_sync_stream_and_followup_make_zero_llm_calls(
     )
     for name in (
         "ask",
-        "ask_stream",
+        "ask_stream_async",
         "ask_with_history",
-        "ask_with_history_stream",
+        "ask_with_history_stream_async",
         "rewrite_followup",
     ):
         monkeypatch.setattr(chat_router, name, forbidden)

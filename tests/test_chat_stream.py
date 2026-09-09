@@ -2,9 +2,15 @@
 
 import asyncio
 import json
+import socket
+import threading
+import time
+from contextlib import contextmanager
 from pathlib import Path
 
+import httpx
 import pytest
+import uvicorn
 from fastapi.testclient import TestClient
 
 
@@ -24,6 +30,45 @@ def _events(response):
     assert response.status_code == 200, response.text
     assert response.headers["content-type"].startswith("application/x-ndjson")
     return [json.loads(line) for line in response.text.splitlines() if line.strip()]
+
+
+@contextmanager
+def _live_http_server(app):
+    """用真实本地 TCP 连接验证 ASGI 数据到达时序。"""
+    listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    listener.bind(("127.0.0.1", 0))
+    listener.listen()
+    port = listener.getsockname()[1]
+    server = uvicorn.Server(
+        uvicorn.Config(
+            app,
+            log_level="critical",
+            access_log=False,
+            lifespan="off",
+        )
+    )
+    thread = threading.Thread(
+        target=server.run,
+        kwargs={"sockets": [listener]},
+        daemon=True,
+    )
+    thread.start()
+    deadline = time.monotonic() + 5
+    while not server.started and thread.is_alive() and time.monotonic() < deadline:
+        time.sleep(0.01)
+    if not server.started:
+        server.should_exit = True
+        thread.join(timeout=5)
+        listener.close()
+        raise RuntimeError("本地测试服务器启动失败")
+    try:
+        yield f"http://127.0.0.1:{port}"
+    finally:
+        server.should_exit = True
+        thread.join(timeout=5)
+        listener.close()
+        assert not thread.is_alive(), "本地测试服务器未正常退出"
 
 
 def _retrieval_row():
@@ -64,14 +109,15 @@ def _mock_retrieval(monkeypatch, rows=None, raise_error=None):
 def _mock_stream(monkeypatch, pieces, raise_after=0):
     from backend.routers import chat as chat_router
 
-    def fake_stream(*args, **kwargs):
+    async def fake_stream(*args, **kwargs):
         for index, piece in enumerate(pieces):
             if raise_after and index >= raise_after:
                 raise RuntimeError("流中断")
+            await asyncio.sleep(0)
             yield piece
 
-    monkeypatch.setattr(chat_router, "ask_stream", fake_stream)
-    monkeypatch.setattr(chat_router, "ask_with_history_stream", fake_stream)
+    monkeypatch.setattr(chat_router, "ask_stream_async", fake_stream)
+    monkeypatch.setattr(chat_router, "ask_with_history_stream_async", fake_stream)
 
 
 def test_stream_event_sequence_and_answer_assembly(client, monkeypatch):
@@ -94,6 +140,94 @@ def test_stream_event_sequence_and_answer_assembly(client, monkeypatch):
     done = events[-1]
     assert done["assistant_message_id"] is None  # 非持久化无消息 ID
     assert done["trace"] is None
+
+
+def test_live_http_stream_is_incremental_and_does_not_block_health(
+    client,
+    monkeypatch,
+):
+    """真实 TCP 逐行读取：生成未结束时收到 delta，健康检查仍可响应。"""
+    from backend.main import app
+    from backend.models.schemas import RetrievalResponse
+    from backend.routers import chat as chat_router
+
+    # client fixture 保持应用 lifespan 和运行时设置处于已初始化状态。
+    assert client.app is app
+    retrieval_started = threading.Event()
+    release_retrieval = threading.Event()
+
+    def delayed_retrieval(*args, **kwargs):
+        retrieval_started.set()
+        if not release_retrieval.wait(timeout=3):
+            raise TimeoutError("测试未释放检索阶段")
+        return RetrievalResponse(results=[_retrieval_row()], trace=None)
+
+    async def delayed_stream(*args, **kwargs):
+        for piece in ("第", "一", "段"):
+            await asyncio.sleep(0.08)
+            yield piece
+
+    monkeypatch.setattr(chat_router, "retrieve_with_trace", delayed_retrieval)
+    monkeypatch.setattr(chat_router, "ask_stream_async", delayed_stream)
+
+    received: list[tuple[float, dict]] = []
+    reader_errors: list[Exception] = []
+
+    with _live_http_server(app) as base_url:
+        request_started = time.monotonic()
+
+        def read_stream():
+            try:
+                with httpx.stream(
+                    "POST",
+                    f"{base_url}/api/chat/stream",
+                    json={"question": "流式测试"},
+                    timeout=5,
+                ) as response:
+                    response.raise_for_status()
+                    for line in response.iter_lines():
+                        if line:
+                            received.append((time.monotonic(), json.loads(line)))
+            except Exception as error:  # pragma: no cover - 断言统一报告
+                reader_errors.append(error)
+
+        reader = threading.Thread(target=read_stream, daemon=True)
+        reader.start()
+        assert retrieval_started.wait(timeout=2), "检索阶段未开始"
+
+        # 若检索仍占用事件循环，健康检查只能等定时器释放后才返回。
+        fallback_release = threading.Timer(1.0, release_retrieval.set)
+        fallback_release.start()
+        health_started = time.monotonic()
+        try:
+            health = httpx.get(f"{base_url}/api/health", timeout=2)
+            health_elapsed = time.monotonic() - health_started
+        finally:
+            release_retrieval.set()
+            fallback_release.cancel()
+
+        reader.join(timeout=5)
+
+    assert health.status_code == 200
+    assert health_elapsed < 0.5
+    assert not reader.is_alive(), "流式请求未在预期时间内结束"
+    assert not reader_errors
+    events = [event for _, event in received]
+    assert [event["event"] for event in events] == [
+        "meta",
+        "delta",
+        "delta",
+        "delta",
+        "citations",
+        "done",
+    ]
+    delta_times = [
+        arrived
+        for arrived, event in received
+        if event["event"] == "delta"
+    ]
+    assert delta_times[0] - request_started < 2
+    assert delta_times[-1] - delta_times[0] >= 0.1
 
 
 def test_stream_empty_retrieval_uses_fixed_message(client, monkeypatch):
@@ -187,13 +321,13 @@ def test_stream_retrieval_error_emits_error_event(client, monkeypatch):
 def test_stream_llm_error_emits_error_event(client, monkeypatch):
     _mock_retrieval(monkeypatch, rows=[_retrieval_row()])
 
-    def failing_stream(*args, **kwargs):
+    async def failing_stream(*args, **kwargs):
         yield "开始"
         raise RuntimeError("模型不可用")
 
     from backend.routers import chat as chat_router
 
-    monkeypatch.setattr(chat_router, "ask_stream", failing_stream)
+    monkeypatch.setattr(chat_router, "ask_stream_async", failing_stream)
 
     response = client.post(
         "/api/chat/stream", json={"question": "问题"}
@@ -215,11 +349,12 @@ def test_stream_interrupt_fails_chat_and_keeps_no_partial_answer(
 
     _mock_retrieval(monkeypatch, rows=[_retrieval_row()])
 
-    def slow_stream(*args, **kwargs):
+    async def slow_stream(*args, **kwargs):
         for piece in ["半", "截", "答", "案"]:
+            await asyncio.sleep(0)
             yield piece
 
-    monkeypatch.setattr(chat_router, "ask_with_history_stream", slow_stream)
+    monkeypatch.setattr(chat_router, "ask_with_history_stream_async", slow_stream)
     monkeypatch.setattr(
         chat_router,
         "rewrite_followup",

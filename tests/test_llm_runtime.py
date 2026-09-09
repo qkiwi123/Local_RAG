@@ -62,6 +62,45 @@ class _FakeClient:
         self.chat = SimpleNamespace(completions=self.completions)
 
 
+class _FakeAsyncStream:
+    def __init__(self):
+        self._pieces = iter(("异步", "流"))
+        self.closed = False
+
+    def __aiter__(self):
+        return self
+
+    async def __anext__(self):
+        try:
+            text = next(self._pieces)
+        except StopIteration as error:
+            raise StopAsyncIteration from error
+        return SimpleNamespace(
+            choices=[SimpleNamespace(delta=SimpleNamespace(content=text))]
+        )
+
+    async def close(self):
+        self.closed = True
+
+
+class _FakeAsyncCompletions:
+    def __init__(self):
+        self.calls = []
+        self.streams = []
+
+    async def create(self, **kwargs):
+        self.calls.append(kwargs)
+        stream = _FakeAsyncStream()
+        self.streams.append(stream)
+        return stream
+
+
+class _FakeAsyncClient:
+    def __init__(self):
+        self.completions = _FakeAsyncCompletions()
+        self.chat = SimpleNamespace(completions=self.completions)
+
+
 @pytest.fixture(autouse=True)
 def clear_client_cache():
     llm.clear_llm_client_cache()
@@ -104,6 +143,70 @@ def test_next_snapshot_uses_new_model_generation_and_timeout(
     assert call["model"] == "changed-model"
     assert call["temperature"] == 0.8
     assert call["max_tokens"] == 321
+
+
+@pytest.mark.asyncio
+async def test_async_stream_uses_async_client_and_reuses_safe_cache_key(
+    tmp_path,
+    monkeypatch,
+):
+    manager = _manager(tmp_path)
+    created = []
+
+    def fake_create(config):
+        client = _FakeAsyncClient()
+        created.append((config, client))
+        return client
+
+    monkeypatch.setattr(llm, "_create_async_client", fake_create)
+    runtime = manager.snapshot()
+
+    first = [
+        piece
+        async for piece in llm.ask_stream_async(
+            "question",
+            "context",
+            runtime,
+        )
+    ]
+    second = [
+        piece
+        async for piece in llm.ask_stream_async(
+            "question",
+            "context",
+            runtime,
+        )
+    ]
+
+    assert first == ["异步", "流"]
+    assert second == first
+    assert len(created) == 1
+    config, client = created[0]
+    assert config.api_key.get_secret_value() not in repr(
+        next(iter(llm._ASYNC_CLIENT_CACHE))
+    )
+    assert client.completions.calls[0]["stream"] is True
+    assert all(stream.closed for stream in client.completions.streams)
+    assert len(llm._ASYNC_CLIENT_CACHE) == 1
+
+
+@pytest.mark.asyncio
+async def test_async_stream_close_releases_upstream_response(
+    tmp_path,
+    monkeypatch,
+):
+    client = _FakeAsyncClient()
+    monkeypatch.setattr(llm, "_create_async_client", lambda config: client)
+    stream = llm.ask_stream_async(
+        "question",
+        "context",
+        _manager(tmp_path).snapshot(),
+    )
+
+    assert await stream.__anext__() == "异步"
+    await stream.aclose()
+
+    assert client.completions.streams[0].closed is True
 
 
 def test_followup_rewrite_keeps_fixed_generation_limits(

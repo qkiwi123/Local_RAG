@@ -1,6 +1,6 @@
 # 文档工具导航
 
-创建：2026-08-27；更新：2026-09-08。这里不是业务运行工具，不导入backend，不使用模型。保留[P6-A检查](./validation-report-20260908-bm25-p6a.json)及[P6-B检查](./validation-report-20260908-bm25-p6b.json)独立报告。
+创建：2026-08-27；更新：2026-09-09。这里不是业务运行工具，不导入backend，不使用模型。保留[P6-A检查](./validation-report-20260908-bm25-p6a.json)及[P6-B检查](./validation-report-20260908-bm25-p6b.json)独立报告，并分别保存流式/Trace方案审查与BUG-004实施后的文档检查报告。
 
 | 文件 | 用途 |
 |---|---|
@@ -21,6 +21,8 @@
 | [validation-report-20260903-bm25-p3.json](./validation-report-20260903-bm25-p3.json) | 2026-09-03 BM25持久化P3业务接入、回放及回归结果同步后的静态检查 |
 | [validation-report-20260903-bm25-p4.json](./validation-report-20260903-bm25-p4.json) | 2026-09-03 BM25持久化P4同期质量、性能、资源及阶段边界同步后的静态检查 |
 | [validation-report-20260903-bm25-p5-p6-plan.json](./validation-report-20260903-bm25-p5-p6-plan.json) | 2026-09-03 BM25 P5条件采用与P6生产实施协议确认前的静态检查 |
+| [validation-report-20260909-stream-trace.json](./validation-report-20260909-stream-trace.json) | 2026-09-09 BUG-004、OPT-006及关联文档审查后的静态检查；不含业务修复、性能或模型测试 |
+| [validation-report-20260909-stream-fix.json](./validation-report-20260909-stream-fix.json) | 2026-09-09 BUG-004方案B实现、真实本地HTTP/全量回归及关联文档同步后的静态检查 |
 
 仓库根日常维护命令：
 
@@ -40,6 +42,7 @@
 .\.venv\Scripts\python.exe -B new_docs\工具\check_docs.py --self-test --report new_docs\工具\validation-report-20260903-bm25-p3.json
 .\.venv\Scripts\python.exe -B new_docs\工具\check_docs.py --self-test --report new_docs\工具\validation-report-20260903-bm25-p4.json
 .\.venv\Scripts\python.exe -B new_docs\工具\check_docs.py --self-test --report new_docs\工具\validation-report-20260903-bm25-p5-p6-plan.json
+.\.venv\Scripts\python.exe -B new_docs\工具\check_docs.py --self-test --report new_docs\工具\validation-report-20260909-stream-fix.json
 ```
 
 2026-08-27首次整理曾执行的命令（不作为后续代码变化后的日常检查要求）：
@@ -51,6 +54,10 @@
 --check-preserved仅用于首次整理；后续真实代码变化无需永久通过旧快照，不覆盖旧报告或重置旧快照。--report仅允许写入本目录。--self-test在内存构造错误，不改原文档。
 
 P6-C生产默认启用同步后的静态检查：[validation-report-20260908-bm25-p6c.json](./validation-report-20260908-bm25-p6c.json)。只验证文档结构；产品门禁证据以P6-C报告为准。
+
+本轮流式/Trace/查询改写文档审查后的静态检查：[validation-report-20260909-stream-trace.json](./validation-report-20260909-stream-trace.json)。只验证文档结构、链接、锚点、关系和检查器自检；不代表BUG-004修复、Trace计量拆分或改写质量对照已经执行。
+
+BUG-004方案B实现后的静态检查：[validation-report-20260909-stream-fix.json](./validation-report-20260909-stream-fix.json)。产品证据为真实本地TCP/uvicorn增量与并发测试、后端821项通过/3项跳过、前端41项、lint和构建通过；该JSON仍只验证文档结构，不替代上述产品测试，也不代表真实外部LLM、生产代理或人工浏览器已验收。
 
 ## 关联文档
 

@@ -28,17 +28,34 @@ export interface ChatStreamResult {
   aborted: boolean;
 }
 
+function isAbortError(error: unknown): boolean {
+  return (
+    typeof error === "object" &&
+    error !== null &&
+    "name" in error &&
+    error.name === "AbortError"
+  );
+}
+
 export async function streamChat(
   payload: Record<string, unknown>,
   handlers: ChatStreamHandlers,
   signal?: AbortSignal,
 ): Promise<ChatStreamResult> {
-  const response = await fetch("/api/chat/stream", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(payload),
-    signal,
-  });
+  let response: Response;
+  try {
+    response = await fetch("/api/chat/stream", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+      signal,
+    });
+  } catch (error) {
+    if (isAbortError(error)) {
+      return { events: [], aborted: true };
+    }
+    throw error;
+  }
 
   if (!response.ok || !response.body) {
     let message = `HTTP ${response.status}`;
@@ -105,7 +122,7 @@ export async function streamChat(
     buffer += decoder.decode();
     flush();
   } catch (error) {
-    if ((error as Error).name === "AbortError") {
+    if (isAbortError(error)) {
       aborted = true;
     } else {
       throw error;
