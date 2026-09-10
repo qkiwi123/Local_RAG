@@ -45,6 +45,14 @@ class LLMDisabledError(RuntimeError):
     """调用方在生成模型关闭时错误发起了模型调用。"""
 
 
+_FOLLOWUP_REWRITE_SYSTEM_PROMPT = """你是检索查询改写器。仅根据对话历史，把当前追问改写为一个语义完整、可独立检索的问题。
+严格遵守以下规则：
+1. 只补齐当前追问中省略的对象、条件或指代，优先使用最近且明确的上下文。
+2. 保留当前追问的意图、对象、条件、时间范围、选项和比较范围；不得把单一对象扩大成多个对象或新增比较。
+3. 不得回答问题，不得补充对话历史中不存在的事实。当前追问已经完整时，原样输出。
+4. 只输出一行改写后的问题，不要解释、前缀、引号、列表或其他内容。"""
+
+
 _CLIENT_CACHE_LIMIT = 4
 _CLIENT_CACHE: OrderedDict[tuple, OpenAI] = OrderedDict()
 _ASYNC_CLIENT_CACHE: OrderedDict[tuple, AsyncOpenAI] = OrderedDict()
@@ -351,23 +359,26 @@ def rewrite_followup(
     """把含指代或省略的追问改写为可独立检索的问题。"""
     config = call_config_from_snapshot(runtime)
     _require_enabled(config)
-    response = _get_client(config).chat.completions.create(
-        model=config.model,
-        messages=[
+    request_kwargs = {
+        "model": config.model,
+        "messages": [
             {
                 "role": "system",
-                "content": (
-                    "根据对话历史，把当前追问改写成语义完整、可独立检索的问题。"
-                    "只输出改写后的问题；不得回答问题，不得补充历史中不存在的事实。"
-                ),
+                "content": _FOLLOWUP_REWRITE_SYSTEM_PROMPT,
             },
             {
                 "role": "user",
                 "content": f"对话历史：\n{history}\n\n当前追问：{question}",
             },
         ],
-        temperature=0,
-        max_tokens=200,
+        "temperature": 0,
+        "max_tokens": 200,
+    }
+    if config.provider == "deepseek":
+        request_kwargs["extra_body"] = {"thinking": {"type": "disabled"}}
+
+    response = _get_client(config).chat.completions.create(
+        **request_kwargs,
     )
     rewritten = (response.choices[0].message.content or "").strip()
     if not rewritten:

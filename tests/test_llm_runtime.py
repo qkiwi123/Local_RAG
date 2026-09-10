@@ -143,6 +143,7 @@ def test_next_snapshot_uses_new_model_generation_and_timeout(
     assert call["model"] == "changed-model"
     assert call["temperature"] == 0.8
     assert call["max_tokens"] == 321
+    assert "extra_body" not in call
 
 
 @pytest.mark.asyncio
@@ -209,7 +210,7 @@ async def test_async_stream_close_releases_upstream_response(
     assert client.completions.streams[0].closed is True
 
 
-def test_followup_rewrite_keeps_fixed_generation_limits(
+def test_followup_rewrite_disables_deepseek_thinking_and_tightens_prompt(
     tmp_path,
     monkeypatch,
 ):
@@ -227,6 +228,34 @@ def test_followup_rewrite_keeps_fixed_generation_limits(
     call = client.completions.calls[0]
     assert call["temperature"] == 0
     assert call["max_tokens"] == 200
+    assert call["extra_body"] == {"thinking": {"type": "disabled"}}
+    system_prompt = call["messages"][0]["content"]
+    assert "只补齐当前追问中省略的对象、条件或指代" in system_prompt
+    assert "不得把单一对象扩大成多个对象或新增比较" in system_prompt
+    assert "当前追问已经完整时，原样输出" in system_prompt
+    assert call["messages"][1]["content"] == (
+        "对话历史：\n上一轮内容\n\n当前追问：还有呢？"
+    )
+
+
+def test_followup_rewrite_does_not_send_deepseek_extension_to_other_providers(
+    tmp_path,
+    monkeypatch,
+):
+    manager = _manager(tmp_path)
+    runtime, _ = manager.update_llm(
+        {
+            "provider": "openai_compatible",
+            "base_url": "https://example.com/v1",
+        },
+        expected_revision=0,
+    )
+    client = _FakeClient()
+    monkeypatch.setattr(llm, "_create_client", lambda config: client)
+
+    assert llm.rewrite_followup("还有呢？", "上一轮内容", runtime) == "answer"
+
+    assert "extra_body" not in client.completions.calls[0]
 
 
 class _StatusError(Exception):
