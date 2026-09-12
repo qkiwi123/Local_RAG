@@ -31,7 +31,7 @@ export interface RetrievalTrace {
   retrieval_mode: string;
   reranker_enabled: boolean;
   timing_contract_version?: "chat-v2" | null;
-  followup_rewrite_status?: "not_applicable" | "succeeded" | "failed" | null;
+  followup_rewrite_status?: "not_applicable" | "disabled" | "succeeded" | "failed" | null;
   settings_revision?: number | null;
   effective_config?: {
     retrieval_mode: string;
@@ -51,6 +51,22 @@ export interface RetrievalTrace {
     called: boolean;
     provider: string;
     model: string;
+    answer?: {
+      called: boolean;
+      thinking_mode: ThinkingMode;
+      reasoning_effort: ReasoningEffort;
+      temperature: number;
+      max_tokens: number;
+      timeout_seconds: number;
+    } | null;
+    rewrite?: {
+      called: boolean;
+      thinking_mode: ThinkingMode;
+      reasoning_effort: ReasoningEffort;
+      temperature: number;
+      max_tokens: number;
+      timeout_seconds: number;
+    } | null;
   } | null;
   chunks: Record<string, { chunk_id: string; document_name: string; location_label?: string; page_number?: number | null; slide_number?: number | null; content: string }>;
   stages: Array<{ name: string; candidates: Array<Record<string, unknown>> }>;
@@ -198,6 +214,14 @@ export interface ApiKeyStatus {
   masked_suffix?: string | null;
 }
 
+export type ThinkingMode = "provider_default" | "enabled" | "disabled";
+export type ReasoningEffort =
+  | "provider_default"
+  | "low"
+  | "medium"
+  | "high"
+  | "max";
+
 export interface LlmSettings {
   enabled: boolean;
   provider: "deepseek" | "openai_compatible";
@@ -207,6 +231,14 @@ export interface LlmSettings {
   temperature: number;
   max_tokens: number;
   timeout_seconds: number;
+  answer_thinking_mode: ThinkingMode;
+  answer_reasoning_effort: ReasoningEffort;
+  rewrite_enabled: boolean;
+  rewrite_thinking_mode: ThinkingMode;
+  rewrite_reasoning_effort: ReasoningEffort;
+  rewrite_temperature: number;
+  rewrite_max_tokens: number;
+  rewrite_timeout_seconds: number;
 }
 
 export interface RefusalGateSettings {
@@ -253,6 +285,14 @@ export interface LlmSettingsPatch {
   temperature?: number;
   max_tokens?: number;
   timeout_seconds?: number;
+  answer_thinking_mode?: ThinkingMode;
+  answer_reasoning_effort?: ReasoningEffort;
+  rewrite_enabled?: boolean;
+  rewrite_thinking_mode?: ThinkingMode;
+  rewrite_reasoning_effort?: ReasoningEffort;
+  rewrite_temperature?: number;
+  rewrite_max_tokens?: number;
+  rewrite_timeout_seconds?: number;
   api_key_update?:
     | { action: "replace"; value: string }
     | { action: "clear" };

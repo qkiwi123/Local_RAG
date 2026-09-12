@@ -48,6 +48,28 @@ class Settings:
     LLM_TEMPERATURE: float = float(os.getenv("LLM_TEMPERATURE", "0.3"))
     LLM_MAX_TOKENS: int = int(os.getenv("LLM_MAX_TOKENS", "2000"))
     LLM_TIMEOUT_SECONDS: float = float(os.getenv("LLM_TIMEOUT_SECONDS", "120"))
+    LLM_ANSWER_THINKING_MODE: str = os.getenv(
+        "LLM_ANSWER_THINKING_MODE", "provider_default"
+    ).strip().lower()
+    LLM_ANSWER_REASONING_EFFORT: str = os.getenv(
+        "LLM_ANSWER_REASONING_EFFORT", "provider_default"
+    ).strip().lower()
+    LLM_REWRITE_ENABLED: bool = _env_bool("LLM_REWRITE_ENABLED", True)
+    LLM_REWRITE_THINKING_MODE: str = os.getenv(
+        "LLM_REWRITE_THINKING_MODE", "disabled"
+    ).strip().lower()
+    LLM_REWRITE_REASONING_EFFORT: str = os.getenv(
+        "LLM_REWRITE_REASONING_EFFORT", "provider_default"
+    ).strip().lower()
+    LLM_REWRITE_TEMPERATURE: float = float(
+        os.getenv("LLM_REWRITE_TEMPERATURE", "0")
+    )
+    LLM_REWRITE_MAX_TOKENS: int = int(
+        os.getenv("LLM_REWRITE_MAX_TOKENS", "200")
+    )
+    LLM_REWRITE_TIMEOUT_SECONDS: float = float(
+        os.getenv("LLM_REWRITE_TIMEOUT_SECONDS", "30")
+    )
 
     # ─── 文件存储 ──────────────────────────────────────
     # 相对路径统一基于项目根目录（即 backend/ 的上一级）
@@ -225,6 +247,30 @@ class Settings:
             raise ValueError("LLM_MAX_TOKENS 必须在 1 到 32768 之间")
         if not 1 <= self.LLM_TIMEOUT_SECONDS <= 600:
             raise ValueError("LLM_TIMEOUT_SECONDS 必须在 1 到 600 之间")
+        thinking_modes = {"provider_default", "enabled", "disabled"}
+        if self.LLM_ANSWER_THINKING_MODE not in thinking_modes:
+            raise ValueError(
+                "LLM_ANSWER_THINKING_MODE 仅支持 provider_default/enabled/disabled"
+            )
+        if self.LLM_REWRITE_THINKING_MODE not in thinking_modes:
+            raise ValueError(
+                "LLM_REWRITE_THINKING_MODE 仅支持 provider_default/enabled/disabled"
+            )
+        reasoning_efforts = {"provider_default", "low", "medium", "high", "max"}
+        if self.LLM_ANSWER_REASONING_EFFORT not in reasoning_efforts:
+            raise ValueError(
+                "LLM_ANSWER_REASONING_EFFORT 仅支持 provider_default/low/medium/high/max"
+            )
+        if self.LLM_REWRITE_REASONING_EFFORT not in reasoning_efforts:
+            raise ValueError(
+                "LLM_REWRITE_REASONING_EFFORT 仅支持 provider_default/low/medium/high/max"
+            )
+        if not 0 <= self.LLM_REWRITE_TEMPERATURE <= 2:
+            raise ValueError("LLM_REWRITE_TEMPERATURE 必须在 0 到 2 之间")
+        if not 1 <= self.LLM_REWRITE_MAX_TOKENS <= 32768:
+            raise ValueError("LLM_REWRITE_MAX_TOKENS 必须在 1 到 32768 之间")
+        if not 1 <= self.LLM_REWRITE_TIMEOUT_SECONDS <= 600:
+            raise ValueError("LLM_REWRITE_TIMEOUT_SECONDS 必须在 1 到 600 之间")
         if self.CHUNK_STRATEGY not in {"fixed", "recursive"}:
             raise ValueError("CHUNK_STRATEGY 仅支持 fixed 或 recursive")
         if self.CHUNK_SIZE <= 0:

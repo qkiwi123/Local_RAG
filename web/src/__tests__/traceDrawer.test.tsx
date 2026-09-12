@@ -28,6 +28,22 @@ const trace: RetrievalTrace = {
     called: false,
     provider: "deepseek",
     model: "deepseek-v4-flash",
+    answer: {
+      called: false,
+      thinking_mode: "enabled",
+      reasoning_effort: "high",
+      temperature: 0.3,
+      max_tokens: 2000,
+      timeout_seconds: 120,
+    },
+    rewrite: {
+      called: true,
+      thinking_mode: "disabled",
+      reasoning_effort: "provider_default",
+      temperature: 0,
+      max_tokens: 200,
+      timeout_seconds: 30,
+    },
   },
   chunks: {
     chunk_1: {
@@ -103,8 +119,11 @@ describe("TraceDrawer 检索详情", () => {
 
     expect(screen.getByText("查询向量化")).toBeVisible();
     expect(screen.getByText("revision 7")).toBeVisible();
-    expect(screen.getByText("未调用")).toBeVisible();
+    expect(screen.getAllByText("未调用").length).toBeGreaterThan(0);
     expect(screen.getByText("deepseek / deepseek-v4-flash")).toBeVisible();
+    expect(screen.getByText("思考 enabled")).toBeVisible();
+    expect(screen.getByText("思考 disabled")).toBeVisible();
+    expect(screen.getByText("· 最多 200 tokens")).toBeVisible();
     expect(screen.getByText("hybrid / 5")).toBeVisible();
     expect(screen.getByText("candidates 15 · distance ≤ 0.67")).toBeVisible();
     expect(screen.getByText("bm25s_mmap")).toBeVisible();

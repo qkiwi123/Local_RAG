@@ -20,6 +20,8 @@ from pydantic import (
 
 
 ProviderName = Literal["deepseek", "openai_compatible"]
+ThinkingMode = Literal["provider_default", "enabled", "disabled"]
+ReasoningEffort = Literal["provider_default", "low", "medium", "high", "max"]
 RetrievalMode = Literal["dense", "bm25", "hybrid"]
 FieldSource = Literal["environment", "runtime", "system"]
 ActivationLevel = Literal[
@@ -56,6 +58,14 @@ class LLMSettings(_StrictFrozenModel):
     temperature: float = Field(ge=0, le=2)
     max_tokens: int = Field(ge=1, le=32768)
     timeout_seconds: float = Field(ge=1, le=600)
+    answer_thinking_mode: ThinkingMode = "provider_default"
+    answer_reasoning_effort: ReasoningEffort = "provider_default"
+    rewrite_enabled: bool = True
+    rewrite_thinking_mode: ThinkingMode = "disabled"
+    rewrite_reasoning_effort: ReasoningEffort = "provider_default"
+    rewrite_temperature: float = Field(default=0, ge=0, le=2)
+    rewrite_max_tokens: int = Field(default=200, ge=1, le=32768)
+    rewrite_timeout_seconds: float = Field(default=30, ge=1, le=600)
 
     @field_validator("base_url")
     @classmethod
@@ -137,6 +147,14 @@ class LLMSettingsView(_StrictFrozenModel):
     temperature: float
     max_tokens: int
     timeout_seconds: float
+    answer_thinking_mode: ThinkingMode
+    answer_reasoning_effort: ReasoningEffort
+    rewrite_enabled: bool
+    rewrite_thinking_mode: ThinkingMode
+    rewrite_reasoning_effort: ReasoningEffort
+    rewrite_temperature: float
+    rewrite_max_tokens: int
+    rewrite_timeout_seconds: float
 
 
 class SettingsRuntimeSummary(_StrictFrozenModel):
@@ -195,6 +213,14 @@ class LLMSettingsPatch(BaseModel):
     temperature: float | None = Field(default=None, ge=0, le=2)
     max_tokens: int | None = Field(default=None, ge=1, le=32768)
     timeout_seconds: float | None = Field(default=None, ge=1, le=600)
+    answer_thinking_mode: ThinkingMode | None = None
+    answer_reasoning_effort: ReasoningEffort | None = None
+    rewrite_enabled: bool | None = None
+    rewrite_thinking_mode: ThinkingMode | None = None
+    rewrite_reasoning_effort: ReasoningEffort | None = None
+    rewrite_temperature: float | None = Field(default=None, ge=0, le=2)
+    rewrite_max_tokens: int | None = Field(default=None, ge=1, le=32768)
+    rewrite_timeout_seconds: float | None = Field(default=None, ge=1, le=600)
     api_key_update: APIKeyUpdate | None = None
 
     @model_validator(mode="before")
@@ -376,6 +402,14 @@ class LLMSettingsOverrides(_PartialModel):
     temperature: float | None = Field(default=None, ge=0, le=2)
     max_tokens: int | None = Field(default=None, ge=1, le=32768)
     timeout_seconds: float | None = Field(default=None, ge=1, le=600)
+    answer_thinking_mode: ThinkingMode | None = None
+    answer_reasoning_effort: ReasoningEffort | None = None
+    rewrite_enabled: bool | None = None
+    rewrite_thinking_mode: ThinkingMode | None = None
+    rewrite_reasoning_effort: ReasoningEffort | None = None
+    rewrite_temperature: float | None = Field(default=None, ge=0, le=2)
+    rewrite_max_tokens: int | None = Field(default=None, ge=1, le=32768)
+    rewrite_timeout_seconds: float | None = Field(default=None, ge=1, le=600)
 
     @field_validator("base_url")
     @classmethod

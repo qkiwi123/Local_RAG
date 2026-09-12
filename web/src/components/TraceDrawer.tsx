@@ -92,10 +92,25 @@ export function TraceDrawer({
   const rewriteStatusLabels: Record<string, string> = {
     succeeded: "成功",
     failed: "失败，已回退原问题",
+    disabled: "已由运行时设置关闭",
     not_applicable: "本次不适用",
   };
   const rewriteStatus =
     rewriteStatusLabels[trace.followup_rewrite_status ?? ""] ?? "旧 Trace 未记录";
+  const generationConfig = (
+    value: NonNullable<NonNullable<RetrievalTrace["llm"]>["answer"]>,
+  ) => (
+    <Space wrap size={4}>
+      <Tag color={value.called ? "green" : "default"}>
+        {value.called ? "已调用" : "未调用"}
+      </Tag>
+      <span>思考 {value.thinking_mode}</span>
+      <span>· 强度 {value.reasoning_effort}</span>
+      <span>· Temperature {value.temperature}</span>
+      <span>· 最多 {value.max_tokens} tokens</span>
+      <span>· 超时 {value.timeout_seconds}s</span>
+    </Space>
+  );
 
   return (
     <ResizableDrawer
@@ -155,6 +170,33 @@ export function TraceDrawer({
               </Space>
             ) : (
               <Typography.Text type="secondary">旧 Trace 未记录</Typography.Text>
+            ),
+          },
+          {
+            key: "llm-answer",
+            label: "回答配置摘要",
+            children: trace.llm?.answer ? (
+              generationConfig(trace.llm.answer)
+            ) : (
+              <Typography.Text type="secondary">旧 Trace 未记录</Typography.Text>
+            ),
+          },
+          {
+            key: "llm-rewrite",
+            label: "改写配置摘要",
+            children: trace.llm?.rewrite ? (
+              generationConfig(trace.llm.rewrite)
+            ) : (
+              <Typography.Text type="secondary">旧 Trace 未记录</Typography.Text>
+            ),
+          },
+          {
+            key: "llm-config-note",
+            label: "配置摘要说明",
+            children: (
+              <Typography.Text type="secondary">
+                记录本次请求冻结的通用配置，不包含思考文本，也不代表上游模型采纳了全部参数；服务商适配可能只提交其中受支持的部分。
+              </Typography.Text>
             ),
           },
           {

@@ -228,6 +228,7 @@ def test_followup_rewrite_disables_deepseek_thinking_and_tightens_prompt(
     call = client.completions.calls[0]
     assert call["temperature"] == 0
     assert call["max_tokens"] == 200
+    assert call["timeout"] == 30
     assert call["extra_body"] == {"thinking": {"type": "disabled"}}
     system_prompt = call["messages"][0]["content"]
     assert "只补齐当前追问中省略的对象、条件或指代" in system_prompt
@@ -256,6 +257,90 @@ def test_followup_rewrite_does_not_send_deepseek_extension_to_other_providers(
     assert llm.rewrite_followup("还有呢？", "上一轮内容", runtime) == "answer"
 
     assert "extra_body" not in client.completions.calls[0]
+    assert client.completions.calls[0]["reasoning_effort"] == "none"
+
+
+def test_answer_and_rewrite_use_independent_runtime_generation_settings(
+    tmp_path,
+    monkeypatch,
+):
+    manager = _manager(tmp_path)
+    runtime, _ = manager.update_llm(
+        {
+            "provider": "openai_compatible",
+            "base_url": "https://example.com/v1",
+            "temperature": 0.9,
+            "max_tokens": 2048,
+            "answer_thinking_mode": "enabled",
+            "answer_reasoning_effort": "high",
+            "rewrite_thinking_mode": "provider_default",
+            "rewrite_reasoning_effort": "low",
+            "rewrite_temperature": 0.1,
+            "rewrite_max_tokens": 320,
+            "rewrite_timeout_seconds": 12,
+        },
+        expected_revision=0,
+    )
+    client = _FakeClient()
+    monkeypatch.setattr(llm, "_create_client", lambda config: client)
+
+    assert llm.ask("question", "context", runtime) == "answer"
+    assert llm.rewrite_followup("还有呢？", "上一轮内容", runtime) == "answer"
+
+    answer_call, rewrite_call = client.completions.calls
+    assert answer_call["temperature"] == 0.9
+    assert answer_call["max_tokens"] == 2048
+    assert answer_call["reasoning_effort"] == "high"
+    assert "extra_body" not in answer_call
+    assert rewrite_call["temperature"] == 0.1
+    assert rewrite_call["max_tokens"] == 320
+    assert rewrite_call["timeout"] == 12
+    assert rewrite_call["reasoning_effort"] == "low"
+    assert "extra_body" not in rewrite_call
+
+
+def test_deepseek_keeps_generic_effort_but_only_sends_thinking_switch(
+    tmp_path,
+    monkeypatch,
+):
+    manager = _manager(tmp_path)
+    runtime, _ = manager.update_llm(
+        {
+            "answer_thinking_mode": "enabled",
+            "answer_reasoning_effort": "high",
+        },
+        expected_revision=0,
+    )
+    client = _FakeClient()
+    monkeypatch.setattr(llm, "_create_client", lambda config: client)
+
+    assert llm.ask("question", "context", runtime) == "answer"
+
+    call = client.completions.calls[0]
+    assert call["extra_body"] == {"thinking": {"type": "enabled"}}
+    assert "reasoning_effort" not in call
+
+
+def test_openai_compatible_explicit_disabled_mode_wins_over_saved_effort(
+    tmp_path,
+    monkeypatch,
+):
+    manager = _manager(tmp_path)
+    runtime, _ = manager.update_llm(
+        {
+            "provider": "openai_compatible",
+            "base_url": "https://example.com/v1",
+            "answer_thinking_mode": "disabled",
+            "answer_reasoning_effort": "high",
+        },
+        expected_revision=0,
+    )
+    client = _FakeClient()
+    monkeypatch.setattr(llm, "_create_client", lambda config: client)
+
+    assert llm.ask("question", "context", runtime) == "answer"
+
+    assert client.completions.calls[0]["reasoning_effort"] == "none"
 
 
 class _StatusError(Exception):

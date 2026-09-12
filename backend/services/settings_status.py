@@ -34,6 +34,14 @@ _LLM_FIELDS = (
     "temperature",
     "max_tokens",
     "timeout_seconds",
+    "answer_thinking_mode",
+    "answer_reasoning_effort",
+    "rewrite_enabled",
+    "rewrite_thinking_mode",
+    "rewrite_reasoning_effort",
+    "rewrite_temperature",
+    "rewrite_max_tokens",
+    "rewrite_timeout_seconds",
 )
 _RETRIEVAL_FIELDS = (
     "mode",

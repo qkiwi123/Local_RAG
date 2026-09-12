@@ -34,6 +34,14 @@ const llmFields = [
   "temperature",
   "max_tokens",
   "timeout_seconds",
+  "answer_thinking_mode",
+  "answer_reasoning_effort",
+  "rewrite_enabled",
+  "rewrite_thinking_mode",
+  "rewrite_reasoning_effort",
+  "rewrite_temperature",
+  "rewrite_max_tokens",
+  "rewrite_timeout_seconds",
 ] as const;
 
 const retrievalFields = [
@@ -60,6 +68,14 @@ function formValues(settings: SettingsReadResponse): SettingsFormValues {
       temperature: settings.llm.temperature,
       max_tokens: settings.llm.max_tokens,
       timeout_seconds: settings.llm.timeout_seconds,
+      answer_thinking_mode: settings.llm.answer_thinking_mode,
+      answer_reasoning_effort: settings.llm.answer_reasoning_effort,
+      rewrite_enabled: settings.llm.rewrite_enabled,
+      rewrite_thinking_mode: settings.llm.rewrite_thinking_mode,
+      rewrite_reasoning_effort: settings.llm.rewrite_reasoning_effort,
+      rewrite_temperature: settings.llm.rewrite_temperature,
+      rewrite_max_tokens: settings.llm.rewrite_max_tokens,
+      rewrite_timeout_seconds: settings.llm.rewrite_timeout_seconds,
       api_key_draft: "",
     },
     retrieval: {

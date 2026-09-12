@@ -121,6 +121,42 @@ async def patch_settings(payload: SettingsPatchRequest, request: Request):
         warnings.append("已清除运行时密钥，当前继续使用环境变量 API Key")
     if llm_changed and not snapshot.llm.enabled:
         warnings.append("生成模型已关闭，问答将使用 retrieval-only 模式")
+    if llm_changed and (
+        snapshot.llm.answer_thinking_mode == "enabled"
+        or snapshot.llm.rewrite_thinking_mode == "enabled"
+    ):
+        warnings.append(
+            "思考模式下仍会提交 Temperature，但部分模型可能忽略该参数"
+        )
+    if llm_changed and (
+        (
+            snapshot.llm.answer_thinking_mode == "disabled"
+            and snapshot.llm.answer_reasoning_effort != "provider_default"
+        )
+        or (
+            snapshot.llm.rewrite_thinking_mode == "disabled"
+            and snapshot.llm.rewrite_reasoning_effort != "provider_default"
+        )
+    ):
+        warnings.append(
+            "思考模式与思考强度存在冲突组合，上游可能忽略参数或拒绝请求"
+        )
+    if llm_changed and snapshot.llm.provider == "openai_compatible" and (
+        snapshot.llm.answer_thinking_mode != "provider_default"
+        or snapshot.llm.answer_reasoning_effort != "provider_default"
+        or snapshot.llm.rewrite_thinking_mode != "provider_default"
+        or snapshot.llm.rewrite_reasoning_effort != "provider_default"
+    ):
+        warnings.append(
+            "OpenAI-compatible 端点的思考参数支持不统一，请以该服务商文档和 Trace 为准"
+        )
+    if llm_changed and snapshot.llm.provider == "deepseek" and (
+        snapshot.llm.answer_reasoning_effort != "provider_default"
+        or snapshot.llm.rewrite_reasoning_effort != "provider_default"
+    ):
+        warnings.append(
+            "DeepSeek 当前没有思考强度的等价请求参数；设置会保留供切换模型使用，但本端点只提交思考开关"
+        )
     return SettingsPatchResponse(
         revision=snapshot.revision,
         settings=build_settings_response(snapshot),

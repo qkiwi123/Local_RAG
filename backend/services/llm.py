@@ -39,6 +39,14 @@ class LLMCallConfig:
     temperature: float
     max_tokens: int
     timeout_seconds: float
+    answer_thinking_mode: str
+    answer_reasoning_effort: str
+    rewrite_enabled: bool
+    rewrite_thinking_mode: str
+    rewrite_reasoning_effort: str
+    rewrite_temperature: float
+    rewrite_max_tokens: int
+    rewrite_timeout_seconds: float
 
 
 class LLMDisabledError(RuntimeError):
@@ -77,6 +85,30 @@ def call_config_from_snapshot(
             "max_tokens": int(getattr(settings, "LLM_MAX_TOKENS", 2000)),
             "timeout_seconds": float(
                 getattr(settings, "LLM_TIMEOUT_SECONDS", 120)
+            ),
+            "answer_thinking_mode": str(
+                getattr(settings, "LLM_ANSWER_THINKING_MODE", "provider_default")
+            ),
+            "answer_reasoning_effort": str(
+                getattr(settings, "LLM_ANSWER_REASONING_EFFORT", "provider_default")
+            ),
+            "rewrite_enabled": bool(
+                getattr(settings, "LLM_REWRITE_ENABLED", True)
+            ),
+            "rewrite_thinking_mode": str(
+                getattr(settings, "LLM_REWRITE_THINKING_MODE", "disabled")
+            ),
+            "rewrite_reasoning_effort": str(
+                getattr(settings, "LLM_REWRITE_REASONING_EFFORT", "provider_default")
+            ),
+            "rewrite_temperature": float(
+                getattr(settings, "LLM_REWRITE_TEMPERATURE", 0)
+            ),
+            "rewrite_max_tokens": int(
+                getattr(settings, "LLM_REWRITE_MAX_TOKENS", 200)
+            ),
+            "rewrite_timeout_seconds": float(
+                getattr(settings, "LLM_REWRITE_TIMEOUT_SECONDS", 30)
             ),
         }
         resolved_key = SecretStr(settings.DEEPSEEK_API_KEY)
@@ -182,6 +214,68 @@ def clear_llm_client_cache() -> None:
 def _require_enabled(config: LLMCallConfig) -> None:
     if not config.enabled:
         raise LLMDisabledError("生成模型已关闭")
+
+
+def _thinking_parameters(
+    config: LLMCallConfig,
+    *,
+    mode: str,
+    effort: str,
+) -> dict:
+    """把通用思考意图映射到当前 provider 的 Chat Completions 参数。
+
+    provider_default 不发送任何思考参数。DeepSeek 使用其 thinking 扩展；
+    通用 OpenAI-compatible 端点使用 reasoning_effort。兼容端点是否支持
+    对应参数由上游决定，因此设置页只提示、不禁止用户组合参数。
+    """
+    params: dict = {}
+    if config.provider == "deepseek":
+        if mode != "provider_default":
+            params["extra_body"] = {"thinking": {"type": mode}}
+        # DeepSeek 当前只提供思考开关，没有可与 reasoning_effort
+        # 等价映射的强度参数。强度仍保存在通用设置中，便于切换模型，
+        # 但不能把不受支持的字段直接发给该端点。
+        return params
+
+    if mode == "disabled":
+        params["reasoning_effort"] = "none"
+    elif effort != "provider_default":
+        params["reasoning_effort"] = effort
+    elif mode == "enabled":
+        params["reasoning_effort"] = "medium"
+    return params
+
+
+def _generation_parameters(config: LLMCallConfig, purpose: str) -> dict:
+    """返回回答或查询改写实际提交的通用生成参数。"""
+    if purpose == "answer":
+        params = {
+            "temperature": config.temperature,
+            "max_tokens": config.max_tokens,
+        }
+        params.update(
+            _thinking_parameters(
+                config,
+                mode=config.answer_thinking_mode,
+                effort=config.answer_reasoning_effort,
+            )
+        )
+        return params
+    if purpose == "rewrite":
+        params = {
+            "temperature": config.rewrite_temperature,
+            "max_tokens": config.rewrite_max_tokens,
+            "timeout": config.rewrite_timeout_seconds,
+        }
+        params.update(
+            _thinking_parameters(
+                config,
+                mode=config.rewrite_thinking_mode,
+                effort=config.rewrite_reasoning_effort,
+            )
+        )
+        return params
+    raise ValueError(f"未知 LLM 调用用途: {purpose}")
 
 
 def build_retrieval_only_answer(source_count: int) -> str:
@@ -344,8 +438,7 @@ def ask(
     response = _get_client(config).chat.completions.create(
         model=config.model,
         messages=messages,
-        temperature=config.temperature,
-        max_tokens=config.max_tokens,
+        **_generation_parameters(config, "answer"),
     )
 
     return response.choices[0].message.content
@@ -371,11 +464,8 @@ def rewrite_followup(
                 "content": f"对话历史：\n{history}\n\n当前追问：{question}",
             },
         ],
-        "temperature": 0,
-        "max_tokens": 200,
+        **_generation_parameters(config, "rewrite"),
     }
-    if config.provider == "deepseek":
-        request_kwargs["extra_body"] = {"thinking": {"type": "disabled"}}
 
     response = _get_client(config).chat.completions.create(
         **request_kwargs,
@@ -404,8 +494,7 @@ def ask_with_history(
             context,
             history,
         ),
-        temperature=config.temperature,
-        max_tokens=config.max_tokens,
+        **_generation_parameters(config, "answer"),
     )
     return response.choices[0].message.content
 
@@ -428,8 +517,7 @@ def ask_with_history_stream(
             context,
             history,
         ),
-        temperature=config.temperature,
-        max_tokens=config.max_tokens,
+        **_generation_parameters(config, "answer"),
         stream=True,
     )
 
@@ -456,8 +544,7 @@ async def ask_with_history_stream_async(
             context,
             history,
         ),
-        temperature=config.temperature,
-        max_tokens=config.max_tokens,
+        **_generation_parameters(config, "answer"),
         stream=True,
     )
 
@@ -494,8 +581,7 @@ def ask_stream(
     stream = _get_client(config).chat.completions.create(
         model=config.model,
         messages=messages,
-        temperature=config.temperature,
-        max_tokens=config.max_tokens,
+        **_generation_parameters(config, "answer"),
         stream=True,
     )
 
@@ -517,8 +603,7 @@ async def ask_stream_async(
     stream = await _get_async_client(config).chat.completions.create(
         model=config.model,
         messages=messages,
-        temperature=config.temperature,
-        max_tokens=config.max_tokens,
+        **_generation_parameters(config, "answer"),
         stream=True,
     )
 

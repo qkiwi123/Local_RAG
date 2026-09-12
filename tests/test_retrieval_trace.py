@@ -253,6 +253,22 @@ def test_finalize_chat_trace_records_runtime_without_secret(monkeypatch):
         "called": False,
         "provider": "deepseek",
         "model": "example-model",
+        "answer": {
+            "called": False,
+            "thinking_mode": "provider_default",
+            "reasoning_effort": "provider_default",
+            "temperature": 0.2,
+            "max_tokens": 100,
+            "timeout_seconds": 30.0,
+        },
+        "rewrite": {
+            "called": False,
+            "thinking_mode": "disabled",
+            "reasoning_effort": "provider_default",
+            "temperature": 0.0,
+            "max_tokens": 200,
+            "timeout_seconds": 30.0,
+        },
     }
     serialized = completed.model_dump_json()
     assert secret not in serialized

@@ -47,6 +47,14 @@ const settings: SettingsReadResponse = {
     temperature: 0.3,
     max_tokens: 2000,
     timeout_seconds: 120,
+    answer_thinking_mode: "provider_default",
+    answer_reasoning_effort: "provider_default",
+    rewrite_enabled: true,
+    rewrite_thinking_mode: "disabled",
+    rewrite_reasoning_effort: "provider_default",
+    rewrite_temperature: 0,
+    rewrite_max_tokens: 200,
+    rewrite_timeout_seconds: 30,
   },
   retrieval: {
     mode: "hybrid",
@@ -81,6 +89,14 @@ const settings: SettingsReadResponse = {
     "llm.temperature": "environment",
     "llm.max_tokens": "environment",
     "llm.timeout_seconds": "environment",
+    "llm.answer_thinking_mode": "environment",
+    "llm.answer_reasoning_effort": "environment",
+    "llm.rewrite_enabled": "environment",
+    "llm.rewrite_thinking_mode": "environment",
+    "llm.rewrite_reasoning_effort": "environment",
+    "llm.rewrite_temperature": "environment",
+    "llm.rewrite_max_tokens": "environment",
+    "llm.rewrite_timeout_seconds": "environment",
     "retrieval.mode": "runtime",
     "retrieval.final_top_k": "runtime",
     "retrieval.dense_candidate_k": "environment",
@@ -102,6 +118,14 @@ const settings: SettingsReadResponse = {
     "llm.temperature": "next_request",
     "llm.max_tokens": "next_request",
     "llm.timeout_seconds": "next_request",
+    "llm.answer_thinking_mode": "next_request",
+    "llm.answer_reasoning_effort": "next_request",
+    "llm.rewrite_enabled": "next_request",
+    "llm.rewrite_thinking_mode": "next_request",
+    "llm.rewrite_reasoning_effort": "next_request",
+    "llm.rewrite_temperature": "next_request",
+    "llm.rewrite_max_tokens": "next_request",
+    "llm.rewrite_timeout_seconds": "next_request",
     "retrieval.mode": "next_request",
     "retrieval.final_top_k": "next_request",
     "retrieval.dense_candidate_k": "next_request",
@@ -261,6 +285,31 @@ describe("SettingsPage", () => {
     });
     await screen.findByText(/设置已应用到 revision 4/);
     expect(screen.getByLabelText("API Key")).toHaveValue("");
+  });
+
+  it("思考开启时仍允许编辑 Temperature，并独立保存改写预算", async () => {
+    mocks.getSettings.mockResolvedValue({
+      ...settings,
+      llm: { ...settings.llm, answer_thinking_mode: "enabled" },
+    });
+    render(<SettingsPage />);
+
+    const answerTemperature = await screen.findByLabelText("回答 Temperature");
+    expect(answerTemperature).toBeEnabled();
+    fireEvent.change(answerTemperature, { target: { value: "0.7" } });
+    fireEvent.change(screen.getByLabelText("改写最大完成 Tokens"), {
+      target: { value: "320" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: /保存并应用/ }));
+
+    await waitFor(() => expect(mocks.updateSettings).toHaveBeenCalledTimes(1));
+    expect(mocks.updateSettings).toHaveBeenCalledWith({
+      expected_revision: 3,
+      llm: {
+        temperature: 0.7,
+        rewrite_max_tokens: 320,
+      },
+    });
   });
 
   it("字段关系非法时不发送保存请求", async () => {

@@ -264,6 +264,21 @@ class RetrievalTraceEffectiveConfig(BaseModel):
     refusal_gate_enabled: bool = False
 
 
+class RetrievalTraceGenerationConfig(BaseModel):
+    """一次模型调用用途的请求级生成配置；不包含原始思考文本。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    called: bool
+    thinking_mode: Literal["provider_default", "enabled", "disabled"]
+    reasoning_effort: Literal[
+        "provider_default", "low", "medium", "high", "max"
+    ]
+    temperature: float = Field(ge=0, le=2)
+    max_tokens: int = Field(ge=1)
+    timeout_seconds: float = Field(ge=1)
+
+
 class RetrievalTraceLLMSummary(BaseModel):
     """本次问答的模型调用摘要；禁止扩展为包含 API Key 的配置副本。"""
 
@@ -272,6 +287,8 @@ class RetrievalTraceLLMSummary(BaseModel):
     called: bool
     provider: str
     model: str
+    answer: Optional[RetrievalTraceGenerationConfig] = None
+    rewrite: Optional[RetrievalTraceGenerationConfig] = None
 
 
 class RetrievalTrace(BaseModel):
@@ -286,7 +303,7 @@ class RetrievalTrace(BaseModel):
         ),
     )
     followup_rewrite_status: Optional[
-        Literal["not_applicable", "succeeded", "failed"]
+        Literal["not_applicable", "disabled", "succeeded", "failed"]
     ] = Field(
         default=None,
         description="追问改写状态；旧 Trace 为 null",

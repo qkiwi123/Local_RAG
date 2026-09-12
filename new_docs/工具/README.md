@@ -1,6 +1,6 @@
 # 文档工具导航
 
-创建：2026-08-27；更新：2026-09-10。这里不是业务运行工具，不导入backend，不使用模型。保留[P6-A检查](./validation-report-20260908-bm25-p6a.json)及[P6-B检查](./validation-report-20260908-bm25-p6b.json)独立报告，并分别保存流式/Trace方案审查、BUG-004实施、OPT-006方向一及查询改写方案A实施后的文档检查报告。
+创建：2026-08-27；更新：2026-09-12。这里不是业务运行工具，不导入backend，不使用模型。保留[P6-A检查](./validation-report-20260908-bm25-p6a.json)及[P6-B检查](./validation-report-20260908-bm25-p6b.json)独立报告，并分别保存流式/Trace方案审查、BUG-004实施、OPT-006方向一、查询改写方案A及用途级通用生成设置实施后的文档检查报告。
 
 | 文件 | 用途 |
 |---|---|
@@ -25,6 +25,7 @@
 | [validation-report-20260909-stream-fix.json](./validation-report-20260909-stream-fix.json) | 2026-09-09 BUG-004方案B实现、真实本地HTTP/全量回归及关联文档同步后的静态检查 |
 | [validation-report-20260909-trace-v2.json](./validation-report-20260909-trace-v2.json) | 2026-09-09 OPT-006方向一`chat-v2`实现、前端分区、全量回归及关联文档同步后的静态检查 |
 | [validation-report-20260910-query-rewrite-a.json](./validation-report-20260910-query-rewrite-a.json) | 2026-09-10查询改写方案A实现、专项/全量回归、真实合成接口验证及关联文档同步后的静态检查 |
+| [validation-report-20260912-llm-generation-settings.json](./validation-report-20260912-llm-generation-settings.json) | 2026-09-12回答/改写用途级通用生成设置、provider适配、Trace摘要及关联文档同步后的静态检查 |
 
 仓库根日常维护命令：
 
@@ -47,6 +48,7 @@
 .\.venv\Scripts\python.exe -B new_docs\工具\check_docs.py --self-test --report new_docs\工具\validation-report-20260909-stream-fix.json
 .\.venv\Scripts\python.exe -B new_docs\工具\check_docs.py --self-test --report new_docs\工具\validation-report-20260909-trace-v2.json
 .\.venv\Scripts\python.exe -B new_docs\工具\check_docs.py --self-test --report new_docs\工具\validation-report-20260910-query-rewrite-a.json
+.\.venv\Scripts\python.exe -B new_docs\工具\check_docs.py --self-test --report new_docs\工具\validation-report-20260912-llm-generation-settings.json
 ```
 
 2026-08-27首次整理曾执行的命令（不作为后续代码变化后的日常检查要求）：
@@ -66,6 +68,8 @@ BUG-004方案B实现后的静态检查：[validation-report-20260909-stream-fix.
 OPT-006方向一实施后的静态检查：[validation-report-20260909-trace-v2.json](./validation-report-20260909-trace-v2.json)。产品证据为后端827项通过/3项跳过、前端41项、lint和构建通过；该JSON只验证文档结构，不等于生产时延基线、真实外部LLM验证或查询改写质量结论。
 
 查询改写方案A实施后的静态检查：[validation-report-20260910-query-rewrite-a.json](./validation-report-20260910-query-rewrite-a.json)。产品证据为相关专项28项、后端全量828项通过/3项跳过、前端41项、lint和生产构建通过，以及一条不含项目数据的真实DeepSeek兼容验证；该JSON本身只验证文档结构，短样本不等于生产长期性能或语义质量结论。
+
+用途级通用生成设置实施后的静态检查：[validation-report-20260912-llm-generation-settings.json](./validation-report-20260912-llm-generation-settings.json)。产品证据为后端相关专项119项、后端全量833项通过/3项跳过、前端42项、lint和生产构建通过；该JSON只验证文档结构，不等于跨兼容端点参数矩阵、人工浏览器或模型实际采纳情况已验收。
 
 ## 关联文档
 

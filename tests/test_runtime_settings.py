@@ -98,6 +98,13 @@ def test_no_persisted_row_matches_environment_and_does_not_write_database(temp_d
     assert snapshot.updated_at is None
     assert snapshot.llm.model == "deepseek-v4-flash"
     assert snapshot.llm.temperature == 0.3
+    assert snapshot.llm.answer_thinking_mode == "provider_default"
+    assert snapshot.llm.answer_reasoning_effort == "provider_default"
+    assert snapshot.llm.rewrite_enabled is True
+    assert snapshot.llm.rewrite_thinking_mode == "disabled"
+    assert snapshot.llm.rewrite_temperature == 0
+    assert snapshot.llm.rewrite_max_tokens == 200
+    assert snapshot.llm.rewrite_timeout_seconds == 30
     assert snapshot.retrieval.final_top_k == 5
     assert snapshot.retrieval.dense_candidate_k == 10
     assert snapshot.retrieval.max_chunks_per_document == 3
@@ -207,6 +214,43 @@ def test_non_secret_override_persists_across_manager_restart(temp_dir):
     assert restarted.retrieval.final_top_k == 8
     assert restarted.field_sources["llm.model"] == "runtime"
     assert restarted.field_sources["retrieval.bm25_k1"] == "environment"
+
+
+def test_generation_controls_persist_with_independent_answer_and_rewrite_values(
+    temp_dir,
+):
+    manager = _manager(temp_dir)
+
+    updated, changed = manager.update_llm(
+        {
+            "answer_thinking_mode": "enabled",
+            "answer_reasoning_effort": "max",
+            "temperature": 0.7,
+            "max_tokens": 4096,
+            "rewrite_enabled": False,
+            "rewrite_thinking_mode": "provider_default",
+            "rewrite_reasoning_effort": "low",
+            "rewrite_temperature": 0.2,
+            "rewrite_max_tokens": 300,
+            "rewrite_timeout_seconds": 18,
+        },
+        expected_revision=0,
+    )
+
+    restarted = _manager(temp_dir).snapshot()
+    assert updated.llm.answer_thinking_mode == "enabled"
+    assert restarted.llm.answer_reasoning_effort == "max"
+    assert restarted.llm.temperature == 0.7
+    assert restarted.llm.max_tokens == 4096
+    assert restarted.llm.rewrite_enabled is False
+    assert restarted.llm.rewrite_thinking_mode == "provider_default"
+    assert restarted.llm.rewrite_reasoning_effort == "low"
+    assert restarted.llm.rewrite_temperature == 0.2
+    assert restarted.llm.rewrite_max_tokens == 300
+    assert restarted.llm.rewrite_timeout_seconds == 18
+    assert "llm.answer_thinking_mode" in changed
+    assert "llm.rewrite_max_tokens" in changed
+    assert restarted.field_sources["llm.rewrite_max_tokens"] == "runtime"
 
 
 def test_reset_settings_restores_sections_and_runtime_key_atomically(temp_dir):

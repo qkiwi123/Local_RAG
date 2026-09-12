@@ -171,7 +171,7 @@ async def chat(request: ChatRequest, http_request: Request):
             complete_history,
             request.conversation_id,
         )
-        if history_rows and runtime.llm.enabled:
+        if history_rows and runtime.llm.enabled and runtime.llm.rewrite_enabled:
             history_text = format_history(bounded_history(history_rows))
             rewrite_started = perf_counter()
             try:
@@ -196,6 +196,8 @@ async def chat(request: ChatRequest, http_request: Request):
                 followup_rewrite_ms = (
                     perf_counter() - rewrite_started
                 ) * 1000
+        elif history_rows and runtime.llm.enabled:
+            followup_rewrite_status = "disabled"
 
     # 1. 语义检索
     try:
@@ -394,7 +396,7 @@ async def _stream_chat_events(
     request_started: float,
     followup_rewrite_ms: float | None = None,
     followup_rewrite_status: Literal[
-        "not_applicable", "succeeded", "failed"
+        "not_applicable", "disabled", "succeeded", "failed"
     ] = "not_applicable",
     runtime: EffectiveSettingsSnapshot | None = None,
     llm_called: bool = False,
@@ -715,7 +717,11 @@ async def chat_stream(request: ChatRequest, http_request: Request):
                 complete_history,
                 request.conversation_id,
             )
-            if history_rows and runtime.llm.enabled:
+            if (
+                history_rows
+                and runtime.llm.enabled
+                and runtime.llm.rewrite_enabled
+            ):
                 history_text = format_history(bounded_history(history_rows))
                 rewrite_started = perf_counter()
                 try:
@@ -740,6 +746,8 @@ async def chat_stream(request: ChatRequest, http_request: Request):
                     followup_rewrite_ms = (
                         perf_counter() - rewrite_started
                     ) * 1000
+            elif history_rows and runtime.llm.enabled:
+                followup_rewrite_status = "disabled"
 
     return StreamingResponse(
         _stream_chat_events(

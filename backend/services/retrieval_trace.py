@@ -8,6 +8,7 @@ from backend.models.schemas import (
     RetrievalTraceCandidate,
     RetrievalTraceChunk,
     RetrievalTraceEffectiveConfig,
+    RetrievalTraceGenerationConfig,
     RetrievalTraceLLMSummary,
     RetrievalTraceStage,
     RetrievalTraceTimings,
@@ -174,7 +175,7 @@ def finalize_chat_trace(
     llm_generation_ms: float,
     followup_rewrite_ms: float | None = None,
     followup_rewrite_status: Literal[
-        "not_applicable", "succeeded", "failed"
+        "not_applicable", "disabled", "succeeded", "failed"
     ] = "not_applicable",
     citation_extraction_ms: float | None = None,
     time_to_first_delta_ms: float | None = None,
@@ -217,6 +218,22 @@ def finalize_chat_trace(
             called=bool(llm_called),
             provider=runtime.llm.provider,
             model=runtime.llm.model,
+            answer=RetrievalTraceGenerationConfig(
+                called=bool(llm_called and llm_generation_ms > 0),
+                thinking_mode=runtime.llm.answer_thinking_mode,
+                reasoning_effort=runtime.llm.answer_reasoning_effort,
+                temperature=runtime.llm.temperature,
+                max_tokens=runtime.llm.max_tokens,
+                timeout_seconds=runtime.llm.timeout_seconds,
+            ),
+            rewrite=RetrievalTraceGenerationConfig(
+                called=followup_rewrite_status in {"succeeded", "failed"},
+                thinking_mode=runtime.llm.rewrite_thinking_mode,
+                reasoning_effort=runtime.llm.rewrite_reasoning_effort,
+                temperature=runtime.llm.rewrite_temperature,
+                max_tokens=runtime.llm.rewrite_max_tokens,
+                timeout_seconds=runtime.llm.rewrite_timeout_seconds,
+            ),
         )
     return trace
 

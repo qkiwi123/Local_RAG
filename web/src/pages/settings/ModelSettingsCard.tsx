@@ -1,7 +1,9 @@
 import {
+  Alert,
   Button,
   Card,
   Col,
+  Divider,
   Form,
   Input,
   InputNumber,
@@ -18,6 +20,20 @@ import { ApiOutlined, DeleteOutlined } from "@ant-design/icons";
 import type { SettingsReadResponse } from "../../api/types";
 import type { ApiKeyIntent, SettingsFormValues } from "./formTypes";
 import { FieldMeta } from "./FieldMeta";
+
+const thinkingModeOptions = [
+  { value: "provider_default", label: "服务商默认" },
+  { value: "enabled", label: "明确开启" },
+  { value: "disabled", label: "明确关闭" },
+];
+
+const reasoningEffortOptions = [
+  { value: "provider_default", label: "服务商默认" },
+  { value: "low", label: "Low" },
+  { value: "medium", label: "Medium" },
+  { value: "high", label: "High" },
+  { value: "max", label: "Max" },
+];
 
 interface ModelSettingsCardProps {
   form: FormInstance<SettingsFormValues>;
@@ -167,35 +183,128 @@ export function ModelSettingsCard({
         </Col>
       </Row>
 
+      <Divider titlePlacement="start">最终回答生成</Divider>
+      <Alert
+        type="info"
+        showIcon
+        title="参数保持通用且始终可编辑"
+        description="不同服务商或模型可能忽略、不支持或重新解释某些参数；系统不会因开启思考而锁定 Temperature，调用失败时请结合 Trace 与上游文档检查兼容性。"
+      />
       <Row gutter={[20, 0]}>
-        <Col xs={24} md={8}>
+        <Col xs={24} md={12} lg={6}>
+          <Form.Item
+            name={["llm", "answer_thinking_mode"]}
+            label="回答思考模式"
+            rules={[{ required: true, message: "请选择回答思考模式" }]}
+            extra={meta("answer_thinking_mode", "服务商默认表示不发送显式开关。")}
+          >
+            <Select options={thinkingModeOptions} />
+          </Form.Item>
+        </Col>
+        <Col xs={24} md={12} lg={6}>
+          <Form.Item
+            name={["llm", "answer_reasoning_effort"]}
+            label="回答思考强度"
+            rules={[{ required: true, message: "请选择回答思考强度" }]}
+            extra={meta("answer_reasoning_effort", "可独立设置；是否生效由上游模型决定。")}
+          >
+            <Select options={reasoningEffortOptions} />
+          </Form.Item>
+        </Col>
+        <Col xs={24} md={12} lg={6}>
           <Form.Item
             name={["llm", "temperature"]}
-            label="Temperature"
+            label="回答 Temperature"
             rules={[{ required: true, message: "请输入 Temperature" }]}
-            extra={meta("temperature", "范围 0–2。")}
+            extra={meta("temperature", "范围 0–2；部分思考模型可能忽略，但字段不会被禁用。")}
           >
             <InputNumber min={0} max={2} step={0.1} precision={2} />
           </Form.Item>
         </Col>
-        <Col xs={24} md={8}>
+        <Col xs={24} md={12} lg={6}>
           <Form.Item
             name={["llm", "max_tokens"]}
-            label="最大输出 Tokens"
-            rules={[{ required: true, message: "请输入最大输出 Tokens" }]}
-            extra={meta("max_tokens", "范围 1–32768。")}
+            label="回答最大完成 Tokens"
+            rules={[{ required: true, message: "请输入回答最大完成 Tokens" }]}
+            extra={meta("max_tokens", "范围 1–32768；思考模型通常会让思考和正文共享该预算。")}
           >
             <InputNumber min={1} max={32768} precision={0} />
           </Form.Item>
         </Col>
-        <Col xs={24} md={8}>
+        <Col xs={24} md={12} lg={6}>
           <Form.Item
             name={["llm", "timeout_seconds"]}
-            label="请求超时（秒）"
+            label="回答请求超时（秒）"
             rules={[{ required: true, message: "请输入超时时间" }]}
-            extra={meta("timeout_seconds", "范围 1–600 秒。")}
+            extra={meta("timeout_seconds", "范围 1–600 秒；连接测试也使用该超时。")}
           >
             <InputNumber min={1} max={600} step={1} />
+          </Form.Item>
+        </Col>
+      </Row>
+
+      <Divider titlePlacement="start">查询改写</Divider>
+      <Row gutter={[20, 0]}>
+        <Col xs={24} md={12} lg={6}>
+          <Form.Item
+            name={["llm", "rewrite_enabled"]}
+            label="启用查询改写"
+            valuePropName="checked"
+            extra={meta("rewrite_enabled", "开启后，仅在有历史消息的多轮会话中尝试改写。")}
+          >
+            <Switch checkedChildren="自动" unCheckedChildren="关闭" />
+          </Form.Item>
+        </Col>
+        <Col xs={24} md={12} lg={6}>
+          <Form.Item
+            name={["llm", "rewrite_thinking_mode"]}
+            label="改写思考模式"
+            rules={[{ required: true, message: "请选择改写思考模式" }]}
+            extra={meta("rewrite_thinking_mode", "默认明确关闭，以降低短任务延迟和空正文风险。")}
+          >
+            <Select options={thinkingModeOptions} />
+          </Form.Item>
+        </Col>
+        <Col xs={24} md={12} lg={6}>
+          <Form.Item
+            name={["llm", "rewrite_reasoning_effort"]}
+            label="改写思考强度"
+            rules={[{ required: true, message: "请选择改写思考强度" }]}
+            extra={meta("rewrite_reasoning_effort", "始终可编辑；冲突组合可能被上游忽略或拒绝。")}
+          >
+            <Select options={reasoningEffortOptions} />
+          </Form.Item>
+        </Col>
+        <Col xs={24} md={12} lg={6}>
+          <Form.Item
+            name={["llm", "rewrite_timeout_seconds"]}
+            label="改写请求超时（秒）"
+            rules={[{ required: true, message: "请输入改写超时时间" }]}
+            extra={meta("rewrite_timeout_seconds", "范围 1–600 秒；超时后回退原问题。")}
+          >
+            <InputNumber min={1} max={600} step={1} />
+          </Form.Item>
+        </Col>
+      </Row>
+      <Row gutter={[20, 0]}>
+        <Col xs={24} md={12} lg={6}>
+          <Form.Item
+            name={["llm", "rewrite_temperature"]}
+            label="改写 Temperature"
+            rules={[{ required: true, message: "请输入改写 Temperature" }]}
+            extra={meta("rewrite_temperature", "范围 0–2；默认 0，字段不会因思考模式而禁用。")}
+          >
+            <InputNumber min={0} max={2} step={0.1} precision={2} />
+          </Form.Item>
+        </Col>
+        <Col xs={24} md={12} lg={6}>
+          <Form.Item
+            name={["llm", "rewrite_max_tokens"]}
+            label="改写最大完成 Tokens"
+            rules={[{ required: true, message: "请输入改写最大完成 Tokens" }]}
+            extra={meta("rewrite_max_tokens", "范围 1–32768；默认 200。")}
+          >
+            <InputNumber min={1} max={32768} precision={0} />
           </Form.Item>
         </Col>
       </Row>

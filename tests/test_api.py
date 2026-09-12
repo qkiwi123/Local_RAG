@@ -348,6 +348,85 @@ class TestChatAPI:
 
 
 class TestPersistentConversationAPI:
+    def test_runtime_setting_can_disable_followup_rewrite(
+        self,
+        client,
+        monkeypatch,
+    ):
+        from backend.main import app
+        from backend.models.schemas import RetrievalTrace
+        from backend.routers import chat as chat_router
+
+        runtime = app.state.runtime_settings_manager.snapshot()
+        disabled_runtime = runtime.model_copy(
+            update={
+                "llm": runtime.llm.model_copy(
+                    update={"rewrite_enabled": False}
+                )
+            }
+        )
+        monkeypatch.setattr(
+            chat_router,
+            "_runtime_snapshot",
+            lambda request: disabled_runtime,
+        )
+        original_retrieve = chat_router.retrieve_with_trace
+
+        def retrieve_with_trace(*args, **kwargs):
+            response = original_retrieve(*args, **kwargs)
+            return response.model_copy(
+                update={
+                    "trace": RetrievalTrace(
+                        retrieval_mode="dense",
+                        reranker_enabled=False,
+                    )
+                }
+            )
+
+        monkeypatch.setattr(
+            chat_router,
+            "retrieve_with_trace",
+            retrieve_with_trace,
+        )
+        monkeypatch.setattr(
+            chat_router,
+            "rewrite_followup",
+            lambda *args, **kwargs: (_ for _ in ()).throw(
+                AssertionError("查询改写已关闭，不应调用模型")
+            ),
+        )
+        monkeypatch.setattr(
+            chat_router,
+            "ask_with_history",
+            lambda *args, **kwargs: "回答【来源1】",
+        )
+        conversation_id = client.post("/api/conversations", json={}).json()[
+            "conversation_id"
+        ]
+        first = client.post(
+            "/api/chat",
+            json={
+                "question": "第一问",
+                "conversation_id": conversation_id,
+                "request_id": "rewrite-disabled-first",
+                "expected_last_message_id": None,
+            },
+        )
+        second = client.post(
+            "/api/chat",
+            json={
+                "question": "那它呢？",
+                "conversation_id": conversation_id,
+                "request_id": "rewrite-disabled-second",
+                "expected_last_message_id": first.json()["assistant_message_id"],
+            },
+        )
+
+        assert second.status_code == 200, second.text
+        assert second.json()["standalone_question"] == "那它呢？"
+        assert second.json()["trace"]["followup_rewrite_status"] == "disabled"
+        assert second.json()["trace"]["llm"]["rewrite"]["called"] is False
+
     @pytest.mark.parametrize(
         ("rewrite_fails", "expected_status"),
         [(False, "succeeded"), (True, "failed")],

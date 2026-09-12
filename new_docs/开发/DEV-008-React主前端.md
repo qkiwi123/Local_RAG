@@ -6,8 +6,8 @@
 - 文档类型：开发
 - 状态：已完成
 - 创建日期：2026-08-27
-- 最后更新：2026-09-09
-- 证据口径：2026-09-09完成BUG-004流消费修复及OPT-006 `chat-v2` TraceDrawer分区显示；前端全量41项、lint和生产构建通过。未做人工浏览器多视口或真实外部LLM验收。
+- 最后更新：2026-09-12
+- 证据口径：2026-09-12设置页新增回答/查询改写生成参数分组、通用兼容提示，TraceDrawer新增两类配置快照；自动化结果见[TEST-005](../测试/TEST-005-设置与Trace回归.md#evidence)。未做人工浏览器多视口或真实外部LLM验收。
 - 导航：[本类目录](./README.md) · [文档中心](../README.md)
 
 ## 1. 目标、来源与模块边界
@@ -24,6 +24,7 @@
 | [KnowledgePage.tsx](../../web/src/pages/knowledge/KnowledgePage.tsx) / [useUploadQueue.ts](../../web/src/pages/knowledge/useUploadQueue.ts) | 文档与逐文件队列 |
 | [ResizableDrawer.tsx](../../web/src/components/ResizableDrawer.tsx) / [usePanelResize.ts](../../web/src/components/usePanelResize.ts) | 可调任务面板 |
 | [api/stream.ts](../../web/src/api/stream.ts) | NDJSON分块解析 |
+| [ModelSettingsCard.tsx](../../web/src/pages/settings/ModelSettingsCard.tsx) / [SettingsPage.tsx](../../web/src/pages/settings/SettingsPage.tsx) | 模型连接、回答/改写生成参数与revision PATCH |
 
 <a id="implementation"></a>
 ## 3. 开发逻辑与实际行为
@@ -33,6 +34,8 @@
 知识库默认全宽文档工作区；上传和标签抽屉按需打开；队列关闭后保留。上传只重试失败项，OCR warning作为AI识别风险显示。检索范围位于输入框上方，下一请求带tags。
 
 桌面支持会话栏和抽屉调宽，窄屏使用卡片、移动会话抽屉或全宽任务面板。UI尺寸偏好与后端运行设置分开。
+
+模型设置页将连接参数、最终回答和查询改写分区。思考模式和强度使用通用枚举，Temperature与Token上限始终可编辑；页面只说明部分模型可能忽略、不支持或重新解释参数，不依据当前模型名锁定控件。查询改写开关显示为自动/关闭。该界面没有思考文本显示控件，聊天流继续只渲染最终答案delta。
 
 ## 4. 实际结果与验证
 
@@ -46,7 +49,7 @@
 
 ## 6. 已知限制与后续
 
-构建仍有较大单chunk警告，暂无拆包前后数据；jsdom流测试和真实本地HTTP测试都不替代人工浏览器布局/体感验收。HTTP 200不足以证明React挂载，MIME故障由[托管修复](../开发/DEV-012-服务托管与启动停止.md#bug-fixes)处理。TraceDrawer已移除旧“其他阶段”确定性归因，按`chat-v2`分为同边界阶段、边界外提交和服务端里程碑；浏览器实际首字仍需单独测量。旧frontend/仍保留，未授权删除。
+构建仍有较大单chunk警告，暂无拆包前后数据；jsdom流测试和真实本地HTTP测试都不替代人工浏览器布局/体感验收。HTTP 200不足以证明React挂载，MIME故障由[托管修复](../开发/DEV-012-服务托管与启动停止.md#bug-fixes)处理。TraceDrawer已移除旧“其他阶段”确定性归因，按`chat-v2`分为同边界阶段、边界外提交和服务端里程碑，并显示回答/改写冻结的思考模式、强度、Temperature、Token上限、超时和调用状态；旧Trace明确未记录。浏览器实际首字仍需单独测量。旧frontend/仍保留，未授权删除。
 
 ## 关联文档
 
@@ -65,6 +68,7 @@
 
 | 日期 | 内容 | 原因 |
 |---|---|---|
+| 2026-09-12 | 设置页增加回答/改写生成分组和通用兼容提示，保持思考开启时Temperature可编辑；TraceDrawer增加用途级配置摘要 | 满足跨模型配置需求，不引入原始思考文本展示 |
 | 2026-09-09 | 实施`chat-v2` TraceDrawer分区、旧Trace不归因、新字段/状态/里程碑显示并通过41项、lint和构建 | 完成OPT-006方向一的前端呈现和兼容验收 |
 | 2026-09-09 | 增加未完成响应中的即时delta分派和响应头前Abort测试，修正主动停止识别；记录41项、lint与构建结果 | 配合BUG-004后端异步化，验证前端不会自行等到响应结束才更新，并消除停止阶段误报 |
 | 2026-09-09 | 补充前端NDJSON解析与网络增量到达的边界，登记BUG-004和OPT-006的前置关系 | 解析器能处理分块不等于后端及时flush；Trace差值显示也需要新的字段契约 |

@@ -234,6 +234,14 @@ def test_patch_llm_settings_replaces_key_without_leaking_it(
                         "temperature": 0.2,
                         "max_tokens": 512,
                         "timeout_seconds": 15,
+                        "answer_thinking_mode": "enabled",
+                        "answer_reasoning_effort": "high",
+                        "rewrite_enabled": False,
+                        "rewrite_thinking_mode": "provider_default",
+                        "rewrite_reasoning_effort": "low",
+                        "rewrite_temperature": 0.2,
+                        "rewrite_max_tokens": 300,
+                        "rewrite_timeout_seconds": 18,
                         "api_key_update": {
                             "action": "replace",
                             "value": secret,
@@ -248,6 +256,9 @@ def test_patch_llm_settings_replaces_key_without_leaking_it(
     payload = response.json()
     assert payload["revision"] == 1
     assert payload["settings"]["llm"]["model"] == "new-model"
+    assert payload["settings"]["llm"]["answer_thinking_mode"] == "enabled"
+    assert payload["settings"]["llm"]["rewrite_enabled"] is False
+    assert payload["settings"]["llm"]["rewrite_max_tokens"] == 300
     assert payload["settings"]["llm"]["api_key"] == {
         "configured": True,
         "source": "runtime",
@@ -624,11 +635,13 @@ def test_retrieval_only_sync_stream_and_followup_make_zero_llm_calls(
         assert payload["trace"]["timings_ms"]["citation_extraction"] is not None
         assert payload["trace"]["timings_ms"]["persistence"] is not None
         assert payload["trace"]["settings_revision"] == 1
-        assert payload["trace"]["llm"] == {
-            "called": False,
-            "provider": settings.LLM_PROVIDER,
-            "model": settings.DEEPSEEK_MODEL,
-        }
+        llm_trace = payload["trace"]["llm"]
+        assert llm_trace["called"] is False
+        assert llm_trace["provider"] == settings.LLM_PROVIDER
+        assert llm_trace["model"] == settings.DEEPSEEK_MODEL
+        assert llm_trace["answer"]["called"] is False
+        assert llm_trace["rewrite"]["called"] is False
+        assert llm_trace["rewrite"]["thinking_mode"] == "disabled"
         assert "api_key" not in json.dumps(payload["trace"]).lower()
     assert second.json()["standalone_question"] == "还有呢？"
 

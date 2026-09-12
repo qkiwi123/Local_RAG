@@ -35,6 +35,14 @@ DYNAMIC_FIELD_WHITELIST = frozenset(
         "llm.temperature",
         "llm.max_tokens",
         "llm.timeout_seconds",
+        "llm.answer_thinking_mode",
+        "llm.answer_reasoning_effort",
+        "llm.rewrite_enabled",
+        "llm.rewrite_thinking_mode",
+        "llm.rewrite_reasoning_effort",
+        "llm.rewrite_temperature",
+        "llm.rewrite_max_tokens",
+        "llm.rewrite_timeout_seconds",
         "retrieval.mode",
         "retrieval.final_top_k",
         "retrieval.dense_candidate_k",
@@ -116,6 +124,42 @@ def _environment_payload(environment) -> dict:
             "max_tokens": int(getattr(environment, "LLM_MAX_TOKENS", 2000)),
             "timeout_seconds": float(
                 getattr(environment, "LLM_TIMEOUT_SECONDS", 120)
+            ),
+            "answer_thinking_mode": str(
+                getattr(
+                    environment,
+                    "LLM_ANSWER_THINKING_MODE",
+                    "provider_default",
+                )
+            ),
+            "answer_reasoning_effort": str(
+                getattr(
+                    environment,
+                    "LLM_ANSWER_REASONING_EFFORT",
+                    "provider_default",
+                )
+            ),
+            "rewrite_enabled": bool(
+                getattr(environment, "LLM_REWRITE_ENABLED", True)
+            ),
+            "rewrite_thinking_mode": str(
+                getattr(environment, "LLM_REWRITE_THINKING_MODE", "disabled")
+            ),
+            "rewrite_reasoning_effort": str(
+                getattr(
+                    environment,
+                    "LLM_REWRITE_REASONING_EFFORT",
+                    "provider_default",
+                )
+            ),
+            "rewrite_temperature": float(
+                getattr(environment, "LLM_REWRITE_TEMPERATURE", 0)
+            ),
+            "rewrite_max_tokens": int(
+                getattr(environment, "LLM_REWRITE_MAX_TOKENS", 200)
+            ),
+            "rewrite_timeout_seconds": float(
+                getattr(environment, "LLM_REWRITE_TIMEOUT_SECONDS", 30)
             ),
         },
         "retrieval": {
