@@ -6,7 +6,7 @@ PDF、DOCX、TXT、Markdown 和 PPTX，完成解析、切分、向量检索、Cr
 
 ## 当前状态
 
-截至 2026-08-25，以下链路已经贯通：
+截至 2026-09-18，以下链路已经贯通：
 
 - 验收轮新增：知识库按文档名称模糊搜索（与标签筛选组合）；
 - OCR 文本做确定性结构分类（独立标题/列表块 + 混合段落首行标题渲染），
@@ -20,8 +20,8 @@ PDF、DOCX、TXT、Markdown 和 PPTX，完成解析、切分、向量检索、Cr
 - 公共 Assembler 负责稳定 ID、连续 sequence、canonical text 和字符 offset；
 - 生产上传和索引重建均使用 `structured-v2`；可选 OCR/图片理解产出进入 canonical text，
   并以 `attributes.ocr` 标记来源；
-- Chroma 保存检索所需的轻量定位 metadata，SQLite schema v3 保存文档、结构化 unit、
-  标签、会话和受容量限制的持久化 Trace；
+- Chroma 保存检索所需的轻量定位 metadata，SQLite schema v5 保存文档、结构化 unit、
+  标签、会话、模型思考内容和受容量限制的持久化 Trace；
 - Dense 检索使用 `BAAI/bge-large-zh-v1.5`，可选
   `BAAI/bge-reranker-v2-m3` 进行 Cross-encoder 重排；
 - 引用预览按 unit 原序恢复整份文档结构并高亮命中区间；
@@ -30,6 +30,16 @@ PDF、DOCX、TXT、Markdown 和 PPTX，完成解析、切分、向量检索、Cr
 - 标签支持父子路径、父级含子孙和多标签并集，可同时用于问答检索范围与文档管理；
 - React SPA 已成为 8000 端口的主前端，覆盖会话、检索范围、引用/OCR 预览、Trace、
   文档上传、标签管理和文档维护，并通过桌面、缩放等效视口与移动端验收；
+- 视觉模型可跟随问答模型或独立配置，并分别控制文字识别、图片描述的思考模式、
+  思考强度、Temperature、输出长度和超时；设置页支持真实图片连接测试；
+- OCR/视觉失败会区分限流、超时、空输出和截断，记录服务商请求 ID/错误码；单进程视觉
+  请求串行执行并沿用有限重试，便于核对免费额度或账号级并发限制；
+- 文档预览将同一原图及其 OCR 文本视为一个布局组，组结束后正文恢复整行，避免文字
+  受不定高度浮动图片影响；
+- 来源引用会在预览抽屉完成动画和图片布局后重新定位命中标记；模型思考按独立流展示，
+  正文开始时自动折叠，历史消息可再次展开；
+- `scripts/start.ps1` 默认重建并启动 React SPA，打开带缓存戳的 8000 地址；旧 Streamlit
+  仅在显式指定兼容参数时启动；
 - 检索 Trace 可持久化并展示 Dense、BM25、RRF、Reranker、最终上下文、阶段耗时、
   settings revision、本次实际检索参数和不含密钥的 LLM 调用摘要。
 
@@ -59,7 +69,9 @@ API Key 明文，也不会为查看状态而冷加载模型；敏感字段的 42
 覆盖和当前用户 DPAPI 密钥，不修改 `.env`、不清空或重建向量库。启用
 `RETRIEVAL_TRACE_ENABLED` 后，新问答 Trace 会记录该请求冻结的 revision、实际 Top K/候选深度/
 Dense threshold/BM25/RRF/Reranker 参数，以及模型是否实际调用和 provider/model；不会记录 API Key。
-旧持久化 Trace 继续可读，并在 Drawer 中标注“旧 Trace 未记录”。拒答门控仍未实现。
+旧持久化 Trace 继续可读，并在 Drawer 中标注“旧 Trace 未记录”。拒答门控仍未开放，
+需要先完成 Dataset v3 的 V3-5 校准。视觉与会话优化的完整记录及剩余事项见
+[`docs/2026-09-18-视觉与会话体验优化记录.md`](docs/2026-09-18-视觉与会话体验优化记录.md)。
 
 ## 当前架构
 
@@ -157,7 +169,8 @@ Key；如果只使用检索链路，可设 `LLM_ENABLED=false` 并留空 Key。�
 LLM_ENABLED=true
 DEEPSEEK_API_KEY=your_key
 DEEPSEEK_BASE_URL=https://api.deepseek.com
-DEEPSEEK_MODEL=deepseek-v4-flash
+DEEPSEEK_MODEL=deepseek-flash
+LLM_ANSWER_THINKING_MODE=disabled
 RETRIEVAL_TRACE_ENABLED=false
 TRACE_STORAGE_MAX_BYTES=52428800
 EMBEDDING_DEVICE=cuda:0
@@ -182,8 +195,38 @@ OCR_IMAGE_DIR=./data/ocr_images
 尚未授权修改默认后端，也不能外推到更大语料或生产容量。完整证据见
 `eval/crud_rag_1000/v3_1/bm25_persistence_p4/README.md`。
 
-启用任一 OCR 层前，还必须配置 `VISION_API_KEY`、`VISION_BASE_URL` 和 `VISION_MODEL`；
-视觉接口只用于文档入库，不改变 DeepSeek 问答链路。
+在设置页的“视觉模型”中开启总开关和所需场景。默认 `VISION_SOURCE=follow_llm`，
+使用已保存的问答服务商、地址、模型及密钥；关闭问答生成不会关闭视觉识别。
+所选模型须支持图片输入（例如当前部署所使用的 `deepseek-flash`）。选择“自定义模型”后，
+可独立配置连接及加密密钥，`VISION_*` 环境变量作为自定义连接的部署默认。
+页面密钥优先于环境变量；清除页面密钥恢复环境变量，不会清除另一类模型的密钥。
+
+文字识别和图片描述分别配置思考模式/强度、Temperature、最大输出 Tokens 和超时；
+默认关闭思考，Temperature 为 0，输出上限分别为 4000/800，超时 60 秒。
+“测试视觉模型”对当前视觉草稿发送一张内置图片，检查实际识别结果，不保存草稿；
+跟随模式使用**已保存**的问答连接。测试及正式识别均会消耗服务商额度。
+视觉设置从下次文档上传/重新解析生效，每份文档固定使用一份配置；旧文档不会自动更新，
+仅重建检索索引也不会补做 OCR。页面不会开放 Prompt、并发或重试策略编辑。
+
+视觉链路排查：先在设置页点击“测试视觉连接”。它验证真实图片输入和识别结果，而不只是接口可达；
+跟随模式使用已保存的问答连接，自定义模式使用视觉草稿。再上传一份小文档，检查上传警告及文档预览。
+扫描页识别失败会显示“视觉识别未完成”及原因，不再与未启用识别时的“无可提取文本”混为一谈。
+`logs/backend.error.log` 中搜索 `Vision failure` 可查页/图片对象、模型、错误类别、HTTP 状态及服务商请求 ID。
+HTTP 429 仅确认服务商拒绝了该次请求，是否属于并发、频率或额度限制仍需结合警告里的服务商代码和服务商后台判断。
+当前单个后端进程的视觉调用按 1 路执行，正常调用沿用 SDK 最多 2 次重试，草稿测试不重试；
+这不能保证避开账号级额度或其他应用同时调用的限制。空回复、输出截断不会作为成功结果写入缓存。
+修改模型、任务输出参数或图片内容会使用新缓存；更换密钥或提高超时后，旧的短期失败记忆不会阻止重试。
+
+需要独立复现完整链路时，在项目目录运行：
+
+```powershell
+.\.venv-gpu\Scripts\python.exe -m scripts.validate_vision_settings --run-external
+```
+
+该命令会真实调用当前已保存的问答模型（可能产生少量费用），只发送程序生成的测试图片和两页扫描式 PDF，
+并在 `logs/vision-acceptance-*/` 的隔离库中验收上传、识别、入库、预览，输出 `report.json` 和 `preview.json`。
+不会改动生产设置、原文档或生产索引；这是一项链路验证，不是复杂版式的 OCR 准确率评估。
+识别结果缓存按有效连接、任务、参数和图片区分；限流、超时、空输出、截断通过上传警告报告。
 
 Embedding 和 Reranker 都以 `local_files_only=True` 加载。运行前需要确保以下模型已在
 Hugging Face 本地缓存：
@@ -236,14 +279,23 @@ CPU profile 使用原 `.venv`，并在启动进程中强制覆盖为 CPU/FP32；
 .\scripts\start.ps1 -Reload
 ```
 
+一键脚本默认重新构建并打开 React 页面，不再启动旧 Streamlit。只在人工对照旧界面时使用：
+
+```powershell
+.\scripts\start.ps1 -LegacyFrontend
+```
+
+不希望自动打开浏览器时可附加 `-NoBrowser`。
+
 访问地址：
 
 - React SPA（主入口）：http://localhost:8000/
 - API 文档：http://localhost:8000/docs
-- 兼容保留的旧 Streamlit：http://localhost:8501
+- 旧 Streamlit（仅 `-LegacyFrontend` 时启动）：http://localhost:8501
 
-`start.ps1` 会在缺少 `web/dist` 时先构建 React SPA，由 FastAPI 静态托管；同时暂时启动
-旧 Streamlit 供功能对照。阶段 3 工程验收已经通过，但删除旧前端仍需用户另行确认。
+`start.ps1` 每次都会重新构建 React SPA，由 FastAPI 静态托管，并将它作为默认打开页面。
+启动脚本会等待后台 Embedding/Reranker 预热状态变为 `ready`
+后才报告成功；模型加载失败时会停止刚创建的后端进程，并在错误日志中保留完整异常。
 脚本使用独立隐藏进程，启动成功后会记录 PID，再次启动前检测到服务仍在运行会拒绝执行
 （防双开）。一键停止服务：
 
@@ -265,6 +317,20 @@ Stop-Process -Id <Backend PID>,<Frontend PID>
 
 如果上传中断，查看 `logs/backend.error.log`。失败文件不会因页面刷新而自动重试，需要
 在前端显式点击“重试失败文件”。
+
+## 会话中的模型思考
+
+React 会话会单独显示最终回答模型实际返回的 `reasoning_content`：收到思考片段时默认展开，
+第一段非空正文到达时自动折叠一次，之后可以手动展开或收起。没有思考文本的响应不显示空面板。
+是否返回思考文本取决于上游接口，开启思考开关不保证接口会提供该字段。
+
+成功回答的思考内容随消息保存，重新打开历史会话时默认折叠。metadata schema v5 会为旧消息
+补充默认空值，保留现有会话和知识库数据；升级前可备份 `data/metadata.db`。
+思考文本不参与正文引用提取，也不加入后续问答历史提示词。查询改写和 OCR 思考不在会话展示范围内。
+
+仅有思考、正文为空仍判定为失败。失败或主动停止时，当前页面保留已接收内容并提示未完成；
+刷新后不保留半截内容，与现有失败会话策略一致。
+流式协议在 `delta` 之外增加 `reasoning_delta` 事件，其 `text` 只包含思考片段。
 
 ## 文档生命周期
 
@@ -291,20 +357,13 @@ Stop-Process -Id <Backend PID>,<Frontend PID>
 默认测试不会调用 DeepSeek，也不会写入生产 `data/`：
 
 ```powershell
-.\.venv-gpu\Scripts\python.exe -m pytest -q
+.\.venv-gpu\Scripts\python.exe -m pytest tests -q -p no:cacheprovider
 ```
 
-2026-08-15 阶段 3 F4 的隔离验收结果：
-
-```text
-423 passed（不依赖本地模型权重、不调用外部 API）
-38 passed（本地 Embedding/Reranker integration）
-3 external tests 未调用
-```
-
-两组已运行后端测试合计 461 项通过；测试使用隔离临时目录，不写入生产 `data/`。
-完整 `pytest -q` 复验结果为 `461 passed, 3 skipped`，跳过项均为需要
-`--run-external` 才会执行的真实 DeepSeek 测试。
+2026-09-18 完整后端复验结果为 `738 passed, 3 skipped`。跳过项均为需要显式授权才会
+执行的真实外部 LLM 测试；普通测试使用隔离临时目录，不写入生产 `data/`。建议明确传入
+`tests`，避免 pytest 从仓库根目录递归扫描本地 `logs/` 验收临时目录并因 Windows ACL
+产生与代码无关的收集错误。
 
 不依赖本地模型权重的 CI 测试：
 
@@ -321,8 +380,8 @@ npm.cmd run lint
 npm.cmd run build
 ```
 
-F4 结果为 7 个测试文件、27/27 测试通过，lint、TypeScript 和生产构建通过；构建仍有
-单个 JavaScript chunk 超过 500 kB 的体积警告。
+2026-09-18 结果为 12 个测试文件、62/62 测试通过，lint、TypeScript 和生产构建通过；
+构建仍有单个 JavaScript chunk 超过 500 kB 的体积警告。
 
 ### 真实 DeepSeek 测试
 
@@ -476,4 +535,9 @@ structured-v2 的主验收集，也不应与 Dataset v3 指标直接比较。
 3. 明确拒答时的引用策略，并消除不可回答题伪引用；
 4. 检查多轮对话中的额外文档引用；
 5. 评估 Reranker 加速方案，降低 CPU 检索延迟；
-6. 处理 FastAPI lifespan、PyPDF2、Starlette TestClient 等依赖弃用警告。
+6. 为 OCR/图片理解建立带人工真值的准确率与版面/表格专项评测；复杂表格目前仍主要以
+   OCR 段落保存，不等同于结构化表格恢复；
+7. 验证更多 OpenAI-compatible 服务商对 `reasoning_content`、思考开关和思考强度的兼容性；
+8. 对 React 主包做按路由或面板拆分，消除单个 JavaScript chunk 超过 500 kB 的警告；
+9. 处理 FastAPI lifespan、PyPDF2、Starlette TestClient、`pkg_resources` 等依赖弃用警告；
+10. 决定旧 Streamlit 前端的退役时间；如需远程或多人使用，先实现认证、授权和文档级权限。

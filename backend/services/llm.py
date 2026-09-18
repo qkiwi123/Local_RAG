@@ -49,8 +49,30 @@ class LLMCallConfig:
     rewrite_timeout_seconds: float
 
 
+@dataclass(frozen=True)
+class ReasoningDelta:
+    """上游实际返回的思考片段，与最终正文严格分离。"""
+
+    text: str
+
+
 class LLMDisabledError(RuntimeError):
     """调用方在生成模型关闭时错误发起了模型调用。"""
+
+
+class EmptyLLMResponseError(RuntimeError):
+    """上游调用成功结束，但没有返回可展示的最终正文。"""
+
+    def __init__(self, *, reasoning_only: bool = False):
+        self.reasoning_only = reasoning_only
+        if reasoning_only:
+            message = (
+                "模型只返回了思考内容，没有生成最终回答。"
+                "请关闭回答思考模式，或提高最大输出 Tokens 后重试。"
+            )
+        else:
+            message = "模型未返回可见正文，请检查模型配置或稍后重试。"
+        super().__init__(message)
 
 
 _FOLLOWUP_REWRITE_SYSTEM_PROMPT = """你是检索查询改写器。仅根据对话历史，把当前追问改写为一个语义完整、可独立检索的问题。
@@ -87,7 +109,7 @@ def call_config_from_snapshot(
                 getattr(settings, "LLM_TIMEOUT_SECONDS", 120)
             ),
             "answer_thinking_mode": str(
-                getattr(settings, "LLM_ANSWER_THINKING_MODE", "provider_default")
+                getattr(settings, "LLM_ANSWER_THINKING_MODE", "disabled")
             ),
             "answer_reasoning_effort": str(
                 getattr(settings, "LLM_ANSWER_REASONING_EFFORT", "provider_default")
@@ -216,6 +238,16 @@ def _require_enabled(config: LLMCallConfig) -> None:
         raise LLMDisabledError("生成模型已关闭")
 
 
+def _visible_message_content(message) -> str:
+    """提取最终正文；禁止把 reasoning-only 响应当作成功答案。"""
+    content = getattr(message, "content", None)
+    if content is not None and str(content).strip():
+        return str(content)
+    raise EmptyLLMResponseError(
+        reasoning_only=bool(getattr(message, "reasoning_content", None))
+    )
+
+
 def _thinking_parameters(
     config: LLMCallConfig,
     *,
@@ -232,9 +264,9 @@ def _thinking_parameters(
     if config.provider == "deepseek":
         if mode != "provider_default":
             params["extra_body"] = {"thinking": {"type": mode}}
-        # DeepSeek 当前只提供思考开关，没有可与 reasoning_effort
-        # 等价映射的强度参数。强度仍保存在通用设置中，便于切换模型，
-        # 但不能把不受支持的字段直接发给该端点。
+        # DeepSeek 当前支持 low/high/max；medium 按官方规则映射到 high。
+        if mode != "disabled" and effort != "provider_default":
+            params["reasoning_effort"] = "high" if effort == "medium" else effort
         return params
 
     if mode == "disabled":
@@ -441,7 +473,7 @@ def ask(
         **_generation_parameters(config, "answer"),
     )
 
-    return response.choices[0].message.content
+    return _visible_message_content(response.choices[0].message)
 
 
 def rewrite_followup(
@@ -496,7 +528,7 @@ def ask_with_history(
         ),
         **_generation_parameters(config, "answer"),
     )
-    return response.choices[0].message.content
+    return _visible_message_content(response.choices[0].message)
 
 
 def ask_with_history_stream(
@@ -521,9 +553,19 @@ def ask_with_history_stream(
         stream=True,
     )
 
+    saw_visible_content = False
+    saw_reasoning_content = False
     for chunk in stream:
-        if chunk.choices[0].delta.content is not None:
-            yield chunk.choices[0].delta.content
+        delta = chunk.choices[0].delta
+        saw_reasoning_content = saw_reasoning_content or bool(
+            getattr(delta, "reasoning_content", None)
+        )
+        content = getattr(delta, "content", None)
+        if content:
+            saw_visible_content = saw_visible_content or bool(content.strip())
+            yield content
+    if not saw_visible_content:
+        raise EmptyLLMResponseError(reasoning_only=saw_reasoning_content)
 
 
 async def ask_with_history_stream_async(
@@ -532,7 +574,9 @@ async def ask_with_history_stream_async(
     context: str,
     history: str,
     runtime: EffectiveSettingsSnapshot | None = None,
-) -> AsyncGenerator[str, None]:
+    *,
+    include_reasoning: bool = False,
+) -> AsyncGenerator[str | ReasoningDelta, None]:
     """原生异步流式问答；每次上游读取都会把控制权交还事件循环。"""
     config = call_config_from_snapshot(runtime)
     _require_enabled(config)
@@ -548,12 +592,25 @@ async def ask_with_history_stream_async(
         stream=True,
     )
 
+    saw_visible_content = False
+    saw_reasoning_content = False
     try:
         async for chunk in stream:
-            if chunk.choices[0].delta.content is not None:
-                yield chunk.choices[0].delta.content
+            if not chunk.choices:
+                continue
+            delta = chunk.choices[0].delta
+            reasoning = getattr(delta, "reasoning_content", None)
+            saw_reasoning_content = saw_reasoning_content or bool(reasoning)
+            if include_reasoning and reasoning:
+                yield ReasoningDelta(text=reasoning)
+            content = getattr(delta, "content", None)
+            if content:
+                saw_visible_content = saw_visible_content or bool(content.strip())
+                yield content
     finally:
         await stream.close()
+    if not saw_visible_content:
+        raise EmptyLLMResponseError(reasoning_only=saw_reasoning_content)
 
 
 def ask_stream(
@@ -585,16 +642,28 @@ def ask_stream(
         stream=True,
     )
 
+    saw_visible_content = False
+    saw_reasoning_content = False
     for chunk in stream:
-        if chunk.choices[0].delta.content is not None:
-            yield chunk.choices[0].delta.content
+        delta = chunk.choices[0].delta
+        saw_reasoning_content = saw_reasoning_content or bool(
+            getattr(delta, "reasoning_content", None)
+        )
+        content = getattr(delta, "content", None)
+        if content:
+            saw_visible_content = saw_visible_content or bool(content.strip())
+            yield content
+    if not saw_visible_content:
+        raise EmptyLLMResponseError(reasoning_only=saw_reasoning_content)
 
 
 async def ask_stream_async(
     question: str,
     context: str,
     runtime: EffectiveSettingsSnapshot | None = None,
-) -> AsyncGenerator[str, None]:
+    *,
+    include_reasoning: bool = False,
+) -> AsyncGenerator[str | ReasoningDelta, None]:
     """原生异步流式问答，供 ASGI 流式端点逐块发送。"""
     config = call_config_from_snapshot(runtime)
     _require_enabled(config)
@@ -607,9 +676,22 @@ async def ask_stream_async(
         stream=True,
     )
 
+    saw_visible_content = False
+    saw_reasoning_content = False
     try:
         async for chunk in stream:
-            if chunk.choices[0].delta.content is not None:
-                yield chunk.choices[0].delta.content
+            if not chunk.choices:
+                continue
+            delta = chunk.choices[0].delta
+            reasoning = getattr(delta, "reasoning_content", None)
+            saw_reasoning_content = saw_reasoning_content or bool(reasoning)
+            if include_reasoning and reasoning:
+                yield ReasoningDelta(text=reasoning)
+            content = getattr(delta, "content", None)
+            if content:
+                saw_visible_content = saw_visible_content or bool(content.strip())
+                yield content
     finally:
         await stream.close()
+    if not saw_visible_content:
+        raise EmptyLLMResponseError(reasoning_only=saw_reasoning_content)

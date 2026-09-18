@@ -331,11 +331,17 @@ def main(argv: list[str] | None = None) -> int:
     from backend.services.chunker import chunk_units
     from backend.services.embedding import count_tokens
     from backend.services.parsers import PARSER_VERSION, parse_document_structure
+    from backend.services.runtime_settings import RuntimeSettingsManager
+    from backend.services.vision import vision_config_from_snapshot
+    from functools import partial
+
+    # 重解析与上传共享已保存的视觉配置；一次重建固定使用同一快照。
+    vision_config = vision_config_from_snapshot(RuntimeSettingsManager(db_path=str(metadata_db_path)).snapshot())
 
     prepared = prepare_documents(
         records,
         upload_dir,
-        parse_document=parse_document_structure,
+        parse_document=partial(parse_document_structure, vision_config=vision_config),
         chunk_document=chunk_units,
         chunk_size=chunk_size,
         overlap=overlap,

@@ -105,6 +105,7 @@ export interface ConversationMessage {
   sequence: number;
   role: "user" | "assistant";
   content: string;
+  reasoning_content?: string;
   status: "pending" | "complete" | "failed";
   standalone_question?: string | null;
   citations: Citation[];
@@ -204,6 +205,7 @@ export interface UploadResponse {
 export type SettingsFieldSource = "environment" | "runtime" | "system";
 export type SettingsActivation =
   | "next_request"
+  | "next_document_upload"
   | "restart_required"
   | "reindex_required"
   | "unavailable";
@@ -241,6 +243,40 @@ export interface LlmSettings {
   rewrite_timeout_seconds: number;
 }
 
+export type VisionSource = "follow_llm" | "custom";
+
+export interface VisionConnectionView {
+  provider: "deepseek" | "openai_compatible";
+  base_url: string;
+  model: string;
+  api_key: ApiKeyStatus;
+}
+
+export interface VisionSettings {
+  enabled: boolean;
+  source: VisionSource;
+  provider: "deepseek" | "openai_compatible";
+  base_url: string;
+  model: string;
+  api_key: ApiKeyStatus;
+  effective_connection: VisionConnectionView;
+  pdf_scanned_enabled: boolean;
+  pdf_page_images_enabled: boolean;
+  embedded_images_enabled: boolean;
+  recognize_thinking_mode: ThinkingMode;
+  recognize_reasoning_effort: ReasoningEffort;
+  recognize_temperature: number;
+  recognize_max_tokens: number;
+  recognize_timeout_seconds: number;
+  describe_thinking_mode: ThinkingMode;
+  describe_reasoning_effort: ReasoningEffort;
+  describe_temperature: number;
+  describe_max_tokens: number;
+  describe_timeout_seconds: number;
+  max_image_edge: number;
+  max_calls_per_document: number;
+}
+
 export interface RefusalGateSettings {
   available: boolean;
   enabled: boolean;
@@ -266,10 +302,12 @@ export interface SettingsReadResponse {
   revision: number;
   updated_at?: string | null;
   llm: LlmSettings;
+  vision: VisionSettings;
   retrieval: RetrievalSettings;
   runtime: {
     access_scope: "trusted_local_workspace";
     llm_activation: SettingsActivation;
+    vision_activation: "next_document_upload";
     retrieval_activation: SettingsActivation;
     refusal_gate_activation: SettingsActivation;
   };
@@ -293,6 +331,32 @@ export interface LlmSettingsPatch {
   rewrite_temperature?: number;
   rewrite_max_tokens?: number;
   rewrite_timeout_seconds?: number;
+  api_key_update?:
+    | { action: "replace"; value: string }
+     | { action: "clear" };
+}
+
+export interface VisionSettingsPatch {
+  enabled?: boolean;
+  source?: VisionSource;
+  provider?: "deepseek" | "openai_compatible";
+  base_url?: string;
+  model?: string;
+  pdf_scanned_enabled?: boolean;
+  pdf_page_images_enabled?: boolean;
+  embedded_images_enabled?: boolean;
+  recognize_thinking_mode?: ThinkingMode;
+  recognize_reasoning_effort?: ReasoningEffort;
+  recognize_temperature?: number;
+  recognize_max_tokens?: number;
+  recognize_timeout_seconds?: number;
+  describe_thinking_mode?: ThinkingMode;
+  describe_reasoning_effort?: ReasoningEffort;
+  describe_temperature?: number;
+  describe_max_tokens?: number;
+  describe_timeout_seconds?: number;
+  max_image_edge?: number;
+  max_calls_per_document?: number;
   api_key_update?:
     | { action: "replace"; value: string }
     | { action: "clear" };
@@ -328,6 +392,24 @@ export interface LlmConnectionTestResponse {
   endpoint: string;
   error_code?: string | null;
   message: string;
+}
+
+export type VisionTestTask = "recognize" | "describe";
+
+export interface VisionConnectionTestRequest {
+  vision: VisionSettingsPatch;
+  task?: VisionTestTask;
+}
+
+export interface VisionConnectionTestResponse {
+  success: boolean;
+  latency_ms: number;
+  provider: "deepseek" | "openai_compatible";
+  model: string;
+  endpoint: string;
+  error_code: string | null;
+  message: string;
+  request_id?: string | null;
 }
 
 export interface ModelRuntimeStatus {
@@ -378,6 +460,7 @@ export interface SettingsRuntimeStatus {
 export type StreamEvent =
   | { event: "meta"; conversation_id?: string; request_id: string; user_message_id?: string; assistant_message_id?: string; standalone_question: string }
   | { event: "delta"; text: string }
+  | { event: "reasoning_delta"; text: string }
   | { event: "citations"; citations: Citation[] }
   | { event: "done"; assistant_message_id?: string; trace?: RetrievalTrace | null }
   | { event: "error"; code: string; message: string };

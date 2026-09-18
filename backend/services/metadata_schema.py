@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Optional
 
 
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 
 SCHEMA_META = """
 CREATE TABLE schema_meta (
@@ -73,6 +73,7 @@ CREATE TABLE messages (
     standalone_question TEXT,
     citations_json TEXT,
     created_at TEXT NOT NULL,
+    reasoning_content TEXT NOT NULL DEFAULT '',
     UNIQUE (conversation_id, sequence),
     UNIQUE (request_id, role),
     FOREIGN KEY (conversation_id)
@@ -242,7 +243,7 @@ def _required_tables_for(version: int) -> set[str]:
         return _V2_REQUIRED_TABLES
     if version == 3:
         return _V3_REQUIRED_TABLES
-    if version == SCHEMA_VERSION:
+    if version in (4, SCHEMA_VERSION):
         return _REQUIRED_TABLES
     raise UnsupportedSchemaError(
         f"不支持的 metadata schema version: {version}"
@@ -269,6 +270,14 @@ def _apply_migration(connection: sqlite3.Connection, from_version: int) -> None:
         connection.execute(RUNTIME_SETTINGS_HISTORY_SCHEMA)
         connection.execute(
             "UPDATE schema_meta SET schema_version = 4 WHERE schema_version = 3"
+        )
+        return
+    if from_version == 4:
+        connection.execute(
+            "ALTER TABLE messages ADD COLUMN reasoning_content TEXT NOT NULL DEFAULT ''"
+        )
+        connection.execute(
+            "UPDATE schema_meta SET schema_version = 5 WHERE schema_version = 4"
         )
         return
     raise UnsupportedSchemaError(

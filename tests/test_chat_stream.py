@@ -152,6 +152,41 @@ def test_stream_event_sequence_and_answer_assembly(client, monkeypatch):
     assert done["trace"] is None
 
 
+def test_reasoning_stream_persists_reloads_and_replays_separately(client, monkeypatch):
+    from backend.services.llm import ReasoningDelta
+    from backend.services.conversation_store import complete_history
+
+    _mock_retrieval(monkeypatch, rows=[_retrieval_row()])
+    _mock_stream(monkeypatch, [ReasoningDelta("先检查文档【来源1】。"), ReasoningDelta("再整理答案。"), "年假5天。"])
+    cid = client.post("/api/conversations", json={}).json()["conversation_id"]
+    payload = {"question": "年假几天？", "conversation_id": cid, "request_id": "reasoning-test"}
+    events = _events(client.post("/api/chat/stream", json=payload))
+    assert [e["event"] for e in events] == ["meta", "reasoning_delta", "reasoning_delta", "delta", "citations", "done"]
+    assert events[-2]["citations"] == []  # 思考中的来源标记不得进入答案引用。
+    saved = client.get(f"/api/conversations/{cid}").json()["messages"][-1]
+    assert saved["content"] == "年假5天。"
+    assert saved["reasoning_content"] == "先检查文档【来源1】。再整理答案。"
+    assert all("reasoning_content" not in row for row in complete_history(cid))
+    replay = _events(client.post("/api/chat/stream", json=payload))
+    assert replay[1] == {"event": "reasoning_delta", "text": saved["reasoning_content"]}
+    assert replay[2] == {"event": "delta", "text": "年假5天。"}
+
+
+def test_reasoning_only_stream_stays_failed_and_keeps_no_partial_message(client, monkeypatch):
+    from backend.services.llm import ReasoningDelta
+
+    _mock_retrieval(monkeypatch, rows=[_retrieval_row()])
+    _mock_stream(monkeypatch, [ReasoningDelta("仍在分析")])
+    cid = client.post("/api/conversations", json={}).json()["conversation_id"]
+    events = _events(client.post("/api/chat/stream", json={
+        "question": "问题", "conversation_id": cid, "request_id": "reasoning-only",
+    }))
+    assert [e["event"] for e in events] == ["meta", "reasoning_delta", "error"]
+    assert "没有生成最终回答" in events[-1]["message"]
+    messages = client.get(f"/api/conversations/{cid}").json()["messages"]
+    assert len(messages) == 1 and messages[0]["status"] == "failed"
+
+
 def test_live_http_stream_is_incremental_and_does_not_block_health(
     client,
     monkeypatch,
@@ -464,6 +499,20 @@ def test_stream_llm_error_emits_error_event(client, monkeypatch):
         "meta", "delta", "error",
     ]
     assert events[-1]["code"] == "llm_error"
+
+
+def test_stream_empty_llm_response_is_not_completed(client, monkeypatch):
+    _mock_retrieval(monkeypatch, rows=[_retrieval_row()])
+    _mock_stream(monkeypatch, [])
+
+    response = client.post(
+        "/api/chat/stream", json={"question": "问题"}
+    )
+
+    events = _events(response)
+    assert [event["event"] for event in events] == ["meta", "error"]
+    assert events[-1]["code"] == "llm_error"
+    assert "未返回可见正文" in events[-1]["message"]
 
 
 def test_stream_interrupt_fails_chat_and_keeps_no_partial_answer(

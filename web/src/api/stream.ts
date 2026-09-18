@@ -18,6 +18,7 @@ export function parseEventLine(line: string): StreamEvent | null {
 export interface ChatStreamHandlers {
   onMeta?: (event: Extract<StreamEvent, { event: "meta" }>) => void;
   onDelta?: (event: Extract<StreamEvent, { event: "delta" }>) => void;
+  onReasoningDelta?: (event: Extract<StreamEvent, { event: "reasoning_delta" }>) => void;
   onCitations?: (event: Extract<StreamEvent, { event: "citations" }>) => void;
   onDone?: (event: Extract<StreamEvent, { event: "done" }>) => void;
   onError?: (event: Extract<StreamEvent, { event: "error" }>) => void;
@@ -96,6 +97,9 @@ export async function streamChat(
         case "delta":
           handlers.onDelta?.(event);
           break;
+        case "reasoning_delta":
+          handlers.onReasoningDelta?.(event);
+          break;
         case "citations":
           handlers.onCitations?.(event);
           break;
@@ -120,6 +124,8 @@ export async function streamChat(
       flush();
     }
     buffer += decoder.decode();
+    // 兼容最后一条事件未附换行的上游响应。
+    if (buffer.trim()) buffer += "\n";
     flush();
   } catch (error) {
     if (isAbortError(error)) {

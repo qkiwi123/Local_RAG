@@ -1069,9 +1069,9 @@ class TestDocumentAPI:
 
         real_parse = upload_router.parse_document_structure
 
-        def parse_with_warning(path, *, document_id, document_name=None):
+        def parse_with_warning(path, *, document_id, document_name=None, vision_config=None):
             parsed = real_parse(
-                path, document_id=document_id, document_name=document_name
+                path, document_id=document_id, document_name=document_name, vision_config=vision_config
             )
             warnings = list(parsed.warnings) + [
                 ParseWarning(

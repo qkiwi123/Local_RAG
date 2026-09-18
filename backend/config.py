@@ -41,7 +41,7 @@ class Settings:
     # ─── 必填项（缺一不可） ──────────────────────────────
     DEEPSEEK_API_KEY: str = os.getenv("DEEPSEEK_API_KEY", "")
     DEEPSEEK_BASE_URL: str = os.getenv("DEEPSEEK_BASE_URL", "https://api.deepseek.com")
-    DEEPSEEK_MODEL: str = os.getenv("DEEPSEEK_MODEL", "deepseek-v4-flash")
+    DEEPSEEK_MODEL: str = os.getenv("DEEPSEEK_MODEL", "deepseek-flash")
     # S1 先解析运行时设置可覆盖的部署默认；实际业务链路在 S3/S4 接入。
     LLM_ENABLED: bool = _env_bool("LLM_ENABLED", True)
     LLM_PROVIDER: str = os.getenv("LLM_PROVIDER", "deepseek").strip().lower()
@@ -49,7 +49,7 @@ class Settings:
     LLM_MAX_TOKENS: int = int(os.getenv("LLM_MAX_TOKENS", "2000"))
     LLM_TIMEOUT_SECONDS: float = float(os.getenv("LLM_TIMEOUT_SECONDS", "120"))
     LLM_ANSWER_THINKING_MODE: str = os.getenv(
-        "LLM_ANSWER_THINKING_MODE", "provider_default"
+        "LLM_ANSWER_THINKING_MODE", "disabled"
     ).strip().lower()
     LLM_ANSWER_REASONING_EFFORT: str = os.getenv(
         "LLM_ANSWER_REASONING_EFFORT", "provider_default"
@@ -186,8 +186,9 @@ class Settings:
     EMBEDDING_BATCH_SIZE: int = int(os.getenv("EMBEDDING_BATCH_SIZE", "32"))
 
     # ─── 视觉 / OCR（多模态模型 API，独立于问答 LLM） ───
-    # 智谱 GLM-4.6V-Flash 等 OpenAI 兼容端点；密钥一律放 .env，
-    # 关闭总开关时完全不加载、不调用。
+    # 默认跟随问答连接；VISION_* 保留为自定义连接的部署默认值。
+    VISION_SOURCE: str = os.getenv("VISION_SOURCE", "follow_llm")
+    VISION_PROVIDER: str = os.getenv("VISION_PROVIDER", "openai_compatible")
     VISION_API_KEY: str = os.getenv("VISION_API_KEY", "")
     VISION_BASE_URL: str = os.getenv("VISION_BASE_URL", "")
     VISION_MODEL: str = os.getenv("VISION_MODEL", "glm-4.6v-flash")
@@ -337,12 +338,7 @@ class Settings:
             raise ValueError("OCR_MAX_PER_DOCUMENT 必须大于 0")
         if self.OCR_TIMEOUT_SECONDS <= 0:
             raise ValueError("OCR_TIMEOUT_SECONDS 必须大于 0")
-        if self.OCR_ENABLED and (
-            not self.VISION_API_KEY or not self.VISION_BASE_URL
-        ):
-            raise ValueError(
-                "OCR_ENABLED=true 时必须配置 VISION_API_KEY 与 VISION_BASE_URL"
-            )
+        # 视觉连接/密钥必须在 RuntimeSettingsManager 合并页面覆盖后校验。
         if self.TRACE_STORAGE_MAX_BYTES <= 0:
             raise ValueError("TRACE_STORAGE_MAX_BYTES 必须大于 0")
         # 确保持久化目录存在

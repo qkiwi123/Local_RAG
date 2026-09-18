@@ -12,6 +12,22 @@ from backend.services.metadata_schema import (
 CREATED_AT = "2026-07-26T00:00:00+00:00"
 
 
+def test_v4_migration_preserves_old_messages_and_defaults_reasoning_to_empty(temp_dir):
+    from backend.services import metadata_schema as schema
+    db_path = f"{temp_dir}/v4.db"
+    with sqlite3.connect(db_path) as connection:
+        for ddl in schema._SCHEMAS:
+            connection.execute(ddl.replace("    reasoning_content TEXT NOT NULL DEFAULT '',\n", ""))
+        connection.execute("INSERT INTO schema_meta VALUES (4, ?)", (CREATED_AT,))
+        connection.execute("INSERT INTO conversations VALUES ('c1', '旧会话', ?, ?)", (CREATED_AT, CREATED_AT))
+        connection.execute("INSERT INTO messages VALUES ('m1','c1','r1',0,'assistant','旧回答','complete',NULL,'[]',?)", (CREATED_AT,))
+    bootstrap_structured_database(db_path, created_at=CREATED_AT)
+    bootstrap_structured_database(db_path, created_at=CREATED_AT)
+    with sqlite3.connect(db_path) as connection:
+        assert connection.execute("SELECT content, reasoning_content FROM messages").fetchone() == ("旧回答", "")
+        assert connection.execute("SELECT schema_version FROM schema_meta").fetchone()[0] == SCHEMA_VERSION
+
+
 def _tables(db_path: str) -> set[str]:
     connection = sqlite3.connect(db_path)
     try:

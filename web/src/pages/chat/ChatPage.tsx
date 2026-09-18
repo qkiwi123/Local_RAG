@@ -141,6 +141,9 @@ export default function ChatPage() {
           pendingQuestion={chat.pendingQuestion}
           streaming={chat.streaming}
           streamingText={chat.streamingText}
+          streamingReasoning={chat.streamingReasoning}
+          streamingRequestId={chat.streamingRequestId}
+          streamingError={chat.streamingError}
           onRetry={(item) => void chat.send(item.content, item)}
           onOpenTrace={setTraceOpen}
         />

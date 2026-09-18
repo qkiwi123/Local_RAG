@@ -110,13 +110,12 @@ def test_ocr_switches_default_to_disabled():
     assert settings.OCR_EMBEDDED_IMAGES is False
 
 
-def test_validate_rejects_ocr_enabled_without_credentials(monkeypatch):
+def test_startup_defers_vision_credentials_to_merged_runtime_settings(monkeypatch):
     monkeypatch.setattr(settings, "OCR_ENABLED", True)
     monkeypatch.setattr(settings, "VISION_API_KEY", "")
     monkeypatch.setattr(settings, "VISION_BASE_URL", "")
 
-    with pytest.raises(ValueError, match="VISION_API_KEY"):
-        settings._validate()
+    settings._validate()
 
     monkeypatch.setattr(settings, "VISION_API_KEY", "test-key")
     monkeypatch.setattr(settings, "VISION_BASE_URL", "https://vision.example/v1")

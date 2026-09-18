@@ -36,7 +36,7 @@ from backend.services.ocr_image_store import save_image
 from backend.services.parsers.office_zip import validate_office_package
 from backend.services.parsers.tables import render_table_markdown
 from backend.services.parsers.text import normalize_text
-from backend.services.vision import normalize_image_bytes, recognize_text
+from backend.services.vision import normalize_image_bytes, recognize_text, VisionCallConfig
 from backend.services.vision_cache import VisionBudget
 
 
@@ -133,7 +133,9 @@ def _paragraph_image_blobs(paragraph: Paragraph) -> list[tuple[str, bytes]]:
     return result
 
 
-def _embedded_ocr_enabled() -> bool:
+def _embedded_ocr_enabled(config: VisionCallConfig | None = None) -> bool:
+    if config is not None:
+        return config.options.enabled and config.options.embedded_images_enabled
     return settings.OCR_ENABLED and settings.OCR_EMBEDDED_IMAGES
 
 
@@ -142,14 +144,15 @@ def parse_docx_document(
     *,
     document_id: str,
     document_name: str | None = None,
+    vision_config: VisionCallConfig | None = None,
 ) -> ParsedDocument:
     """按 XML 阅读顺序解析 DOCX，可选识别内嵌图片，输出 ParsedDocument。"""
     name = document_name or Path(file_path).name
     validate_office_package(file_path)
     document = Document(file_path)
     # 仅 C 层开启时才需要文件哈希（缓存键）。
-    file_hash = file_sha256(file_path) if _embedded_ocr_enabled() else ""
-    budget = VisionBudget()
+    file_hash = file_sha256(file_path) if _embedded_ocr_enabled(vision_config) else ""
+    budget = VisionBudget(vision_config.options.max_calls_per_document if vision_config else None)
     units: list[ParsedUnit] = []
     warnings: list[ParseWarning] = []
 
@@ -204,7 +207,7 @@ def parse_docx_document(
         if isinstance(item, Paragraph):
             text = normalize_text(item.text)
             image_blobs = (
-                _paragraph_image_blobs(item) if _embedded_ocr_enabled() else []
+                _paragraph_image_blobs(item) if _embedded_ocr_enabled(vision_config) else []
             )
             if not text and not image_blobs:
                 continue
@@ -256,7 +259,7 @@ def parse_docx_document(
 
             for _relationship_id, blob in image_blobs:
                 # EMF/WMF 等视觉模型不支持的格式先规范化；失败直接跳过。
-                normalized = normalize_image_bytes(blob)
+                normalized = normalize_image_bytes(blob, vision_config.options.max_image_edge) if vision_config else normalize_image_bytes(blob)
                 if not normalized:
                     continue
                 recognized = run_vision(
@@ -268,9 +271,10 @@ def parse_docx_document(
                     warnings=warnings,
                     locator=warning_locator(),
                     code="ocr_embedded_image_failed",
+                    config=vision_config,
                 )
                 if recognized:
-                    image_attrs = ocr_attributes("embedded_image")
+                    image_attrs = ocr_attributes("embedded_image", vision_config)
                     image_ref = save_image(
                         file_hash,
                         f"docx-img:{image_blob_sha256(blob)[:16]}",

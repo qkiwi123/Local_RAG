@@ -207,6 +207,7 @@ def _saved_response(connection, request_id: str) -> dict:
         "assistant_message_id": assistant["message_id"],
         "standalone_question": user["standalone_question"] or user["content"],
         "answer": assistant["content"],
+        "reasoning_content": assistant["reasoning_content"],
         "citations": citations,
         "trace": trace,
     }
@@ -355,6 +356,7 @@ def complete_chat(
     standalone_question: str,
     answer: str,
     citations: list[Citation],
+    reasoning_content: str = "",
     db_path=None,
 ) -> dict:
     with _connection(_db_path(db_path)) as connection:
@@ -377,8 +379,12 @@ def complete_chat(
         )
         connection.execute(
             """
-            INSERT INTO messages VALUES (
-                ?, ?, ?, ?, 'assistant', ?, 'complete', NULL, ?, ?
+            INSERT INTO messages (
+                message_id, conversation_id, request_id, sequence, role,
+                content, status, standalone_question, citations_json, created_at,
+                reasoning_content
+            ) VALUES (
+                ?, ?, ?, ?, 'assistant', ?, 'complete', NULL, ?, ?, ?
             )
             """,
             (
@@ -392,6 +398,7 @@ def complete_chat(
                     ensure_ascii=False,
                 ),
                 timestamp,
+                reasoning_content,
             ),
         )
         connection.execute(

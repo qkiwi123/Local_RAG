@@ -51,7 +51,7 @@ def test_secret_store_rejects_unknown_name_and_empty_value(temp_dir):
     )
 
     with pytest.raises(ValueError, match="不允许"):
-        store.set_secret("vision_api_key", "value")
+        store.set_secret("unknown_api_key", "value")
     with pytest.raises(ValueError, match="不能为空"):
         store.set_secret("llm_api_key", "  ")
 

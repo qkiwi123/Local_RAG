@@ -15,7 +15,7 @@ import time
 
 from backend.config import settings
 from backend.models.document_structure import ParseWarning, SourceLocator
-from backend.services.vision import VisionError
+from backend.services.vision import VisionError, VisionCallConfig
 from backend.services.vision_cache import (
     VisionBudget,
     VisionBudgetExceeded,
@@ -30,7 +30,7 @@ logger = logging.getLogger(__name__)
 # 造成请求风暴）。成功结果走磁盘缓存，不受此影响。
 _FAILURE_TTL_SECONDS = 600.0
 _failure_lock = threading.Lock()
-_failure_memo: dict[str, float] = {}
+_failure_memo: dict[str, tuple[float, str]] = {}
 
 
 def _memo_key(file_hash: str, object_id: str, model: str) -> str:
@@ -39,18 +39,19 @@ def _memo_key(file_hash: str, object_id: str, model: str) -> str:
 
 def _recently_failed(key: str) -> bool:
     with _failure_lock:
-        failed_at = _failure_memo.get(key)
-        if failed_at is None:
+        failure = _failure_memo.get(key)
+        if failure is None:
             return False
+        failed_at, _message = failure
         if time.monotonic() - failed_at > _FAILURE_TTL_SECONDS:
             _failure_memo.pop(key, None)
             return False
         return True
 
 
-def _remember_failure(key: str) -> None:
+def _remember_failure(key: str, message: str = "视觉调用失败") -> None:
     with _failure_lock:
-        _failure_memo[key] = time.monotonic()
+        _failure_memo[key] = (time.monotonic(), message)
 
 
 def clear_failure_memo() -> None:
@@ -73,11 +74,12 @@ def image_blob_sha256(blob: bytes) -> str:
     return hashlib.sha256(blob).hexdigest()
 
 
-def ocr_attributes(kind: str) -> dict[str, str | int | bool]:
+def ocr_attributes(kind: str, config: VisionCallConfig | None = None) -> dict[str, str | int | bool]:
     return {
         "ocr": True,
-        "vision_model": settings.VISION_MODEL,
+        "vision_model": config.model if config else settings.VISION_MODEL,
         "vision_kind": kind,
+        **({"vision_settings_revision": config.revision} if config else {}),
     }
 
 
@@ -91,24 +93,40 @@ def run_vision(
     warnings: list[ParseWarning],
     locator: SourceLocator,
     code: str,
+    config: VisionCallConfig | None = None,
+    task: str = "recognize",
 ) -> str | None:
     """预算 + 缓存 + 失败记忆 + 调用 + warning 的公共包装；失败返回 None。"""
-    memo_key = _memo_key(file_hash, object_id, settings.VISION_MODEL)
-    cached = get_cached(file_hash, object_id, settings.VISION_MODEL)
+    if config is not None and not config.options.enabled:
+        return None
+    model_key = settings.VISION_MODEL if config is None else (
+        config.fingerprint(task) + ":" + hashlib.sha256(image_bytes).hexdigest()
+    )
+    memo_key = _memo_key(file_hash, object_id, model_key)
+    if config is not None:
+        memo_key += ":" + config.credential_fingerprint() + ":" + str(getattr(config.options, f"{task}_timeout_seconds"))
+    cached = get_cached(file_hash, object_id, model_key)
     if cached is not None:
         return cached
     if _recently_failed(memo_key):
+        if config is not None:
+            with _failure_lock:
+                message = _failure_memo.get(memo_key, (0, "视觉调用失败"))[1]
+            warnings.append(ParseWarning(code=code, message="近期识别失败，暂未重复调用：" + message, locator=locator))
         return None
     try:
         budget.consume()
-        text = call(image_bytes)
+        text = call(image_bytes, config=config) if config is not None else call(image_bytes)
     except VisionBudgetExceeded as error:
         warnings.append(
             ParseWarning(code=code, message=str(error), locator=locator)
         )
         return None
     except VisionError as error:
-        _remember_failure(memo_key)
+        _remember_failure(memo_key, str(error))
+        logger.warning("Vision failure: object=%s model=%s code=%s status=%s request_id=%s", object_id,
+                       config.model if config else settings.VISION_MODEL,
+                       error.code, error.status_code, error.request_id)
         warnings.append(
             ParseWarning(code=code, message=str(error), locator=locator)
         )
@@ -129,5 +147,5 @@ def run_vision(
             )
         )
         return None
-    put_cached(file_hash, object_id, settings.VISION_MODEL, text)
+    put_cached(file_hash, object_id, model_key, text)
     return text

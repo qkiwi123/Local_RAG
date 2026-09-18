@@ -11,7 +11,7 @@ import sqlite3
 from pathlib import Path
 from uuid import uuid4
 
-from fastapi import APIRouter, File, Form, HTTPException, Query, UploadFile
+from fastapi import APIRouter, File, Form, HTTPException, Query, Request, UploadFile
 from fastapi.responses import FileResponse
 
 from backend.config import settings
@@ -134,6 +134,7 @@ def _normalize_tags(tags: list[str] | None) -> list[str]:
 
 @router.post("/upload", response_model=UploadResponse)
 async def upload_document(
+    request: Request,
     file: UploadFile = File(...),
     tags: list[str] | None = Form(default=None),
 ):
@@ -158,6 +159,12 @@ async def upload_document(
             detail=f"文件过大（{len(content)} bytes），最大允许 50MB",
         )
 
+    from backend.services.vision import vision_config_from_snapshot
+
+    manager = getattr(request.app.state, "runtime_settings_manager", None)
+    if manager is None:
+        raise HTTPException(status_code=503, detail="运行时设置尚未初始化")
+    vision_config = vision_config_from_snapshot(manager.snapshot())
     document_id = uuid4().hex
     stored_name = f"{document_id}{suffix}"
     upload_dir = Path(settings.UPLOAD_DIR)
@@ -185,6 +192,7 @@ async def upload_document(
             str(temp_path),
             document_id=document_id,
             document_name=original_name,
+            vision_config=vision_config,
         )
         units = parsed_document.units
         if not units:

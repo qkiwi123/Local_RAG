@@ -24,6 +24,8 @@ from backend.services.retriever import (
 from backend.services.sparse_index import SparseIndexError
 from backend.services.retrieval_trace import finalize_chat_trace
 from backend.services.llm import (
+    EmptyLLMResponseError,
+    ReasoningDelta,
     ask,
     ask_stream_async,
     ask_with_history,
@@ -92,6 +94,7 @@ def _complete_chat_with_trace(
     answer: str,
     citations,
     trace,
+    reasoning_content: str = "",
 ) -> dict:
     """提交会话并保存 Trace；persistence 只计 complete_chat 事务。"""
     persistence_started = perf_counter()
@@ -100,6 +103,7 @@ def _complete_chat_with_trace(
         standalone_question=standalone_question,
         answer=answer,
         citations=citations,
+        reasoning_content=reasoning_content,
     )
     if trace is not None:
         trace.timings_ms.persistence = round(
@@ -326,7 +330,11 @@ async def chat(request: ChatRequest, http_request: Request):
                 )
             raise HTTPException(
                 status_code=502,
-                detail=f"LLM 调用失败: {type(error).__name__}",
+                detail=(
+                    str(error)
+                    if isinstance(error, EmptyLLMResponseError)
+                    else f"LLM 调用失败: {type(error).__name__}"
+                ),
             ) from error
         llm_ms = (perf_counter() - llm_started) * 1000
 
@@ -403,7 +411,7 @@ async def _stream_chat_events(
 ) -> "AsyncGenerator[str, None]":
     """流式问答事件生成器（NDJSON 行）。
 
-    事件序列：meta → delta* → citations → done；运行期失败发 error 事件。
+    事件序列：meta → (reasoning_delta | delta)* → citations → done。
     中断语义甲：客户端断开（GeneratorExit）时按失败处理（fail_chat），
     不保存半截答案。
     """
@@ -431,6 +439,8 @@ async def _stream_chat_events(
                 assistant_message_id=replay["assistant_message_id"],
                 standalone_question=replay["standalone_question"],
             )
+            if replay.get("reasoning_content"):
+                yield _ndjson("reasoning_delta", text=replay["reasoning_content"])
             yield _ndjson("delta", text=replay["answer"])
             yield _ndjson(
                 "citations",
@@ -546,6 +556,7 @@ async def _stream_chat_events(
         )
         context_ms = (perf_counter() - context_started) * 1000
         collected: list[str] = []
+        reasoning_collected: list[str] = []
         llm_ms = 0.0
         if runtime is not None and not runtime.llm.enabled:
             piece = build_retrieval_only_answer(len(retrieval_results))
@@ -566,8 +577,13 @@ async def _stream_chat_events(
                 context,
                 history_text,
                 runtime,
+                include_reasoning=True,
             )
             async for piece in pieces:
+                if isinstance(piece, ReasoningDelta):
+                    reasoning_collected.append(piece.text)
+                    yield _ndjson("reasoning_delta", text=piece.text)
+                    continue
                 collected.append(piece)
                 mark_delta()
                 yield _ndjson("delta", text=piece)
@@ -575,14 +591,22 @@ async def _stream_chat_events(
         else:
             llm_called = True
             llm_started = perf_counter()
-            pieces = ask_stream_async(request.question.strip(), context, runtime)
+            pieces = ask_stream_async(
+                request.question.strip(), context, runtime, include_reasoning=True,
+            )
             async for piece in pieces:
+                if isinstance(piece, ReasoningDelta):
+                    reasoning_collected.append(piece.text)
+                    yield _ndjson("reasoning_delta", text=piece.text)
+                    continue
                 collected.append(piece)
                 mark_delta()
                 yield _ndjson("delta", text=piece)
             llm_ms = (perf_counter() - llm_started) * 1000
 
         answer = "".join(collected)
+        if llm_called and not answer.strip():
+            raise EmptyLLMResponseError(reasoning_only=bool(reasoning_collected))
         citation_started = perf_counter()
         citations = await asyncio.to_thread(
             extract_citations,
@@ -622,6 +646,7 @@ async def _stream_chat_events(
                 answer=answer,
                 citations=citations,
                 trace=trace,
+                reasoning_content="".join(reasoning_collected),
             )
         yield _ndjson(
             "citations",
@@ -661,10 +686,19 @@ async def _stream_chat_events(
                 )
             except Exception:
                 pass
+        logger.warning(
+            "LLM stream failed: request_id=%s error=%s",
+            request.request_id,
+            type(error).__name__,
+        )
         yield _ndjson(
             "error",
             code="llm_error",
-            message=f"LLM 调用失败: {type(error).__name__}",
+            message=(
+                str(error)
+                if isinstance(error, EmptyLLMResponseError)
+                else f"LLM 调用失败: {type(error).__name__}"
+            ),
         )
 
 

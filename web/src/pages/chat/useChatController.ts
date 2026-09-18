@@ -45,6 +45,9 @@ export function useChatController() {
   const [input, setInput] = useState("");
   const [streaming, setStreaming] = useState(false);
   const [streamingText, setStreamingText] = useState("");
+  const [streamingReasoning, setStreamingReasoning] = useState("");
+  const [streamingRequestId, setStreamingRequestId] = useState("");
+  const [streamingError, setStreamingError] = useState<string | null>(null);
   const [pendingQuestion, setPendingQuestion] = useState<PendingQuestion | null>(
     null,
   );
@@ -54,6 +57,11 @@ export function useChatController() {
   const loadedRef = useRef(false);
 
   const setActiveConversation = useCallback((id: string | null) => {
+    if (currentIdRef.current !== id) {
+      setStreamingError(null);
+      setStreamingReasoning("");
+      setStreamingText("");
+    }
     currentIdRef.current = id;
     setCurrentId(id);
     storeConversationId(id);
@@ -197,36 +205,50 @@ export function useChatController() {
       const controller = new AbortController();
       const activeTags = [...tagFilter];
       let protocolError: { code: string; message: string } | null = null;
+      let receivedDone = false;
       abortRef.current = controller;
+      const requestId = retryMessage ? retryMessage.request_id : crypto.randomUUID();
+      setStreamingRequestId(requestId);
       setStreaming(true);
       setStreamingText("");
+      setStreamingReasoning("");
+      setStreamingError(null);
 
       try {
-        await streamChat(
+        const result = await streamChat(
           {
             question,
             conversation_id: conversationId,
-            request_id: retryMessage
-              ? retryMessage.request_id
-              : crypto.randomUUID(),
+            request_id: requestId,
             expected_last_message_id: retryMessage ? undefined : lastCompleteId(),
             retry_failed: Boolean(retryMessage),
             tags: activeTags,
           },
           {
             onDelta: (event) => {
-              setStreamingText((previous) => previous + event.text);
+              if (currentIdRef.current === conversationId) {
+                setStreamingText((previous) => previous + event.text);
+              }
             },
-            onDone: () => {
-              setStreaming(false);
+            onReasoningDelta: (event) => {
+              if (currentIdRef.current === conversationId) {
+                setStreamingReasoning((previous) => previous + event.text);
+              }
             },
+            onDone: () => { receivedDone = true; },
             onError: (event) => {
               protocolError = { code: event.code, message: event.message };
-              setStreaming(false);
+              if (currentIdRef.current === conversationId) setStreamingError(event.message);
             },
           },
           controller.signal,
         );
+
+        if (result.aborted && currentIdRef.current === conversationId) {
+          setStreamingError("已停止生成，本次内容未保存，可重试。");
+        } else if (!receivedDone && !protocolError && currentIdRef.current === conversationId) {
+          setStreamingError("连接已结束，但未收到回答完成确认，请检查会话或重试。");
+        }
 
         if (protocolError) {
           const failure = protocolError as { code: string; message: string };
@@ -243,7 +265,9 @@ export function useChatController() {
           code?: string;
           message?: string;
         };
-        setStreaming(false);
+        if (currentIdRef.current === conversationId) {
+          setStreamingError(failure.message || "问答失败，请重试");
+        }
         if (failure.code && RESYNC_CODES.includes(failure.code)) {
           await resyncConversation(conversationId);
           message.warning("会话已在服务端更新，已自动刷新；请重新发送问题。");
@@ -256,10 +280,10 @@ export function useChatController() {
         }
       } finally {
         abortRef.current = null;
-        setStreaming(false);
         if (currentIdRef.current === conversationId) {
           await loadConversation(conversationId);
         }
+        setStreaming(false);
         await refreshConversations();
         setPendingQuestion(null);
       }
@@ -276,7 +300,6 @@ export function useChatController() {
 
   const stopStreaming = useCallback(() => {
     abortRef.current?.abort();
-    setStreaming(false);
     message.info("已停止生成（本次回答按失败处理，可重试）");
   }, []);
 
@@ -298,6 +321,9 @@ export function useChatController() {
     setInput,
     streaming,
     streamingText,
+    streamingReasoning,
+    streamingRequestId,
+    streamingError,
     pendingQuestion:
       pendingQuestion?.conversationId === currentId
         ? pendingQuestion.content

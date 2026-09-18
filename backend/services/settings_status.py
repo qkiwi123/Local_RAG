@@ -21,6 +21,9 @@ from backend.models.settings_schemas import (
     SettingsRuntimeStatusResponse,
     SettingsRuntimeSummary,
     TorchRuntimeStatus,
+    VisionSettings,
+    VisionSettingsView,
+    VisionConnectionView,
 )
 from backend.services.model_cache import resolve_cached_snapshot
 from backend.services.parsers.constants import PARSER_VERSION
@@ -58,16 +61,18 @@ _RETRIEVAL_FIELDS = (
 )
 
 
-def _masked_key_status(snapshot: EffectiveSettingsSnapshot) -> APIKeyStatus:
+def _masked_key_status(snapshot: EffectiveSettingsSnapshot, *, vision: bool = False) -> APIKeyStatus:
+    key = snapshot.vision_api_key if vision else snapshot.api_key
+    source = snapshot.vision_api_key_source if vision else snapshot.api_key_source
     secret = (
-        snapshot.api_key.get_secret_value()
-        if snapshot.api_key is not None
+        key.get_secret_value()
+        if key is not None
         else None
     )
     public_source = (
         "runtime"
-        if snapshot.api_key_source == "runtime_secret"
-        else snapshot.api_key_source
+        if source == "runtime_secret"
+        else source
     )
     # 很短的 Key 不返回 suffix，避免“后缀”实际等于完整密钥。
     suffix = secret[-4:] if secret is not None and len(secret) >= 8 else None
@@ -82,6 +87,8 @@ def build_settings_response(
     snapshot: EffectiveSettingsSnapshot,
 ) -> SettingsReadResponse:
     field_effects = {
+        **{f"vision.{name}": "next_document_upload" for name in VisionSettings.model_fields},
+        "vision.api_key": "next_document_upload",
         **{f"llm.{name}": "next_request" for name in _LLM_FIELDS},
         **{
             f"retrieval.{name}": "next_request"
@@ -96,6 +103,16 @@ def build_settings_response(
         llm=LLMSettingsView(
             **snapshot.llm.model_dump(),
             api_key=_masked_key_status(snapshot),
+        ),
+        vision=VisionSettingsView(
+            **snapshot.vision.model_dump(),
+            api_key=_masked_key_status(snapshot, vision=True),
+            effective_connection=VisionConnectionView(
+                provider=(snapshot.llm if snapshot.vision.source == "follow_llm" else snapshot.vision).provider,
+                base_url=(snapshot.llm if snapshot.vision.source == "follow_llm" else snapshot.vision).base_url,
+                model=(snapshot.llm if snapshot.vision.source == "follow_llm" else snapshot.vision).model,
+                api_key=_masked_key_status(snapshot, vision=snapshot.vision.source == "custom"),
+            ),
         ),
         retrieval=snapshot.retrieval,
         runtime=SettingsRuntimeSummary(),

@@ -32,18 +32,22 @@ from backend.services.parsers.ocr import (
 from backend.services.parsers.ocr_structure import classify_ocr_blocks
 from backend.services.ocr_image_store import save_image
 from backend.services.parsers.text import normalize_text, split_paragraphs
-from backend.services.vision import describe_image, recognize_text
+from backend.services.vision import describe_image, recognize_text, VisionCallConfig
 from backend.services.vision_cache import VisionBudget
 
 _EMPTY_PAGE_TEMPLATE = "[第{page}页无可提取文本]"
 _PDFIUM_IMAGE_TYPE = None  # 惰性从 pypdfium2 解析，兼容不同版本常量位置
 
 
-def _scanned_ocr_enabled() -> bool:
+def _scanned_ocr_enabled(config: VisionCallConfig | None = None) -> bool:
+    if config is not None:
+        return config.options.enabled and config.options.pdf_scanned_enabled
     return settings.OCR_ENABLED and settings.OCR_PDF_SCANNED
 
 
-def _page_images_enabled() -> bool:
+def _page_images_enabled(config: VisionCallConfig | None = None) -> bool:
+    if config is not None:
+        return config.options.enabled and config.options.pdf_page_images_enabled
     return settings.OCR_ENABLED and settings.OCR_PDF_PAGE_IMAGES
 
 
@@ -72,7 +76,7 @@ def read_page_texts_pdfium(file_path: str) -> list[str]:
         pdf.close()
 
 
-def render_page_image(file_path: str, page_index: int) -> bytes:
+def render_page_image(file_path: str, page_index: int, max_edge: int | None = None) -> bytes:
     """渲染 PDF 单页为 JPEG 字节，长边不超过 OCR_MAX_IMAGE_EDGE。"""
     import pypdfium2 as pdfium
 
@@ -88,7 +92,7 @@ def render_page_image(file_path: str, page_index: int) -> bytes:
 
     image = pil_image.convert("RGB")
     image.thumbnail(
-        (settings.OCR_MAX_IMAGE_EDGE, settings.OCR_MAX_IMAGE_EDGE)
+        (max_edge or settings.OCR_MAX_IMAGE_EDGE, max_edge or settings.OCR_MAX_IMAGE_EDGE)
     )
     buffer = BytesIO()
     image.save(buffer, format="JPEG", quality=85)
@@ -128,6 +132,7 @@ def parse_pdf_document(
     *,
     document_id: str,
     document_name: str | None = None,
+    vision_config: VisionCallConfig | None = None,
 ) -> ParsedDocument:
     """按页解析 PDF；可选 A/B 层视觉识别，产出带标记的结构化 blocks。
 
@@ -151,10 +156,10 @@ def parse_pdf_document(
     # 仅 OCR 层开启时才需要文件哈希（缓存键）；关闭时保持零文件读取开销。
     file_hash = (
         file_sha256(file_path)
-        if (_scanned_ocr_enabled() or _page_images_enabled())
+        if (_scanned_ocr_enabled(vision_config) or _page_images_enabled(vision_config))
         else ""
     )
-    budget = VisionBudget()
+    budget = VisionBudget(vision_config.options.max_calls_per_document if vision_config else None)
     units: list[ParsedUnit] = []
     warnings: list[ParseWarning] = []
 
@@ -181,8 +186,11 @@ def parse_pdf_document(
 
         page_image: bytes | None = None
 
-        if not text and _scanned_ocr_enabled():
-            page_image = render_page_image(file_path, index)
+        if not text and _scanned_ocr_enabled(vision_config):
+            try:
+                page_image = render_page_image(file_path, index, vision_config.options.max_image_edge) if vision_config else render_page_image(file_path, index)
+            except Exception:
+                warnings.append(ParseWarning(code="ocr_render_failed", message="页面图片渲染失败，未能识别", locator=locator))
             recognized = run_vision(
                 file_hash,
                 f"pdf-page:{index}",
@@ -192,7 +200,8 @@ def parse_pdf_document(
                 warnings=warnings,
                 locator=locator,
                 code="ocr_page_failed",
-            )
+                config=vision_config,
+            ) if page_image else None
             if recognized:
                 text = recognized
                 ocr_applied = True
@@ -201,7 +210,7 @@ def parse_pdf_document(
             text = _EMPTY_PAGE_TEMPLATE.format(page=index)
 
         if ocr_applied:
-            ocr_attrs = ocr_attributes("scanned_page")
+            ocr_attrs = ocr_attributes("scanned_page", vision_config)
             image_ref = save_image(file_hash, f"pdf-page:{index}", page_image or b"")
             if image_ref:
                 ocr_attrs["ocr_image_ref"] = image_ref
@@ -223,10 +232,14 @@ def parse_pdf_document(
         if (
             not ocr_applied
             and text != _EMPTY_PAGE_TEMPLATE.format(page=index)
-            and _page_images_enabled()
+            and _page_images_enabled(vision_config)
             and page_has_images(file_path, index)
         ):
-            page_image = render_page_image(file_path, index)
+            try:
+                page_image = render_page_image(file_path, index, vision_config.options.max_image_edge) if vision_config else render_page_image(file_path, index)
+            except Exception:
+                page_image = None
+                warnings.append(ParseWarning(code="ocr_render_failed", message="页面图片渲染失败，未能生成图表描述", locator=locator))
             description = run_vision(
                 file_hash,
                 f"pdf-page-images:{index}",
@@ -236,9 +249,11 @@ def parse_pdf_document(
                 warnings=warnings,
                 locator=locator,
                 code="ocr_page_description_failed",
-            )
+                config=vision_config,
+                task="describe",
+            ) if page_image else None
             if description:
-                desc_attrs = ocr_attributes("page_images")
+                desc_attrs = ocr_attributes("page_images", vision_config)
                 image_ref = save_image(
                     file_hash,
                     f"pdf-page-images:{index}",
@@ -255,6 +270,10 @@ def parse_pdf_document(
                     )
                 )
 
+        if not ocr_applied and text == _EMPTY_PAGE_TEMPLATE.format(page=index) and _scanned_ocr_enabled(vision_config):
+            page_warnings = [warning for warning in warnings if warning.locator.page_number == index]
+            if page_warnings:
+                drafts = [BlockDraft(block_type="paragraph", text=f"[第{index}页视觉识别未完成：{page_warnings[-1].message}]")]
         units.append(
             assemble_unit_from_drafts(
                 document_id=document_id,

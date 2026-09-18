@@ -12,6 +12,9 @@ import type {
   SettingsPatchResponse,
   SettingsReadResponse,
   SettingsRuntimeStatus,
+  VisionConnectionTestRequest,
+  VisionConnectionTestResponse,
+  VisionSettingsPatch,
 } from "./types";
 
 export class ApiError extends Error {
@@ -71,6 +74,7 @@ export const api = {
   updateSettings: (payload: {
     expected_revision: number;
     llm?: LlmSettingsPatch;
+    vision?: VisionSettingsPatch;
     retrieval?: RetrievalSettingsPatch;
   }) =>
     request<SettingsPatchResponse>(
@@ -79,7 +83,7 @@ export const api = {
     ),
   resetSettings: (
     expected_revision: number,
-    section: "llm" | "retrieval" | "all",
+    section: "llm" | "vision" | "retrieval" | "all",
   ) =>
     request<SettingsPatchResponse>(
       "/api/settings/reset",
@@ -95,6 +99,11 @@ export const api = {
     request<LlmConnectionTestResponse>(
       "/api/settings/test-llm",
       jsonInit("POST", { llm }),
+    ),
+  testVisionConnection: (payload: VisionConnectionTestRequest) =>
+    request<VisionConnectionTestResponse>(
+      "/api/settings/test-vision",
+      jsonInit("POST", payload),
     ),
   getSettingsRuntimeStatus: () =>
     request<SettingsRuntimeStatus>("/api/settings/runtime-status"),

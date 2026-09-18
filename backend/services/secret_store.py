@@ -15,7 +15,7 @@ from typing import Protocol
 from uuid import uuid4
 
 
-ALLOWED_SECRET_NAMES = frozenset({"llm_api_key"})
+ALLOWED_SECRET_NAMES = frozenset({"llm_api_key", "vision_api_key"})
 _ENTROPY = b"RAG-runtime-settings-v1"
 
 
@@ -202,6 +202,19 @@ class SecretStore:
     def get_secret(self, name: str) -> str | None:
         self._validate_name(name)
         return self._read_all().get(name)
+
+    def update_secrets(self, updates: dict[str, str | None]) -> None:
+        """在同一次原子替换中更新多个密钥，避免半份设置落盘。"""
+        secrets = self._read_all()
+        for name, value in updates.items():
+            self._validate_name(name)
+            if value is None:
+                secrets.pop(name, None)
+            elif not isinstance(value, str) or not value.strip() or len(value.strip()) > 8192:
+                raise ValueError("密钥长度必须为 1 到 8192 个字符")
+            else:
+                secrets[name] = value.strip()
+        self._write_all(secrets)
 
     def set_secret(self, name: str, value: str) -> None:
         self._validate_name(name)

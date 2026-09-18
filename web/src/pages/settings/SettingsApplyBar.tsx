@@ -34,7 +34,7 @@ export function SettingsApplyBar({
           </Tag>
         </Space>
         <Typography.Text type="secondary">
-          保存后的下一次问答请求使用新配置。
+          问答配置下一次请求生效；视觉配置下一次文档上传生效。
         </Typography.Text>
       </Space>
       <Space wrap className="settings-apply-actions">

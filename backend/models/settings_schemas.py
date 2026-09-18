@@ -26,6 +26,7 @@ RetrievalMode = Literal["dense", "bm25", "hybrid"]
 FieldSource = Literal["environment", "runtime", "system"]
 ActivationLevel = Literal[
     "next_request",
+    "next_document_upload",
     "restart_required",
     "reindex_required",
     "unavailable",
@@ -58,7 +59,7 @@ class LLMSettings(_StrictFrozenModel):
     temperature: float = Field(ge=0, le=2)
     max_tokens: int = Field(ge=1, le=32768)
     timeout_seconds: float = Field(ge=1, le=600)
-    answer_thinking_mode: ThinkingMode = "provider_default"
+    answer_thinking_mode: ThinkingMode = "disabled"
     answer_reasoning_effort: ReasoningEffort = "provider_default"
     rewrite_enabled: bool = True
     rewrite_thinking_mode: ThinkingMode = "disabled"
@@ -79,6 +80,41 @@ class LLMSettings(_StrictFrozenModel):
         if not clean:
             raise ValueError("模型名不能为空")
         return clean
+
+
+class VisionSettings(_StrictFrozenModel):
+    enabled: bool = False
+    source: Literal["follow_llm", "custom"] = "follow_llm"
+    provider: ProviderName = "openai_compatible"
+    base_url: str = ""
+    model: str = Field(default="glm-4.6v-flash", min_length=1, max_length=200)
+    pdf_scanned_enabled: bool = False
+    pdf_page_images_enabled: bool = False
+    embedded_images_enabled: bool = False
+    recognize_thinking_mode: ThinkingMode = "disabled"
+    recognize_reasoning_effort: ReasoningEffort = "provider_default"
+    recognize_temperature: float = Field(default=0, ge=0, le=2)
+    recognize_max_tokens: int = Field(default=4000, ge=1, le=32768)
+    recognize_timeout_seconds: float = Field(default=60, ge=1, le=600)
+    describe_thinking_mode: ThinkingMode = "disabled"
+    describe_reasoning_effort: ReasoningEffort = "provider_default"
+    describe_temperature: float = Field(default=0, ge=0, le=2)
+    describe_max_tokens: int = Field(default=800, ge=1, le=32768)
+    describe_timeout_seconds: float = Field(default=60, ge=1, le=600)
+    max_image_edge: int = Field(default=1600, ge=256, le=4096)
+    max_calls_per_document: int = Field(default=20, ge=1, le=500)
+
+    @field_validator("base_url")
+    @classmethod
+    def validate_base_url(cls, value: str) -> str:
+        return _validate_http_url(value) if value.strip() else ""
+
+    @field_validator("model")
+    @classmethod
+    def normalize_model(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("视觉模型名不能为空")
+        return value.strip()
 
 
 class RefusalGateSettings(_StrictFrozenModel):
@@ -126,6 +162,9 @@ class EffectiveSettingsSnapshot(_StrictFrozenModel):
     revision: int = Field(ge=0)
     updated_at: str | None = None
     llm: LLMSettings
+    vision: VisionSettings = Field(default_factory=VisionSettings)
+    vision_api_key: SecretStr | None = Field(default=None, exclude=True, repr=False)
+    vision_api_key_source: Literal["environment", "runtime_secret", "none"] = "none"
     retrieval: RetrievalSettings
     api_key: SecretStr | None = Field(default=None, exclude=True, repr=False)
     api_key_source: Literal["environment", "runtime_secret", "none"]
@@ -136,6 +175,18 @@ class APIKeyStatus(_StrictFrozenModel):
     configured: bool
     source: Literal["environment", "runtime", "none"]
     masked_suffix: str | None = None
+
+
+class VisionConnectionView(_StrictFrozenModel):
+    provider: ProviderName
+    base_url: str
+    model: str
+    api_key: APIKeyStatus
+
+
+class VisionSettingsView(VisionSettings):
+    api_key: APIKeyStatus
+    effective_connection: VisionConnectionView
 
 
 class LLMSettingsView(_StrictFrozenModel):
@@ -160,6 +211,7 @@ class LLMSettingsView(_StrictFrozenModel):
 class SettingsRuntimeSummary(_StrictFrozenModel):
     access_scope: Literal["trusted_local_workspace"] = "trusted_local_workspace"
     llm_activation: ActivationLevel = "next_request"
+    vision_activation: ActivationLevel = "next_document_upload"
     retrieval_activation: ActivationLevel = "next_request"
     refusal_gate_activation: ActivationLevel = "unavailable"
 
@@ -168,6 +220,7 @@ class SettingsReadResponse(_StrictFrozenModel):
     revision: int = Field(ge=0)
     updated_at: str | None = None
     llm: LLMSettingsView
+    vision: VisionSettingsView
     retrieval: RetrievalSettings
     runtime: SettingsRuntimeSummary
     field_sources: dict[str, FieldSource]
@@ -456,17 +509,79 @@ class RetrievalSettingsOverrides(_PartialModel):
         return self.model_dump(exclude_none=True, exclude_unset=True)
 
 
+class VisionSettingsOverrides(_PartialModel):
+    enabled: bool | None = None
+    source: Literal["follow_llm", "custom"] | None = None
+    provider: ProviderName | None = None
+    base_url: str | None = None
+    model: str | None = Field(default=None, min_length=1, max_length=200)
+    pdf_scanned_enabled: bool | None = None
+    pdf_page_images_enabled: bool | None = None
+    embedded_images_enabled: bool | None = None
+    recognize_thinking_mode: ThinkingMode | None = None
+    recognize_reasoning_effort: ReasoningEffort | None = None
+    recognize_temperature: float | None = Field(default=None, ge=0, le=2)
+    recognize_max_tokens: int | None = Field(default=None, ge=1, le=32768)
+    recognize_timeout_seconds: float | None = Field(default=None, ge=1, le=600)
+    describe_thinking_mode: ThinkingMode | None = None
+    describe_reasoning_effort: ReasoningEffort | None = None
+    describe_temperature: float | None = Field(default=None, ge=0, le=2)
+    describe_max_tokens: int | None = Field(default=None, ge=1, le=32768)
+    describe_timeout_seconds: float | None = Field(default=None, ge=1, le=600)
+    max_image_edge: int | None = Field(default=None, ge=256, le=4096)
+    max_calls_per_document: int | None = Field(default=None, ge=1, le=500)
+
+    @field_validator("base_url")
+    @classmethod
+    def validate_base_url(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        return _validate_http_url(value) if value.strip() else ""
+
+    @field_validator("model")
+    @classmethod
+    def normalize_model(cls, value: str | None) -> str | None:
+        if value is not None and not value.strip():
+            raise ValueError("视觉模型名不能为空")
+        return value.strip() if value is not None else None
+
+    def runtime_payload(self) -> dict:
+        return self.model_dump(exclude={"api_key_update"}, exclude_none=True, exclude_unset=True)
+
+
+class VisionSettingsPatch(VisionSettingsOverrides):
+    api_key_update: APIKeyUpdate | None = None
+
+
+class VisionConnectionTestRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    vision: VisionSettingsPatch = Field(default_factory=VisionSettingsPatch)
+    task: Literal["recognize", "describe"] = "recognize"
+
+
+class VisionConnectionTestResponse(_StrictFrozenModel):
+    success: bool
+    latency_ms: float = Field(ge=0)
+    provider: ProviderName
+    model: str
+    endpoint: str
+    error_code: str | None = None
+    message: str
+    request_id: str | None = None
+
+
 class SettingsPatchRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     expected_revision: int = Field(ge=0)
     llm: LLMSettingsPatch | None = None
+    vision: VisionSettingsPatch | None = None
     retrieval: RetrievalSettingsOverrides | None = None
 
     @model_validator(mode="after")
     def require_section(self) -> "SettingsPatchRequest":
-        if self.llm is None and self.retrieval is None:
-            raise ValueError("至少需要提供 llm 或 retrieval 设置")
+        if self.llm is None and self.retrieval is None and self.vision is None:
+            raise ValueError("至少需要提供 llm、vision 或 retrieval 设置")
         return self
 
 
@@ -482,11 +597,12 @@ class SettingsResetRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     expected_revision: int = Field(ge=0)
-    section: Literal["llm", "retrieval", "all"]
+    section: Literal["llm", "vision", "retrieval", "all"]
 
 
 class RuntimeSettingsOverrides(_PartialModel):
     llm: LLMSettingsOverrides | None = None
+    vision: VisionSettingsOverrides | None = None
     retrieval: RetrievalSettingsOverrides | None = None
 
     def to_payload(self) -> dict:

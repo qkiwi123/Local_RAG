@@ -143,7 +143,7 @@ def test_next_snapshot_uses_new_model_generation_and_timeout(
     assert call["model"] == "changed-model"
     assert call["temperature"] == 0.8
     assert call["max_tokens"] == 321
-    assert "extra_body" not in call
+    assert call["extra_body"] == {"thinking": {"type": "disabled"}}
 
 
 @pytest.mark.asyncio
@@ -208,6 +208,78 @@ async def test_async_stream_close_releases_upstream_response(
     await stream.aclose()
 
     assert client.completions.streams[0].closed is True
+
+
+@pytest.mark.asyncio
+async def test_async_stream_rejects_reasoning_only_response(
+    tmp_path,
+    monkeypatch,
+):
+    class ReasoningOnlyStream:
+        def __init__(self):
+            self._chunks = iter(
+                [
+                    SimpleNamespace(
+                        choices=[
+                            SimpleNamespace(
+                                delta=SimpleNamespace(
+                                    content=None,
+                                    reasoning_content="内部思考",
+                                )
+                            )
+                        ]
+                    ),
+                    SimpleNamespace(
+                        choices=[
+                            SimpleNamespace(
+                                delta=SimpleNamespace(
+                                    content="",
+                                    reasoning_content=None,
+                                )
+                            )
+                        ]
+                    ),
+                ]
+            )
+            self.closed = False
+
+        def __aiter__(self):
+            return self
+
+        async def __anext__(self):
+            try:
+                return next(self._chunks)
+            except StopIteration as error:
+                raise StopAsyncIteration from error
+
+        async def close(self):
+            self.closed = True
+
+    stream = ReasoningOnlyStream()
+
+    async def create(**kwargs):
+        return stream
+
+    client = SimpleNamespace(
+        chat=SimpleNamespace(
+            completions=SimpleNamespace(create=create)
+        )
+    )
+    monkeypatch.setattr(llm, "_get_async_client", lambda config: client)
+
+    with pytest.raises(llm.EmptyLLMResponseError) as captured:
+        _ = [
+            piece
+            async for piece in llm.ask_stream_async(
+                "question",
+                "context",
+                _manager(tmp_path).snapshot(),
+            )
+        ]
+
+    assert captured.value.reasoning_only is True
+    assert "关闭回答思考模式" in str(captured.value)
+    assert stream.closed is True
 
 
 def test_followup_rewrite_disables_deepseek_thinking_and_tightens_prompt(
@@ -299,7 +371,7 @@ def test_answer_and_rewrite_use_independent_runtime_generation_settings(
     assert "extra_body" not in rewrite_call
 
 
-def test_deepseek_keeps_generic_effort_but_only_sends_thinking_switch(
+def test_deepseek_sends_supported_thinking_effort(
     tmp_path,
     monkeypatch,
 ):
@@ -318,7 +390,7 @@ def test_deepseek_keeps_generic_effort_but_only_sends_thinking_switch(
 
     call = client.completions.calls[0]
     assert call["extra_body"] == {"thinking": {"type": "enabled"}}
-    assert "reasoning_effort" not in call
+    assert call["reasoning_effort"] == "high"
 
 
 def test_openai_compatible_explicit_disabled_mode_wins_over_saved_effort(

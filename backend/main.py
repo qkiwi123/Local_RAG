@@ -65,8 +65,15 @@ async def sanitized_validation_error(
 ):
     """敏感输入校验失败时不让 FastAPI 的默认 422 回显原值。"""
     errors = error.errors()
+    def contains_secret(value):
+        if isinstance(value, dict):
+            return any(_is_sensitive_validation_location((key,)) or contains_secret(item) for key, item in value.items())
+        if isinstance(value, (list, tuple)):
+            return any(contains_secret(item) for item in value)
+        return False
+
     if not any(
-        _is_sensitive_validation_location(item.get("loc", ()))
+        _is_sensitive_validation_location(item.get("loc", ())) or contains_secret(item.get("input"))
         for item in errors
     ):
         return await request_validation_exception_handler(request, error)
@@ -102,8 +109,14 @@ app.include_router(settings_router.router, prefix="/api")
 
 @app.get("/api/health")
 async def health():
-    """健康检查（不依赖 SPA 构建产物）。"""
-    return {"status": "ok", "version": "0.1.0"}
+    """存活与模型预热状态（不依赖 SPA 构建产物）。"""
+    from backend.services.warmup import get_warmup_status
+
+    return {
+        "status": "ok",
+        "version": "0.1.0",
+        "model_warmup": get_warmup_status(),
+    }
 
 
 class _SpaStaticFiles(StaticFiles):

@@ -98,4 +98,24 @@ describe("parseEventLine", () => {
       aborted: true,
     });
   });
+
+  it("思考与正文分别分发，支持 UTF-8 跨片与末尾无换行", async () => {
+    const bytes = new TextEncoder().encode(
+      JSON.stringify({ event: "reasoning_delta", text: "先思考" }) + "\n" +
+      JSON.stringify({ event: "delta", text: "再回答" }) + "\n" +
+      JSON.stringify({ event: "done" }),
+    );
+    const body = new ReadableStream<Uint8Array>({ start(controller) {
+      for (const byte of bytes) controller.enqueue(Uint8Array.of(byte));
+      controller.close();
+    } });
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: true, body, status: 200 }));
+    const onReasoningDelta = vi.fn();
+    const onDelta = vi.fn();
+    const onDone = vi.fn();
+    await streamChat({}, { onReasoningDelta, onDelta, onDone });
+    expect(onReasoningDelta).toHaveBeenCalledExactlyOnceWith({ event: "reasoning_delta", text: "先思考" });
+    expect(onDelta).toHaveBeenCalledExactlyOnceWith({ event: "delta", text: "再回答" });
+    expect(onDone).toHaveBeenCalledOnce();
+  });
 });

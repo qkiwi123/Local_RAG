@@ -238,7 +238,7 @@ def test_ocr_failure_falls_back_to_placeholder_with_warning(
         str(source), document_id="doc-fail"
     )
 
-    assert result.units[0].canonical_text == "[第1页无可提取文本]"
+    assert result.units[0].canonical_text == "[第1页视觉识别未完成：模型不可用]"
     assert len(result.warnings) == 1
     assert result.warnings[0].code == "ocr_page_failed"
     assert "模型不可用" in result.warnings[0].message
@@ -260,7 +260,8 @@ def test_ocr_budget_exceeded_keeps_later_pages_as_placeholder(
     )
 
     assert result.units[0].canonical_text == "识别文字"
-    assert result.units[1].canonical_text == "[第2页无可提取文本]"
+    assert "第2页视觉识别未完成" in result.units[1].canonical_text
+    assert "单文档上限" in result.units[1].canonical_text
     assert len(result.warnings) == 1
     assert result.warnings[0].code == "ocr_page_failed"
     assert "上限" in result.warnings[0].message

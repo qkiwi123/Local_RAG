@@ -181,6 +181,34 @@ describe("ChatPage 检索范围", () => {
     await waitFor(() => expect(separator).toHaveAttribute("aria-valuenow", "320"));
   });
 
+  it("接收思考事件并在结束刷新会话后仍可展开已保存的思考", async () => {
+    let handlers!: import("../api/stream").ChatStreamHandlers;
+    let finish!: () => void;
+    mocks.streamChat.mockImplementationOnce(async (_payload, callbacks) => {
+      handlers = callbacks;
+      await new Promise<void>((resolve) => { finish = resolve; });
+      handlers.onDone?.({ event: "done" });
+      return { events: [], aborted: false };
+    });
+    render(<ChatPage />);
+    await waitFor(() => expect(mocks.getConversation).toHaveBeenCalledTimes(1));
+    fireEvent.change(screen.getByLabelText("问题输入框"), { target: { value: "新问题" } });
+    fireEvent.click(screen.getByRole("button", { name: /发\s*送/ }));
+    await waitFor(() => expect(mocks.streamChat).toHaveBeenCalled());
+    act(() => handlers.onReasoningDelta?.({ event: "reasoning_delta", text: "核对证据" }));
+    expect(screen.getByText("核对证据")).toBeVisible();
+    act(() => handlers.onDelta?.({ event: "delta", text: "回答正文" }));
+    fireEvent.click(screen.getByRole("button", { name: /思考内容/ }));
+    mocks.getConversation.mockResolvedValue({ ...conversation, messages: [
+      { message_id: "u1", request_id: "request-1", sequence: 0, role: "user", content: "新问题", status: "complete", citations: [], created_at: "" },
+      { message_id: "a1", request_id: "request-1", sequence: 1, role: "assistant", content: "回答正文", reasoning_content: "核对证据", status: "complete", citations: [], created_at: "" },
+    ] });
+    await act(async () => finish());
+    await waitFor(() => expect(mocks.getConversation).toHaveBeenCalledTimes(2));
+    expect(screen.getByText("核对证据")).toBeVisible();
+    expect(screen.getAllByText("回答正文")).toHaveLength(1);
+  });
+
   it("清除标签后下一次请求恢复为全库检索", async () => {
     render(<ChatPage />);
 

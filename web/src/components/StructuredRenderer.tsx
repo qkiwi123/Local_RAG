@@ -40,9 +40,6 @@ interface BlockViewProps {
   block: LocatedBlock;
   highlightStart?: number;
   highlightEnd?: number;
-  documentId?: string;
-  showOcrImages?: boolean;
-  seenOcrImages?: Set<string>;
 }
 
 function levelTitle(level: number): 1 | 2 | 3 | 4 | 5 {
@@ -53,27 +50,12 @@ export function BlockView({
   block,
   highlightStart,
   highlightEnd,
-  documentId,
-  showOcrImages,
-  seenOcrImages,
 }: BlockViewProps) {
   const ocr = block.attributes?.ocr === true;
   const leadingHeadingLevel =
     typeof block.attributes?.ocr_leading_heading_level === "number"
       ? block.attributes.ocr_leading_heading_level
       : null;
-  const imageRef =
-    typeof block.attributes?.ocr_image_ref === "string"
-      ? block.attributes.ocr_image_ref
-      : null;
-
-  const showImage =
-    Boolean(showOcrImages && documentId && imageRef) &&
-    Boolean(seenOcrImages && !seenOcrImages.has(imageRef as string));
-  if (showImage && seenOcrImages) {
-    seenOcrImages.add(imageRef as string);
-  }
-
   const renderHighlightedLine = (text: string, lineStart: number) => {
     if (highlightStart !== undefined && highlightEnd !== undefined) {
       return highlightText(text, lineStart, highlightStart, highlightEnd);
@@ -203,25 +185,7 @@ export function BlockView({
 
   return (
     <div>
-      {showImage ? (
-        <div className="ocr-compare">
-          <a
-            className="ocr-compare__image"
-            href={api.ocrImageUrl(documentId as string, imageRef as string)}
-            target="_blank"
-            rel="noreferrer"
-            title="点击查看原图"
-          >
-            <img
-              src={api.ocrImageUrl(documentId as string, imageRef as string)}
-              alt="OCR 识别原图"
-            />
-          </a>
-          <div className="ocr-compare__text">{content}</div>
-        </div>
-      ) : (
-        content
-      )}
+      {content}
       {badge}
     </div>
   );
@@ -235,6 +199,34 @@ interface StructuredRendererProps {
   showOcrImages?: boolean;
 }
 
+interface BlockGroup {
+  imageRef: string | null;
+  blocks: LocatedBlock[];
+}
+
+function ocrImageRef(block: LocatedBlock): string | null {
+  const value = block.attributes?.ocr_image_ref;
+  return typeof value === "string" && value ? value : null;
+}
+
+/**
+ * 只合并相邻且引用同一张 OCR 原图的块，保持页面原有内容顺序。
+ * 普通文本或另一张图片会结束当前分组。
+ */
+function groupBlocksByOcrImage(blocks: LocatedBlock[]): BlockGroup[] {
+  const groups: BlockGroup[] = [];
+  for (const block of blocks) {
+    const imageRef = ocrImageRef(block);
+    const previous = groups.at(-1);
+    if (imageRef && previous?.imageRef === imageRef) {
+      previous.blocks.push(block);
+    } else {
+      groups.push({ imageRef, blocks: [block] });
+    }
+  }
+  return groups;
+}
+
 export function StructuredRenderer({
   blocks,
   highlightStart,
@@ -242,20 +234,58 @@ export function StructuredRenderer({
   documentId,
   showOcrImages,
 }: StructuredRendererProps) {
+  const groups = groupBlocksByOcrImage(blocks);
   const seenOcrImages = new Set<string>();
+
+  const renderBlocks = (groupBlocks: LocatedBlock[]) =>
+    groupBlocks.map((block) => (
+      <BlockView
+        key={block.block_id}
+        block={block}
+        highlightStart={highlightStart}
+        highlightEnd={highlightEnd}
+      />
+    ));
+
   return (
     <div>
-      {blocks.map((block) => (
-        <BlockView
-          key={block.block_id}
-          block={block}
-          highlightStart={highlightStart}
-          highlightEnd={highlightEnd}
-          documentId={documentId}
-          showOcrImages={showOcrImages}
-          seenOcrImages={seenOcrImages}
-        />
-      ))}
+      {groups.map((group, groupIndex) => {
+        const showImage = Boolean(
+          showOcrImages &&
+            documentId &&
+            group.imageRef &&
+            !seenOcrImages.has(group.imageRef),
+        );
+        if (!showImage) {
+          return (
+            <React.Fragment key={`group-${groupIndex}`}>
+              {renderBlocks(group.blocks)}
+            </React.Fragment>
+          );
+        }
+
+        seenOcrImages.add(group.imageRef as string);
+        const imageUrl = api.ocrImageUrl(
+          documentId as string,
+          group.imageRef as string,
+        );
+        return (
+          <div className="ocr-compare" key={`ocr-${group.imageRef}-${groupIndex}`}>
+            <a
+              className="ocr-compare__image"
+              href={imageUrl}
+              target="_blank"
+              rel="noreferrer"
+              title="点击查看原图"
+            >
+              <img src={imageUrl} alt="OCR 识别原图" />
+            </a>
+            <div className="ocr-compare__text">
+              {renderBlocks(group.blocks)}
+            </div>
+          </div>
+        );
+      })}
     </div>
   );
 }

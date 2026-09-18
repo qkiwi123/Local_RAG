@@ -31,7 +31,7 @@ from backend.services.ocr_image_store import save_image
 from backend.services.parsers.office_zip import validate_office_package
 from backend.services.parsers.tables import render_table_markdown
 from backend.services.parsers.text import normalize_text
-from backend.services.vision import normalize_image_bytes, recognize_text
+from backend.services.vision import normalize_image_bytes, recognize_text, VisionCallConfig
 from backend.services.vision_cache import VisionBudget
 
 
@@ -81,7 +81,9 @@ def _table_rows(table) -> list[list[str]]:
     return [row for row in rows if any(row)]
 
 
-def _embedded_ocr_enabled() -> bool:
+def _embedded_ocr_enabled(config: VisionCallConfig | None = None) -> bool:
+    if config is not None:
+        return config.options.enabled and config.options.embedded_images_enabled
     return settings.OCR_ENABLED and settings.OCR_EMBEDDED_IMAGES
 
 
@@ -93,6 +95,7 @@ class _SlideVisionContext:
     budget: VisionBudget
     warnings: list[ParseWarning]
     locator: SourceLocator
+    config: VisionCallConfig | None = None
 
 
 def _append_shape_drafts(
@@ -123,7 +126,7 @@ def _append_shape_drafts(
         attributes["group_path"] = " / ".join(group_path)
 
     if shape.shape_type == MSO_SHAPE_TYPE.PICTURE:
-        if vision is None or not _embedded_ocr_enabled():
+        if vision is None or not _embedded_ocr_enabled(vision.config):
             return
         try:
             blob = shape.image.blob
@@ -132,7 +135,7 @@ def _append_shape_drafts(
         if not blob:
             return
         # EMF/WMF 等视觉模型不支持的格式先规范化；失败直接跳过。
-        normalized = normalize_image_bytes(blob)
+        normalized = normalize_image_bytes(blob, vision.config.options.max_image_edge) if vision.config else normalize_image_bytes(blob)
         if not normalized:
             return
         recognized = run_vision(
@@ -144,9 +147,10 @@ def _append_shape_drafts(
             warnings=vision.warnings,
             locator=vision.locator,
             code="ocr_embedded_image_failed",
+            config=vision.config,
         )
         if recognized:
-            image_attrs = ocr_attributes("embedded_image")
+            image_attrs = ocr_attributes("embedded_image", vision.config)
             image_ref = save_image(
                 vision.file_hash,
                 f"pptx-img:{image_blob_sha256(blob)[:16]}",
@@ -208,14 +212,15 @@ def parse_pptx_document(
     *,
     document_id: str,
     document_name: str | None = None,
+    vision_config: VisionCallConfig | None = None,
 ) -> ParsedDocument:
     """解析原生文本和表格；可选识别内嵌图片；无原生文字 slide 只产生 warning。"""
     name = document_name or Path(file_path).name
     validate_office_package(file_path)
     presentation = Presentation(file_path)
     # 仅 C 层开启时才需要文件哈希（缓存键）。
-    file_hash = file_sha256(file_path) if _embedded_ocr_enabled() else ""
-    budget = VisionBudget()
+    file_hash = file_sha256(file_path) if _embedded_ocr_enabled(vision_config) else ""
+    budget = VisionBudget(vision_config.options.max_calls_per_document if vision_config else None)
     units: list[ParsedUnit] = []
     warnings: list[ParseWarning] = []
 
@@ -246,6 +251,7 @@ def parse_pptx_document(
             budget=budget,
             warnings=warnings,
             locator=locator,
+            config=vision_config,
         )
         positioned_shapes = sorted(
             [

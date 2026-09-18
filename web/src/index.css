@@ -388,25 +388,24 @@ mark {
 
 /* OCR 原图与识别文本对照 */
 .ocr-compare {
-  display: flex;
+  display: grid;
+  grid-template-columns: minmax(220px, 32%) minmax(0, 1fr);
   gap: 16px;
   align-items: flex-start;
   margin: 4px 0;
 }
 
 .ocr-compare__image {
-  flex: 0 0 auto;
   display: block;
-  width: fit-content;
-  max-width: 42%;
+  width: 100%;
   line-height: 0;
 }
 
 .ocr-compare__image img {
   display: block;
+  width: 100%;
   max-width: 100%;
   max-height: 320px;
-  width: auto;
   height: auto;
   object-fit: contain;
   border: 1px solid #e5e7eb;
@@ -414,13 +413,12 @@ mark {
 }
 
 .ocr-compare__text {
-  flex: 1 1 auto;
   min-width: 0;
 }
 
 @media (max-width: 720px) {
   .ocr-compare {
-    flex-direction: column;
+    grid-template-columns: minmax(0, 1fr);
   }
 
   .ocr-compare__image {

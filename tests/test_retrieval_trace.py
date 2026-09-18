@@ -255,7 +255,7 @@ def test_finalize_chat_trace_records_runtime_without_secret(monkeypatch):
         "model": "example-model",
         "answer": {
             "called": False,
-            "thinking_mode": "provider_default",
+            "thinking_mode": "disabled",
             "reasoning_effort": "provider_default",
             "temperature": 0.2,
             "max_tokens": 100,

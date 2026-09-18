@@ -9,6 +9,7 @@ from backend.services.parsers.markdown import parse_markdown_units
 from backend.services.parsers.pdf import parse_pdf_document, parse_pdf_units
 from backend.services.parsers.pptx import parse_pptx_document, parse_pptx_units
 from backend.services.parsers.txt import parse_txt_units
+from backend.services.vision import VisionCallConfig
 
 
 ADAPTERS = {
@@ -68,6 +69,7 @@ def parse_document_structure(
     *,
     document_id: str,
     document_name: str | None = None,
+    vision_config: VisionCallConfig | None = None,
 ) -> ParsedDocument:
     """返回结构化 units 与非致命解析/OCR warnings。"""
     suffix = Path(file_path).suffix.lower()
@@ -79,6 +81,7 @@ def parse_document_structure(
         file_path,
         document_id=document_id,
         document_name=document_name,
+        **({"vision_config": vision_config} if suffix in {".pdf", ".docx", ".pptx"} and vision_config is not None else {}),
     )
 
 

@@ -135,7 +135,9 @@ def test_runtime_status_does_not_call_cold_model_getters(monkeypatch):
     monkeypatch.setattr(settings_status, "_model_cache_available", lambda _: True)
 
     with TestClient(app) as client:
-        assert client.get("/api/health").status_code == 200
+        health = client.get("/api/health")
+        assert health.status_code == 200
+        assert health.json()["model_warmup"]["status"] == "disabled"
         response = client.get("/api/settings/runtime-status")
         assert client.get("/api/health").status_code == 200
 
@@ -209,6 +211,7 @@ def test_s4_exposes_only_planned_settings_mutations():
     assert mutating_settings_routes == [
         ("/api/settings", ["PATCH"]),
         ("/api/settings/reset", ["POST"]),
+        ("/api/settings/test-vision", ["POST"]),
         ("/api/settings/test-llm", ["POST"]),
     ]
 
@@ -265,6 +268,7 @@ def test_patch_llm_settings_replaces_key_without_leaking_it(
         "masked_suffix": "2468",
     }
     assert payload["effects"] == [
+        "next_document_upload",
         "llm_client_cache_cleared",
         "next_request",
     ]
@@ -424,8 +428,9 @@ def test_reset_settings_endpoint_restores_all_runtime_overrides(tmp_path):
         == settings.RETRIEVAL_TOP_K
     )
     assert payload["settings"]["llm"]["api_key"]["source"] == "environment"
-    assert payload["effects"] == ["llm_client_cache_cleared", "next_request"]
-    assert payload["warnings"] == ["已恢复使用环境变量 API Key"]
+    assert payload["effects"] == ["next_document_upload", "llm_client_cache_cleared", "next_request"]
+    assert "已恢复使用环境变量 API Key" in payload["warnings"]
+    assert any("下次上传" in warning for warning in payload["warnings"])
     assert manager._secret_store.get_secret("llm_api_key") is None
 
 

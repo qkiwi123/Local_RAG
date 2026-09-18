@@ -386,6 +386,7 @@ class ConversationMessage(BaseModel):
     sequence: int
     role: str
     content: str
+    reasoning_content: str = ""
     status: str
     standalone_question: Optional[str] = None
     citations: list[Citation] = Field(default_factory=list)

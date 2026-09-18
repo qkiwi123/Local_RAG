@@ -12,6 +12,7 @@ const sourceLabels: Record<SettingsFieldSource, string> = {
 
 const activationLabels: Record<SettingsActivation, string> = {
   next_request: "下一请求生效",
+  next_document_upload: "下一次文档上传生效",
   restart_required: "需要重启",
   reindex_required: "需要重建索引",
   unavailable: "当前不可用",

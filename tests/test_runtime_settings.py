@@ -98,7 +98,7 @@ def test_no_persisted_row_matches_environment_and_does_not_write_database(temp_d
     assert snapshot.updated_at is None
     assert snapshot.llm.model == "deepseek-v4-flash"
     assert snapshot.llm.temperature == 0.3
-    assert snapshot.llm.answer_thinking_mode == "provider_default"
+    assert snapshot.llm.answer_thinking_mode == "disabled"
     assert snapshot.llm.answer_reasoning_effort == "provider_default"
     assert snapshot.llm.rewrite_enabled is True
     assert snapshot.llm.rewrite_thinking_mode == "disabled"

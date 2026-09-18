@@ -426,6 +426,34 @@
   font-size: 13px;
 }
 
+.chat-reasoning {
+  margin-bottom: 12px;
+  border-left: 3px solid #d6e4f5;
+  padding-left: 12px;
+}
+
+.chat-reasoning-toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 0;
+  border: 0;
+  background: transparent;
+  color: #52627a;
+  font: inherit;
+  cursor: pointer;
+}
+
+.chat-reasoning-content {
+  max-height: 320px;
+  overflow-y: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  color: #52627a;
+  line-height: 1.7;
+  padding: 8px 12px 8px 0;
+}
+
 .chat-composer {
   display: flex;
   min-width: 0;

@@ -18,9 +18,12 @@ import type {
   SettingsPatchResponse,
   SettingsReadResponse,
   SettingsRuntimeStatus,
+  VisionSettingsPatch,
+  VisionTestTask,
 } from "../../api/types";
 import type { ApiKeyIntent, SettingsFormValues } from "./formTypes";
 import { ModelSettingsCard } from "./ModelSettingsCard";
+import { VisionSettingsCard } from "./VisionSettingsCard";
 import { RetrievalSettingsCard } from "./RetrievalSettingsCard";
 import { RuntimeStatusCard } from "./RuntimeStatusCard";
 import { SettingsApplyBar } from "./SettingsApplyBar";
@@ -58,6 +61,29 @@ const retrievalFields = [
   "max_chunks_per_document",
 ] as const;
 
+const visionFields = [
+  "enabled",
+  "source",
+  "provider",
+  "base_url",
+  "model",
+  "pdf_scanned_enabled",
+  "pdf_page_images_enabled",
+  "embedded_images_enabled",
+  "recognize_thinking_mode",
+  "recognize_reasoning_effort",
+  "recognize_temperature",
+  "recognize_max_tokens",
+  "recognize_timeout_seconds",
+  "describe_thinking_mode",
+  "describe_reasoning_effort",
+  "describe_temperature",
+  "describe_max_tokens",
+  "describe_timeout_seconds",
+  "max_image_edge",
+  "max_calls_per_document",
+] as const;
+
 function formValues(settings: SettingsReadResponse): SettingsFormValues {
   return {
     llm: {
@@ -76,6 +102,29 @@ function formValues(settings: SettingsReadResponse): SettingsFormValues {
       rewrite_temperature: settings.llm.rewrite_temperature,
       rewrite_max_tokens: settings.llm.rewrite_max_tokens,
       rewrite_timeout_seconds: settings.llm.rewrite_timeout_seconds,
+      api_key_draft: "",
+    },
+    vision: {
+      enabled: settings.vision.enabled,
+      source: settings.vision.source,
+      provider: settings.vision.provider,
+      base_url: settings.vision.base_url,
+      model: settings.vision.model,
+      pdf_scanned_enabled: settings.vision.pdf_scanned_enabled,
+      pdf_page_images_enabled: settings.vision.pdf_page_images_enabled,
+      embedded_images_enabled: settings.vision.embedded_images_enabled,
+      recognize_thinking_mode: settings.vision.recognize_thinking_mode,
+      recognize_reasoning_effort: settings.vision.recognize_reasoning_effort,
+      recognize_temperature: settings.vision.recognize_temperature,
+      recognize_max_tokens: settings.vision.recognize_max_tokens,
+      recognize_timeout_seconds: settings.vision.recognize_timeout_seconds,
+      describe_thinking_mode: settings.vision.describe_thinking_mode,
+      describe_reasoning_effort: settings.vision.describe_reasoning_effort,
+      describe_temperature: settings.vision.describe_temperature,
+      describe_max_tokens: settings.vision.describe_max_tokens,
+      describe_timeout_seconds: settings.vision.describe_timeout_seconds,
+      max_image_edge: settings.vision.max_image_edge,
+      max_calls_per_document: settings.vision.max_calls_per_document,
       api_key_draft: "",
     },
     retrieval: {
@@ -104,8 +153,22 @@ function isFormValidationError(error: unknown): boolean {
   );
 }
 
+function hasLlmDraftChanges(
+  values: SettingsFormValues["llm"] | undefined,
+  settings: SettingsReadResponse,
+): boolean {
+  return Boolean(
+    values &&
+      llmFields.some(
+        (field) =>
+          values[field] !== undefined && values[field] !== settings.llm[field],
+      ),
+  );
+}
+
 export default function SettingsPage() {
   const [form] = Form.useForm<SettingsFormValues>();
+  const llmDraft = Form.useWatch("llm", form);
   const [settings, setSettings] = useState<SettingsReadResponse | null>(null);
   const [status, setStatus] = useState<SettingsRuntimeStatus | null>(null);
   const [loading, setLoading] = useState(true);
@@ -115,9 +178,13 @@ export default function SettingsPage() {
   const [dirty, setDirty] = useState(false);
   const [saving, setSaving] = useState(false);
   const [testing, setTesting] = useState(false);
+  const [visionTesting, setVisionTesting] = useState(false);
   const [resetting, setResetting] = useState(false);
   const [resetOpen, setResetOpen] = useState(false);
-  const [apiKeyIntent, setApiKeyIntentState] = useState<ApiKeyIntent>("keep");
+  const [llmApiKeyIntent, setLlmApiKeyIntent] =
+    useState<ApiKeyIntent>("keep");
+  const [visionApiKeyIntent, setVisionApiKeyIntent] =
+    useState<ApiKeyIntent>("keep");
   const [conflict, setConflict] = useState(false);
   const [feedback, setFeedback] = useState<SettingsPatchResponse | null>(null);
   const [connectionResult, setConnectionResult] = useState<string | null>(null);
@@ -127,7 +194,8 @@ export default function SettingsPage() {
     (next: SettingsReadResponse) => {
       setSettings(next);
       form.setFieldsValue(formValues(next));
-      setApiKeyIntentState("keep");
+      setLlmApiKeyIntent("keep");
+      setVisionApiKeyIntent("keep");
       setDirty(false);
       setConflict(false);
     },
@@ -188,8 +256,14 @@ export default function SettingsPage() {
     };
   }, [dirty]);
 
-  const setApiKeyIntent = (intent: ApiKeyIntent) => {
-    setApiKeyIntentState(intent);
+  const setLlmApiKeyIntentState = (intent: ApiKeyIntent) => {
+    setLlmApiKeyIntent(intent);
+    setDirty(true);
+    setFeedback(null);
+  };
+
+  const setVisionApiKeyIntentState = (intent: ApiKeyIntent) => {
+    setVisionApiKeyIntent(intent);
     setDirty(true);
     setFeedback(null);
   };
@@ -205,13 +279,34 @@ export default function SettingsPage() {
         (llm as Record<string, unknown>)[field] = values.llm[field];
       }
     }
-    if (apiKeyIntent === "replace" && values.llm.api_key_draft.trim()) {
+    if (llmApiKeyIntent === "replace" && values.llm.api_key_draft.trim()) {
       llm.api_key_update = {
         action: "replace",
         value: values.llm.api_key_draft.trim(),
       };
-    } else if (apiKeyIntent === "clear") {
+    } else if (llmApiKeyIntent === "clear") {
       llm.api_key_update = { action: "clear" };
+    }
+
+    const vision: VisionSettingsPatch = {};
+    for (const field of visionFields) {
+      if (
+        values.vision[field] !== undefined &&
+        values.vision[field] !== settings.vision[field]
+      ) {
+        (vision as Record<string, unknown>)[field] = values.vision[field];
+      }
+    }
+    if (
+      visionApiKeyIntent === "replace" &&
+      values.vision.api_key_draft.trim()
+    ) {
+      vision.api_key_update = {
+        action: "replace",
+        value: values.vision.api_key_draft.trim(),
+      };
+    } else if (visionApiKeyIntent === "clear") {
+      vision.api_key_update = { action: "clear" };
     }
 
     const retrieval: RetrievalSettingsPatch = {};
@@ -226,6 +321,7 @@ export default function SettingsPage() {
     return {
       expected_revision: settings.revision,
       ...(Object.keys(llm).length ? { llm } : {}),
+      ...(Object.keys(vision).length ? { vision } : {}),
       ...(Object.keys(retrieval).length ? { retrieval } : {}),
     };
   };
@@ -235,7 +331,7 @@ export default function SettingsPage() {
     try {
       const values = await form.validateFields();
       const patch = buildPatch(values);
-      if (!patch || (!patch.llm && !patch.retrieval)) {
+      if (!patch || (!patch.llm && !patch.vision && !patch.retrieval)) {
         setDirty(false);
         message.info("没有需要保存的修改");
         return;
@@ -300,6 +396,106 @@ export default function SettingsPage() {
     }
   };
 
+  const handleTestVisionConnection = async (task: VisionTestTask) => {
+    try {
+      const vision = form.getFieldValue(
+        "vision",
+      ) as SettingsFormValues["vision"];
+      const connectionFields =
+        vision.source === "custom"
+          ? [
+              ["vision", "provider"],
+              ["vision", "base_url"],
+              ["vision", "model"],
+            ]
+          : [];
+      const taskFields =
+        task === "recognize"
+          ? [
+              ["vision", "recognize_thinking_mode"],
+              ["vision", "recognize_reasoning_effort"],
+              ["vision", "recognize_temperature"],
+              ["vision", "recognize_max_tokens"],
+              ["vision", "recognize_timeout_seconds"],
+            ]
+          : [
+              ["vision", "describe_thinking_mode"],
+              ["vision", "describe_reasoning_effort"],
+              ["vision", "describe_temperature"],
+              ["vision", "describe_max_tokens"],
+              ["vision", "describe_timeout_seconds"],
+            ];
+      await form.validateFields([...connectionFields, ...taskFields, ["vision", "max_image_edge"]]);
+
+      const taskSettings: VisionSettingsPatch =
+        task === "recognize"
+          ? {
+              recognize_thinking_mode: vision.recognize_thinking_mode,
+              recognize_reasoning_effort: vision.recognize_reasoning_effort,
+              recognize_temperature: vision.recognize_temperature,
+              recognize_max_tokens: vision.recognize_max_tokens,
+              recognize_timeout_seconds: vision.recognize_timeout_seconds,
+            }
+          : {
+              describe_thinking_mode: vision.describe_thinking_mode,
+              describe_reasoning_effort: vision.describe_reasoning_effort,
+              describe_temperature: vision.describe_temperature,
+              describe_max_tokens: vision.describe_max_tokens,
+              describe_timeout_seconds: vision.describe_timeout_seconds,
+            };
+      const payloadVision: VisionSettingsPatch = {
+        source: vision.source,
+        max_image_edge: vision.max_image_edge,
+        ...taskSettings,
+        ...(vision.source === "custom"
+          ? {
+              provider: vision.provider,
+              base_url: vision.base_url,
+              model: vision.model,
+            }
+          : {}),
+      };
+      if (vision.source === "custom") {
+        if (
+          visionApiKeyIntent === "replace" &&
+          vision.api_key_draft.trim()
+        ) {
+          payloadVision.api_key_update = {
+            action: "replace",
+            value: vision.api_key_draft.trim(),
+          };
+        } else if (visionApiKeyIntent === "clear") {
+          payloadVision.api_key_update = { action: "clear" };
+        }
+      }
+
+      setVisionTesting(true);
+      setConnectionResult(null);
+      const response = await api.testVisionConnection({
+        vision: payloadVision,
+        task,
+      });
+      const followNote =
+        vision.source === "follow_llm" ? " · 使用当前已保存的问答模型" : "";
+      setConnectionResult(
+        response.success
+          ? `视觉连接成功 · ${response.latency_ms.toFixed(1)} ms · ${response.provider} / ${response.model}${followNote} · ${response.endpoint}`
+          : `${response.message}${response.error_code ? `（${response.error_code}）` : ""}`,
+      );
+      if (response.success) {
+        message.success("视觉模型连接测试成功");
+      } else {
+        message.error(response.message);
+      }
+    } catch (error) {
+      if (!isFormValidationError(error)) {
+        message.error(`视觉连接测试失败: ${errorMessage(error)}`);
+      }
+    } finally {
+      setVisionTesting(false);
+    }
+  };
+
   const handleReset = async () => {
     if (!settings) return;
     setResetting(true);
@@ -359,7 +555,7 @@ export default function SettingsPage() {
         <div>
           <Typography.Title level={2}>设置</Typography.Title>
           <Typography.Paragraph type="secondary">
-            管理全局问答模型与检索参数。页面读取后端有效值，不使用 localStorage 保存配置。
+            管理问答模型、视觉解析与检索参数。视觉设置对下次文档上传生效，已入库文档不会自动更新。
           </Typography.Paragraph>
         </div>
         <Space orientation="vertical" align="end" size={0}>
@@ -414,7 +610,7 @@ export default function SettingsPage() {
       )}
       {connectionResult && (
         <Alert
-          type={connectionResult.startsWith("连接成功") ? "success" : "error"}
+          type={connectionResult.includes("连接成功") ? "success" : "error"}
           showIcon
           title="连接测试结果"
           description={connectionResult}
@@ -436,10 +632,22 @@ export default function SettingsPage() {
         <ModelSettingsCard
           form={form}
           settings={settings}
-          apiKeyIntent={apiKeyIntent}
+          apiKeyIntent={llmApiKeyIntent}
           testing={testing}
-          onApiKeyIntentChange={setApiKeyIntent}
+          onApiKeyIntentChange={setLlmApiKeyIntentState}
           onTestConnection={() => void handleTestConnection()}
+        />
+        <VisionSettingsCard
+          form={form}
+          settings={settings}
+          apiKeyIntent={visionApiKeyIntent}
+          testing={visionTesting}
+          llmDirty={
+            llmApiKeyIntent !== "keep" ||
+            hasLlmDraftChanges(llmDraft, settings)
+          }
+          onApiKeyIntentChange={setVisionApiKeyIntentState}
+          onTestConnection={(task) => void handleTestVisionConnection(task)}
         />
         <RetrievalSettingsCard form={form} settings={settings} />
       </Form>
@@ -472,7 +680,7 @@ export default function SettingsPage() {
         onCancel={() => !resetting && setResetOpen(false)}
       >
         <Typography.Paragraph>
-          这会删除 LLM、API Key 和 Retrieval 的页面运行时覆盖，重新使用环境变量和代码默认值，并产生新的 revision。
+          这会删除 LLM、视觉设置、API Key 和 Retrieval 的页面运行时覆盖，重新使用环境变量和代码默认值，并产生新的 revision。
         </Typography.Paragraph>
         <Typography.Paragraph type="secondary">
           不会修改 .env，不会重建或清空向量数据库。

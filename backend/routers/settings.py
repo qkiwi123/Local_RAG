@@ -1,6 +1,7 @@
 """S2-S4 设置读取、动态保存与草稿连接测试 API。"""
 
 from fastapi import APIRouter, HTTPException, Request
+from starlette.concurrency import run_in_threadpool
 
 from backend.models.settings_schemas import (
     APIKeyReplace,
@@ -11,6 +12,8 @@ from backend.models.settings_schemas import (
     SettingsPatchResponse,
     SettingsResetRequest,
     SettingsRuntimeStatusResponse,
+    VisionConnectionTestRequest,
+    VisionConnectionTestResponse,
 )
 from backend.services.llm import (
     call_config_from_snapshot,
@@ -51,6 +54,7 @@ async def patch_settings(payload: SettingsPatchRequest, request: Request):
     """原子保存 LLM/Retrieval 设置；密钥只接受三态语义。"""
     manager = _manager(request)
     key_update = payload.llm.api_key_update if payload.llm else None
+    vision_key_update = payload.vision.api_key_update if payload.vision else None
     action = key_update.action if key_update is not None else "keep"
     key_value = (
         key_update.value.get_secret_value()
@@ -63,11 +67,15 @@ async def patch_settings(payload: SettingsPatchRequest, request: Request):
             patch["llm"] = payload.llm.runtime_payload()
         if payload.retrieval is not None:
             patch["retrieval"] = payload.retrieval.runtime_payload()
+        if payload.vision is not None:
+            patch["vision"] = payload.vision.runtime_payload()
         snapshot, changed_fields = manager.update_settings(
             patch,
             expected_revision=payload.expected_revision,
             api_key_action=action,
             api_key_value=key_value,
+            vision_api_key_action=vision_key_update.action if vision_key_update else "keep",
+            vision_api_key_value=(vision_key_update.value.get_secret_value() if isinstance(vision_key_update, APIKeyReplace) else None),
         )
     except SettingsRevisionConflict as error:
         raise HTTPException(
@@ -94,6 +102,7 @@ async def patch_settings(payload: SettingsPatchRequest, request: Request):
 
     effects: list[str] = []
     warnings: list[str] = []
+    _vision_effects(snapshot, changed_fields, effects, warnings)
     llm_changed = any(path.startswith("llm.") for path in changed_fields)
     retrieval_changed = any(
         path.startswith("retrieval.") for path in changed_fields
@@ -150,13 +159,6 @@ async def patch_settings(payload: SettingsPatchRequest, request: Request):
         warnings.append(
             "OpenAI-compatible 端点的思考参数支持不统一，请以该服务商文档和 Trace 为准"
         )
-    if llm_changed and snapshot.llm.provider == "deepseek" and (
-        snapshot.llm.answer_reasoning_effort != "provider_default"
-        or snapshot.llm.rewrite_reasoning_effort != "provider_default"
-    ):
-        warnings.append(
-            "DeepSeek 当前没有思考强度的等价请求参数；设置会保留供切换模型使用，但本端点只提交思考开关"
-        )
     return SettingsPatchResponse(
         revision=snapshot.revision,
         settings=build_settings_response(snapshot),
@@ -203,6 +205,7 @@ async def reset_settings(payload: SettingsResetRequest, request: Request):
     retrieval_changed = any(path.startswith("retrieval.") for path in changed)
     effects: list[str] = []
     warnings: list[str] = []
+    _vision_effects(snapshot, changed_fields, effects, warnings)
     if llm_changed:
         clear_llm_client_cache()
         effects.append("llm_client_cache_cleared")
@@ -233,6 +236,42 @@ async def reset_settings(payload: SettingsResetRequest, request: Request):
         effects=effects,
         warnings=warnings,
     )
+
+
+def _vision_effects(snapshot, changed_fields, effects, warnings):
+    changed = any(path.startswith("vision.") for path in changed_fields)
+    followed_change = snapshot.vision.source == "follow_llm" and bool(
+        {"llm.provider", "llm.base_url", "llm.model", "llm.api_key"} & set(changed_fields)
+    )
+    if not (changed or followed_change):
+        return
+    effects.append("next_document_upload")
+    warnings.append("视觉设置在下次上传或重新解析时生效，已入库文档不会自动更新")
+    if snapshot.vision.enabled and not any((snapshot.vision.pdf_scanned_enabled, snapshot.vision.pdf_page_images_enabled, snapshot.vision.embedded_images_enabled)):
+        warnings.append("视觉模型已启用，但尚未开启任何识别场景")
+    if snapshot.vision_api_key_source == "environment" and "vision.api_key" in changed_fields:
+        warnings.append("视觉密钥已恢复使用环境变量配置")
+    provider = snapshot.llm.provider if snapshot.vision.source == "follow_llm" else snapshot.vision.provider
+    if provider == "openai_compatible" and any(
+        getattr(snapshot.vision, f"{task}_thinking_mode") != "provider_default"
+        or getattr(snapshot.vision, f"{task}_reasoning_effort") != "provider_default"
+        for task in ("recognize", "describe")
+    ):
+        warnings.append("自定义兼容接口的思考参数支持不统一，请用图片测试验证；不支持时可选择服务商默认")
+
+
+@router.post("/settings/test-vision", response_model=VisionConnectionTestResponse)
+async def test_vision(payload: VisionConnectionTestRequest, request: Request):
+    from backend.services.vision import vision_config_from_snapshot, test_vision_connection
+
+    try:
+        draft_snapshot = _manager(request).vision_draft_snapshot(payload.vision)
+    except RuntimeSettingsValidationError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
+    except SecretStoreError as error:
+        raise HTTPException(status_code=503, detail="运行时密钥存储当前不可用") from error
+    config = vision_config_from_snapshot(draft_snapshot)
+    return await run_in_threadpool(test_vision_connection, config, task=payload.task)
 
 
 @router.post(

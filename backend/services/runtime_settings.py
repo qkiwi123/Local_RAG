@@ -16,6 +16,9 @@ from backend.models.settings_schemas import (
     RefusalGateSettings,
     RetrievalSettings,
     RuntimeSettingsOverrides,
+    VisionSettings,
+    VisionSettingsPatch,
+    APIKeyReplace,
 )
 from backend.services.secret_store import SecretStore
 from backend.services import sparse_lifecycle
@@ -28,6 +31,7 @@ from backend.services.settings_store import (
 
 DYNAMIC_FIELD_WHITELIST = frozenset(
     {
+        *(f"vision.{name}" for name in VisionSettings.model_fields),
         "llm.enabled",
         "llm.provider",
         "llm.base_url",
@@ -129,7 +133,7 @@ def _environment_payload(environment) -> dict:
                 getattr(
                     environment,
                     "LLM_ANSWER_THINKING_MODE",
-                    "provider_default",
+                    "disabled",
                 )
             ),
             "answer_reasoning_effort": str(
@@ -161,6 +165,21 @@ def _environment_payload(environment) -> dict:
             "rewrite_timeout_seconds": float(
                 getattr(environment, "LLM_REWRITE_TIMEOUT_SECONDS", 30)
             ),
+        },
+        "vision": {
+            **VisionSettings().model_dump(),
+            "source": str(getattr(environment, "VISION_SOURCE", "follow_llm")),
+            "enabled": bool(getattr(environment, "OCR_ENABLED", False)),
+            "provider": str(getattr(environment, "VISION_PROVIDER", "openai_compatible")),
+            "base_url": str(getattr(environment, "VISION_BASE_URL", "")),
+            "model": str(getattr(environment, "VISION_MODEL", "glm-4.6v-flash")),
+            "pdf_scanned_enabled": bool(getattr(environment, "OCR_PDF_SCANNED", False)),
+            "pdf_page_images_enabled": bool(getattr(environment, "OCR_PDF_PAGE_IMAGES", False)),
+            "embedded_images_enabled": bool(getattr(environment, "OCR_EMBEDDED_IMAGES", False)),
+            "max_image_edge": int(getattr(environment, "OCR_MAX_IMAGE_EDGE", 1600)),
+            "max_calls_per_document": int(getattr(environment, "OCR_MAX_PER_DOCUMENT", 20)),
+            "recognize_timeout_seconds": float(getattr(environment, "OCR_TIMEOUT_SECONDS", 60)),
+            "describe_timeout_seconds": float(getattr(environment, "OCR_TIMEOUT_SECONDS", 60)),
         },
         "retrieval": {
             "mode": str(environment.RETRIEVAL_MODE),
@@ -269,11 +288,16 @@ class RuntimeSettingsManager:
         stored: StoredRuntimeSettings,
         *,
         runtime_key_override: object | str | None = _RUNTIME_KEY_UNSET,
+        vision_key_override: object | str | None = _RUNTIME_KEY_UNSET,
     ) -> EffectiveSettingsSnapshot:
         environment_payload = _environment_payload(self._environment)
         overrides = _normalize_overrides(stored.payload)
         effective = _merge_nested(environment_payload, overrides)
         llm, retrieval = _validate_effective(effective)
+        try:
+            vision = VisionSettings.model_validate(effective["vision"])
+        except ValidationError:
+            raise RuntimeSettingsValidationError("合并后的视觉设置校验失败") from None
 
         runtime_key = (
             self._secret_store.get_secret("llm_api_key")
@@ -295,6 +319,21 @@ class RuntimeSettingsManager:
             raise RuntimeSettingsValidationError(
                 "启用生成模型时必须存在有效 API Key"
             )
+        vision_runtime_key = (
+            self._secret_store.get_secret("vision_api_key")
+            if vision_key_override is _RUNTIME_KEY_UNSET else vision_key_override
+        )
+        vision_environment_key = str(getattr(self._environment, "VISION_API_KEY", "")).strip()
+        vision_key = vision_runtime_key or vision_environment_key or None
+        vision_key_source = (
+            "runtime_secret" if vision_runtime_key else
+            "environment" if vision_environment_key else "none"
+        )
+        if vision.enabled:
+            if vision.source == "follow_llm" and api_key is None:
+                raise RuntimeSettingsValidationError("视觉跟随问答模型时必须存在问答 API Key")
+            if vision.source == "custom" and (not vision_key or not vision.base_url):
+                raise RuntimeSettingsValidationError("启用自定义视觉模型时必须配置 Base URL 和 API Key")
         field_sources = {
             path: "environment"
             for path in _flatten_leaf_paths(environment_payload)
@@ -312,6 +351,10 @@ class RuntimeSettingsManager:
                     else "system"
                 ),
                 "retrieval.refusal_gate.available": "system",
+                "vision.api_key": (
+                    "runtime" if vision_key_source == "runtime_secret" else
+                    "environment" if vision_key_source == "environment" else "system"
+                ),
                 "retrieval.refusal_gate.reason": "system",
             }
         )
@@ -319,6 +362,9 @@ class RuntimeSettingsManager:
             revision=stored.revision,
             updated_at=stored.updated_at,
             llm=llm,
+            vision=vision,
+            vision_api_key=vision_key,
+            vision_api_key_source=vision_key_source,
             retrieval=retrieval,
             api_key=api_key,
             api_key_source=api_key_source,
@@ -376,6 +422,8 @@ class RuntimeSettingsManager:
         expected_revision: int,
         api_key_action: str = "keep",
         api_key_value: str | None = None,
+        vision_api_key_action: str = "keep",
+        vision_api_key_value: str | None = None,
     ) -> tuple[EffectiveSettingsSnapshot, list[str]]:
         """原子发布非敏感设置与 DPAPI 密钥覆盖。
 
@@ -396,6 +444,16 @@ class RuntimeSettingsManager:
         else:
             clean_key = None
 
+        if vision_api_key_action not in {"keep", "replace", "clear"}:
+            raise RuntimeSettingsValidationError("不支持的视觉 API Key 操作")
+        clean_vision_key = None
+        if vision_api_key_action == "replace":
+            if not isinstance(vision_api_key_value, str) or not vision_api_key_value.strip():
+                raise RuntimeSettingsValidationError("视觉 API Key 不能为空")
+            clean_vision_key = vision_api_key_value.strip()
+            if len(clean_vision_key) > 8192:
+                raise RuntimeSettingsValidationError("视觉 API Key 长度不能超过 8192 个字符")
+
         normalized_patch = _normalize_overrides(patch)
         with _COMMIT_LOCK, self._lock:
             current = self._store.load()
@@ -413,9 +471,17 @@ class RuntimeSettingsManager:
                 else prior_runtime_key
             )
             secret_changed = future_runtime_key != prior_runtime_key
+            prior_vision_key = self._secret_store.get_secret("vision_api_key")
+            future_vision_key = (
+                clean_vision_key if vision_api_key_action == "replace" else
+                None if vision_api_key_action == "clear" else prior_vision_key
+            )
+            vision_secret_changed = future_vision_key != prior_vision_key
             changed_keys = sorted(_flatten_leaf_paths(normalized_patch))
             if secret_changed:
                 changed_keys.append("llm.api_key")
+            if vision_secret_changed:
+                changed_keys.append("vision.api_key")
             if not changed_keys:
                 return self._snapshot, []
 
@@ -431,11 +497,12 @@ class RuntimeSettingsManager:
                     updated_at=current.updated_at,
                 ),
                 runtime_key_override=future_runtime_key,
+                vision_key_override=future_vision_key,
             )
 
             self._invalidate_sparse_contract(prepared)
-            if secret_changed:
-                self._write_runtime_key(future_runtime_key)
+            if secret_changed or vision_secret_changed:
+                self._secret_store.update_secrets({"llm_api_key": future_runtime_key, "vision_api_key": future_vision_key})
             try:
                 saved = self._store.save(
                     merged_overrides,
@@ -443,9 +510,9 @@ class RuntimeSettingsManager:
                     changed_keys=changed_keys,
                 )
             except Exception as error:
-                if secret_changed:
+                if secret_changed or vision_secret_changed:
                     try:
-                        self._write_runtime_key(prior_runtime_key)
+                        self._secret_store.update_secrets({"llm_api_key": prior_runtime_key, "vision_api_key": prior_vision_key})
                     except Exception:
                         raise RuntimeSettingsCommitError(
                             "设置保存失败，且运行时密钥无法恢复"
@@ -485,10 +552,11 @@ class RuntimeSettingsManager:
         expected_revision: int,
     ) -> tuple[EffectiveSettingsSnapshot, list[str]]:
         """删除指定运行时覆盖并重新使用部署默认值。"""
-        if section not in {"llm", "retrieval", "all"}:
+        if section not in {"llm", "vision", "retrieval", "all"}:
             raise RuntimeSettingsValidationError("不支持的设置恢复范围")
 
         reset_llm = section in {"llm", "all"}
+        reset_vision = section in {"vision", "all"}
         reset_retrieval = section in {"retrieval", "all"}
         with _COMMIT_LOCK, self._lock:
             current = self._store.load()
@@ -504,13 +572,20 @@ class RuntimeSettingsManager:
                 removed["llm"] = next_overrides.pop("llm")
             if reset_retrieval and "retrieval" in next_overrides:
                 removed["retrieval"] = next_overrides.pop("retrieval")
+            if reset_vision and "vision" in next_overrides:
+                removed["vision"] = next_overrides.pop("vision")
 
             prior_runtime_key = self._secret_store.get_secret("llm_api_key")
             future_runtime_key = None if reset_llm else prior_runtime_key
             secret_changed = future_runtime_key != prior_runtime_key
+            prior_vision_key = self._secret_store.get_secret("vision_api_key")
+            future_vision_key = None if reset_vision else prior_vision_key
+            vision_secret_changed = future_vision_key != prior_vision_key
             changed_keys = sorted(_flatten_leaf_paths(removed))
             if secret_changed:
                 changed_keys.append("llm.api_key")
+            if vision_secret_changed:
+                changed_keys.append("vision.api_key")
             if not changed_keys:
                 return self._snapshot, []
 
@@ -521,11 +596,12 @@ class RuntimeSettingsManager:
                     updated_at=current.updated_at,
                 ),
                 runtime_key_override=future_runtime_key,
+                vision_key_override=future_vision_key,
             )
 
             self._invalidate_sparse_contract(prepared)
-            if secret_changed:
-                self._write_runtime_key(future_runtime_key)
+            if secret_changed or vision_secret_changed:
+                self._secret_store.update_secrets({"llm_api_key": future_runtime_key, "vision_api_key": future_vision_key})
             try:
                 saved = self._store.save(
                     next_overrides,
@@ -533,9 +609,9 @@ class RuntimeSettingsManager:
                     changed_keys=changed_keys,
                 )
             except Exception:
-                if secret_changed:
+                if secret_changed or vision_secret_changed:
                     try:
-                        self._write_runtime_key(prior_runtime_key)
+                        self._secret_store.update_secrets({"llm_api_key": prior_runtime_key, "vision_api_key": prior_vision_key})
                     except Exception:
                         raise RuntimeSettingsCommitError(
                             "设置恢复失败，且运行时密钥无法恢复"
@@ -550,6 +626,26 @@ class RuntimeSettingsManager:
             )
             self._snapshot = candidate
             return candidate, changed_keys
+
+    def vision_draft_snapshot(self, draft: VisionSettingsPatch) -> EffectiveSettingsSnapshot:
+        """预览未保存视觉草稿；clear 与保存使用相同的环境密钥回退语义。"""
+        with _COMMIT_LOCK, self._lock:
+            current = self._store.load()
+            patch = draft.runtime_payload()
+            patch["enabled"] = True  # 用户显式测试时允许总开关仍处于关闭状态。
+            key_override = _RUNTIME_KEY_UNSET
+            if isinstance(draft.api_key_update, APIKeyReplace):
+                key_override = draft.api_key_update.value.get_secret_value()
+            elif draft.api_key_update is not None:
+                key_override = None
+            return self._build_snapshot(
+                StoredRuntimeSettings(
+                    revision=current.revision,
+                    payload=_merge_nested(current.payload, {"vision": patch}),
+                    updated_at=current.updated_at,
+                ),
+                vision_key_override=key_override,
+            )
 
     def _invalidate_sparse_contract(self, prepared) -> None:
         before, after = self._snapshot.retrieval, prepared.retrieval

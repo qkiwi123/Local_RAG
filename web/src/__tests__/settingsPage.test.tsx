@@ -14,6 +14,7 @@ const mocks = vi.hoisted(() => ({
   updateSettings: vi.fn(),
   resetSettings: vi.fn(),
   testLlmConnection: vi.fn(),
+  testVisionConnection: vi.fn(),
   getSettingsRuntimeStatus: vi.fn(),
 }));
 
@@ -56,6 +57,21 @@ const settings: SettingsReadResponse = {
     rewrite_max_tokens: 200,
     rewrite_timeout_seconds: 30,
   },
+  vision: {
+    enabled: false, source: "follow_llm", provider: "openai_compatible",
+    base_url: "", model: "glm-4.6v-flash",
+    api_key: { configured: false, source: "none", masked_suffix: null },
+    effective_connection: {
+      provider: "deepseek", base_url: "https://api.deepseek.com", model: "deepseek-chat",
+      api_key: { configured: true, source: "runtime", masked_suffix: "2468" },
+    },
+    pdf_scanned_enabled: false, pdf_page_images_enabled: false, embedded_images_enabled: false,
+    recognize_thinking_mode: "disabled", recognize_reasoning_effort: "provider_default",
+    recognize_temperature: 0, recognize_max_tokens: 4000, recognize_timeout_seconds: 60,
+    describe_thinking_mode: "disabled", describe_reasoning_effort: "provider_default",
+    describe_temperature: 0, describe_max_tokens: 800, describe_timeout_seconds: 60,
+    max_image_edge: 1600, max_calls_per_document: 20,
+  },
   retrieval: {
     mode: "hybrid",
     final_top_k: 5,
@@ -77,6 +93,7 @@ const settings: SettingsReadResponse = {
   runtime: {
     access_scope: "trusted_local_workspace",
     llm_activation: "next_request",
+    vision_activation: "next_document_upload",
     retrieval_activation: "next_request",
     refusal_gate_activation: "unavailable",
   },
@@ -233,6 +250,11 @@ describe("SettingsPage", () => {
       endpoint: "https://api.deepseek.com",
       message: "连接成功",
     });
+    mocks.testVisionConnection.mockResolvedValue({
+      success: true, latency_ms: 20, provider: "deepseek", model: "deepseek-chat",
+      endpoint: "https://api.deepseek.com", message: "图片识别验证成功",
+      error_code: null, request_id: null,
+    });
   });
 
   afterEach(() => {
@@ -254,6 +276,8 @@ describe("SettingsPage", () => {
     expect(screen.getByText("revision 3")).toBeInTheDocument();
     expect(screen.getAllByText("设备已验证")).toHaveLength(2);
     expect(screen.getByRole("button", { name: /保存并应用/ })).toBeDisabled();
+    expect(screen.getByLabelText("视觉 API Key")).not.toBeVisible();
+    expect(screen.getByLabelText("视觉模型名")).not.toBeVisible();
   });
 
   it("只 PATCH 修改字段并用输入的草稿密钥执行替换", async () => {
@@ -312,6 +336,59 @@ describe("SettingsPage", () => {
     });
   });
 
+  it("独立保存视觉开关、扫描场景和识别预算，不修改问答配置", async () => {
+    render(<SettingsPage />);
+    fireEvent.click(await screen.findByLabelText("启用视觉处理"));
+    fireEvent.click(screen.getByLabelText("处理扫描 PDF"));
+    fireEvent.change(screen.getByLabelText("识别最大完成 Tokens"), { target: { value: "6000" } });
+    fireEvent.click(screen.getByRole("button", { name: /保存并应用/ }));
+    await waitFor(() => expect(mocks.updateSettings).toHaveBeenCalledWith({
+      expected_revision: 3,
+      vision: { enabled: true, pdf_scanned_enabled: true, recognize_max_tokens: 6000 },
+    }));
+  });
+
+  it("跟随测试采用已保存问答连接及视觉草稿，不携带问答草稿密钥", async () => {
+    render(<SettingsPage />);
+    fireEvent.change(await screen.findByLabelText("API Key"), { target: { value: "unsaved-llm-key" } });
+    fireEvent.change(screen.getByLabelText("识别最大完成 Tokens"), { target: { value: "5000" } });
+    fireEvent.click(screen.getByRole("button", { name: /测试视觉连接/ }));
+    await waitFor(() => expect(mocks.testVisionConnection).toHaveBeenCalledTimes(1));
+    expect(mocks.testVisionConnection.mock.calls[0][0]).toEqual({
+      task: "recognize", vision: {
+        source: "follow_llm", max_image_edge: 1600,
+        recognize_thinking_mode: "disabled", recognize_reasoning_effort: "provider_default",
+        recognize_temperature: 0, recognize_max_tokens: 5000, recognize_timeout_seconds: 60,
+      },
+    });
+    expect(mocks.updateSettings).not.toHaveBeenCalled();
+    expect(await screen.findByText(/使用当前已保存的问答模型/)).toBeVisible();
+  });
+
+  it("自定义视觉测试携带独立密钥和描述参数，保存后清空密钥草稿", async () => {
+    mocks.getSettings.mockResolvedValue({ ...settings, vision: {
+      ...settings.vision, source: "custom", base_url: "https://vision.example.com/v1",
+    } });
+    render(<SettingsPage />);
+    fireEvent.change(await screen.findByLabelText("视觉 API Key"), { target: { value: "vision-draft-key" } });
+    fireEvent.click(screen.getByRole("radio", { name: "描述" }));
+    fireEvent.click(screen.getByRole("button", { name: /测试视觉连接/ }));
+    await waitFor(() => expect(mocks.testVisionConnection).toHaveBeenCalledTimes(1));
+    expect(mocks.testVisionConnection.mock.calls[0][0]).toMatchObject({
+      task: "describe", vision: {
+        source: "custom", base_url: "https://vision.example.com/v1",
+        describe_max_tokens: 800,
+        api_key_update: { action: "replace", value: "vision-draft-key" },
+      },
+    });
+    expect(screen.getByLabelText("API Key")).toHaveValue("");
+    fireEvent.click(screen.getByRole("button", { name: /保存并应用/ }));
+    await waitFor(() => expect(mocks.updateSettings).toHaveBeenCalledWith({
+      expected_revision: 3, vision: { api_key_update: { action: "replace", value: "vision-draft-key" } },
+    }));
+    await waitFor(() => expect(screen.getByLabelText("视觉 API Key")).toHaveValue(""));
+  }, 15000);
+
   it("字段关系非法时不发送保存请求", async () => {
     render(<SettingsPage />);
     const finalTopK = await screen.findByLabelText("最终 Top K");
@@ -356,5 +433,5 @@ describe("SettingsPage", () => {
     fireEvent.click(screen.getByRole("button", { name: /恢复部署默认/ }));
     fireEvent.click(await screen.findByRole("button", { name: "确认恢复" }));
     await waitFor(() => expect(mocks.resetSettings).toHaveBeenCalledWith(3, "all"));
-  });
+  }, 15000);
 });
