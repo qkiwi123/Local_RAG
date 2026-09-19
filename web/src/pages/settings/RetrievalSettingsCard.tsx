@@ -121,8 +121,8 @@ export function RetrievalSettingsCard({
             className="settings-inline-alert"
             type="info"
             showIcon
-            title="等待 Dataset v3 的 V3-5 校准"
-            description="Dense distance 不是 Hybrid/BM25 的通用拒答阈值；校准完成前不能启用。"
+            title="当前策略：不启用硬拒答门控"
+            description="由回答规则约束证据不足时的回复；无论是否拒答，均展示本轮有效检索来源，区分正文已引用与未引用。Dense distance 不是 Hybrid/BM25 的通用拒答阈值。"
           />
         </Form.Item>
       </Col>

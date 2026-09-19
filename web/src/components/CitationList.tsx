@@ -159,42 +159,58 @@ export function CitationList({ citations }: { citations: Citation[] }) {
     return null;
   }
 
+  const groups = [
+    { title: "正文已引用", items: citations.filter((item) => item.cited_in_answer !== false) },
+    { title: "正文未引用", items: citations.filter((item) => item.cited_in_answer === false) },
+  ];
+
   return (
-    <List
-      size="small"
-      header={<Text type="secondary">📎 参考来源</Text>}
-      dataSource={citations}
-      renderItem={(citation) => (
-        <List.Item
-          actions={
-            citation.preview_available
-              ? [
-                  <Button
-                    key="preview"
-                    size="small"
-                    onClick={() => setOpenCitation(citation)}
-                  >
-                    🔍 查看原文
-                  </Button>,
-                ]
-              : []
-          }
-        >
-          <div>
-            <Text strong>
-              【来源{citation.source_id}】《{citation.document_name}》
-              {citation.location_label || "位置未知"}
-            </Text>
-            <br />
-            {citation.excerpt ? (
-              <Text type="secondary" ellipsis style={{ maxWidth: 640 }}>
-                {citation.excerpt}
-              </Text>
-            ) : null}
-          </div>
-        </List.Item>
-      )}
-    >
+    <section aria-label="本轮检索来源">
+      <Text strong>📎 本轮检索来源</Text>
+      <div>
+        <Text type="secondary">按正文中的来源编号分组，可查看原文自行核对。</Text>
+      </div>
+      {groups.map(({ title, items }) => (
+        <section key={title} aria-label={title}>
+          <List
+            size="small"
+            rowKey="source_id"
+            header={<Text type="secondary">{title}（{items.length} 个片段）</Text>}
+            locale={{ emptyText: "无" }}
+            dataSource={items}
+            renderItem={(citation) => (
+              <List.Item
+                actions={
+                  citation.preview_available
+                    ? [
+                        <Button
+                          key="preview"
+                          size="small"
+                          onClick={() => setOpenCitation(citation)}
+                        >
+                          🔍 查看原文
+                        </Button>,
+                      ]
+                    : []
+                }
+              >
+                <div>
+                  <Text strong>
+                    【来源{citation.source_id}】《{citation.document_name}》
+                    {citation.location_label || "位置未知"}
+                  </Text>
+                  <br />
+                  {citation.excerpt ? (
+                    <Text type="secondary" ellipsis style={{ maxWidth: 640 }}>
+                      {citation.excerpt}
+                    </Text>
+                  ) : null}
+                </div>
+              </List.Item>
+            )}
+          />
+        </section>
+      ))}
       {openCitation &&
         openCitation.document_id &&
         openCitation.chunk_id && (
@@ -203,6 +219,6 @@ export function CitationList({ citations }: { citations: Citation[] }) {
             onClose={() => setOpenCitation(null)}
           />
         )}
-    </List>
+    </section>
   );
 }

@@ -50,7 +50,7 @@ class TestBuildMessages:
         messages = build_messages(question="测试", context="测试")
         system = messages[0]["content"]
         assert "企业知识库问答助手" in system
-        assert "根据提供的文档内容回答" in system
+        assert "只能根据本轮提供的文档内容回答" in system
         assert "编造文档中没有的信息" in system
         assert "【来源N】" in system
         assert "不要在方括号内自行填写文档名或页码" in system

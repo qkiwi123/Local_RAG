@@ -28,6 +28,23 @@ def _manager(tmp_path):
     )
 
 
+def test_answer_prompts_share_evidence_rules_and_round_local_sources():
+    single = llm.build_messages("问题", "本轮文档")[0]["content"]
+    followup = llm._build_history_messages(
+        "追问", "独立问题", "新文档", "历史答案【来源1】",
+    )[0]["content"]
+    assert followup.startswith(single)
+    for rule in (
+        "只回答并引用有依据的部分", "其余部分缺少什么资料",
+        "根据本轮检索到的文档，未找到足以回答该问题的信息",
+        "不能将本轮未检索到证据断言为整个知识库",
+        "不猜测结论", "来源展示不代表答案得到证据支持",
+    ):
+        assert rule in single
+    assert "历史答案中的来源编号不得直接沿用" in followup
+    assert "本轮编号只对应本轮提供的文档片段" in followup
+
+
 class _FakeCompletions:
     def __init__(self, *, error=None):
         self.error = error

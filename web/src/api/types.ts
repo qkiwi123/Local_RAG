@@ -9,6 +9,8 @@ export interface ConversationSummary {
 
 export interface Citation {
   source_id: number;
+  // 旧消息只保存正文引用，缺省沿用旧语义。
+  cited_in_answer?: boolean;
   chunk_id?: string | null;
   document_name: string;
   unit_id?: string | null;

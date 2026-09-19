@@ -1,4 +1,4 @@
-import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import "@testing-library/jest-dom/vitest";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Citation, CitationPreviewPayload } from "../api/types";
@@ -154,6 +154,42 @@ beforeEach(() => {
 afterEach(() => {
   cleanup();
   vi.unstubAllGlobals();
+});
+
+describe("CitationList 来源分组", () => {
+  it("同一文档的已引用与未引用片段分别展示，原编号与预览目标保持一致", async () => {
+    mocks.getCitationPreview.mockResolvedValue(preview);
+    render(<CitationList citations={[
+      { ...citation, source_id: 2, chunk_id: "other-chunk", cited_in_answer: true },
+      { ...citation, source_id: 4, cited_in_answer: false },
+    ]} />);
+    expect(screen.getByRole("region", { name: "本轮检索来源" })).toBeVisible();
+    const cited = within(screen.getByRole("region", { name: "正文已引用" }));
+    const uncited = within(screen.getByRole("region", { name: "正文未引用" }));
+    expect(cited.getByText(/【来源2】《实验2.pdf》/)).toBeVisible();
+    expect(cited.queryByText(/【来源4】/)).toBeNull();
+    expect(uncited.getByText(/【来源4】《实验2.pdf》/)).toBeVisible();
+    fireEvent.click(uncited.getByRole("button", { name: /查看原文/ }));
+    await screen.findByLabelText("引用原文内容");
+    expect(mocks.getCitationPreview).toHaveBeenCalledWith("doc-1", citation.chunk_id);
+    const mark = screen.getByLabelText("引用原文内容").querySelector("mark");
+    expect(mark).toHaveTextContent("目标片段");
+    act(() => mocks.finishOpening());
+    await waitFor(() => expect(mocks.scrollTo).toHaveBeenCalled());
+  });
+
+  it("拒答或正文无编号时仍展示所有未引用来源", () => {
+    render(<CitationList citations={[{ ...citation, cited_in_answer: false }]} />);
+    expect(within(screen.getByRole("region", { name: "正文已引用" })).getByText("无")).toBeVisible();
+    expect(within(screen.getByRole("region", { name: "正文未引用" })).getByText(/【来源1】/)).toBeVisible();
+  });
+
+  it("旧消息缺省归入已引用，空检索不凭空补来源", () => {
+    const { rerender } = render(<CitationList citations={[citation]} />);
+    expect(within(screen.getByRole("region", { name: "正文已引用" })).getByText(/【来源1】/)).toBeVisible();
+    rerender(<CitationList citations={[]} />);
+    expect(screen.queryByRole("region", { name: "本轮检索来源" })).toBeNull();
+  });
 });
 
 describe("CitationList 引用定位", () => {

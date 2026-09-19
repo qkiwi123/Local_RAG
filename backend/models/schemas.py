@@ -94,8 +94,12 @@ class ChatRequest(BaseModel):
 
 
 class Citation(BaseModel):
-    """单条引用来源。"""
+    """单条检索来源，保留正文是否引用该片段。"""
     source_id: int = Field(..., ge=1, description="回答中的来源编号，如【来源1】中的 1")
+    cited_in_answer: bool = Field(
+        default=True,
+        description="正文是否出现该来源编号；旧消息只保存正文引用，缺省视为已引用",
+    )
     chunk_id: Optional[str] = Field(default=None, description="引用对应的向量库文本块 ID")
     document_name: str = Field(..., description="引用的文档文件名")
     unit_id: Optional[str] = Field(default=None, description="结构化来源单元 ID")
@@ -354,7 +358,10 @@ class RetrievalResponse(BaseModel):
 class ChatResponse(BaseModel):
     """POST /api/chat 的返回体。"""
     answer: str = Field(..., description="LLM 生成的回答文本")
-    citations: list[Citation] = Field(default_factory=list, description="引用来源列表")
+    citations: list[Citation] = Field(
+        default_factory=list,
+        description="全部有效最终检索来源，cited_in_answer 区分正文已引用与未引用",
+    )
     trace: Optional[RetrievalTrace] = Field(
         default=None,
         description="服务端允许时返回的检索调试链路",

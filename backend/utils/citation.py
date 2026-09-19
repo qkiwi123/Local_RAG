@@ -3,11 +3,13 @@
 
 LLM 只能使用 【来源N】。N 是本次检索结果的 1-based 序号，文档名、
 页码和 excerpt 全部由后端从检索结果生成，避免模型自由拼写造成伪引用。
-没有引用标记时返回空列表，不再把检索 Top-K 伪装成回答引用。
+extract_citations 只提取正文引用；build_retrieval_sources 返回全部有效 Top-K，
+用 cited_in_answer 区分正文已引用与未引用，二者共用来源元数据校验。
 """
 
 import json
 import re
+from collections.abc import Iterable
 from typing import List
 
 from backend.models.schemas import Citation
@@ -57,15 +59,40 @@ def extract_citations(
     Returns:
         Citation 列表（去重）
     """
+    source_ids = list(dict.fromkeys(
+        int(match.group(1)) for match in _SOURCE_PATTERN.finditer(answer or "")
+    ))
+    return _build_sources(
+        retrieval_results, source_ids, set(source_ids), preview_enabled
+    )
+
+
+def build_retrieval_sources(
+    answer: str,
+    retrieval_results: List[dict],
+    *,
+    preview_enabled: bool = False,
+) -> List[Citation]:
+    """保留最终检索顺序及编号；只有正文标记决定是否已引用，不读取思考或历史。"""
+    cited_source_ids = {
+        int(match.group(1)) for match in _SOURCE_PATTERN.finditer(answer or "")
+    }
+    return _build_sources(
+        retrieval_results,
+        range(1, len(retrieval_results) + 1),
+        cited_source_ids,
+        preview_enabled,
+    )
+
+
+def _build_sources(
+    retrieval_results: List[dict],
+    source_ids: Iterable[int],
+    cited_source_ids: set[int],
+    preview_enabled: bool,
+) -> List[Citation]:
     citations = []
-    seen_source_ids = set()
-
-    for match in _SOURCE_PATTERN.finditer(answer or ""):
-        source_id = int(match.group(1))
-        if source_id in seen_source_ids:
-            continue
-        seen_source_ids.add(source_id)
-
+    for source_id in source_ids:
         result_index = source_id - 1
         if result_index < 0 or result_index >= len(retrieval_results):
             # LLM 生成了不存在的编号：不返回伪造 Citation。
@@ -122,6 +149,7 @@ def extract_citations(
 
         citations.append(Citation(
             source_id=source_id,
+            cited_in_answer=source_id in cited_source_ids,
             chunk_id=chunk_id,
             document_name=doc_name,
             unit_id=unit_id,

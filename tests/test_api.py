@@ -228,6 +228,7 @@ class TestChatAPI:
         assert data["citations"] == [
             {
                 "source_id": 1,
+                "cited_in_answer": True,
                 "chunk_id": "unit-1_s0_e49",
                 "document_name": "handbook.pdf",
                 "unit_id": "unit-1",

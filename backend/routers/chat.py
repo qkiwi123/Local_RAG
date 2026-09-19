@@ -2,7 +2,7 @@
 问答接口 — POST /api/chat
 
 接收用户问题，走完完整问答链路：
-问题向量化 → 语义检索 → Prompt 拼接 → LLM 生成 → 引用提取
+问题向量化 → 语义检索 → Prompt 拼接 → LLM 生成 → 检索来源及正文引用状态
 
 路由层保持轻薄：只做参数校验和调用 services。
 """
@@ -48,7 +48,7 @@ from backend.services.tag_store import (
     normalize_tag_path,
     resolve_document_ids,
 )
-from backend.utils.citation import extract_citations
+from backend.utils.citation import build_retrieval_sources
 
 router = APIRouter(tags=["chat"])
 logger = logging.getLogger(__name__)
@@ -123,7 +123,7 @@ async def chat(request: ChatRequest, http_request: Request):
     1. retriever.retrieve(question) → 语义检索 Top K 文本块
     2. retriever.format_retrieval_context(results) → 拼接上下文
     3. llm.ask(question, context) → DeepSeek 生成答案
-    4. citation.extract_citations(answer, results) → 提取引用
+    4. citation.build_retrieval_sources(answer, results) → 本轮来源及正文引用状态
     5. 返回 ChatResponse（answer + citations）
     """
     request_started = perf_counter()
@@ -338,10 +338,10 @@ async def chat(request: ChatRequest, http_request: Request):
             ) from error
         llm_ms = (perf_counter() - llm_started) * 1000
 
-    # 4. 提取引用来源
+    # 4. 保留全部有效最终检索来源，并区分正文已引用/未引用。
     citation_started = perf_counter()
     citations = await asyncio.to_thread(
-        extract_citations,
+        build_retrieval_sources,
         answer,
         retrieval_results,
         preview_enabled=settings.CITATION_PREVIEW_ENABLED,
@@ -609,7 +609,7 @@ async def _stream_chat_events(
             raise EmptyLLMResponseError(reasoning_only=bool(reasoning_collected))
         citation_started = perf_counter()
         citations = await asyncio.to_thread(
-            extract_citations,
+            build_retrieval_sources,
             answer,
             retrieval_results,
             preview_enabled=settings.CITATION_PREVIEW_ENABLED,

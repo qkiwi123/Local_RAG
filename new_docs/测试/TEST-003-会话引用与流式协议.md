@@ -6,7 +6,7 @@
 - 文档类型：测试
 - 状态：测试中
 - 创建日期：2026-08-27
-- 最后更新：2026-09-12
+- 最后更新：2026-09-19
 - 证据口径：2026-09-09实施BUG-004及OPT-006方向一后完成全量回归；2026-09-10查询改写方案A完成短样本验证；2026-09-12通用生成设置升级后，后端全量833项通过/3项跳过、前端42项、lint和构建通过。未做人工浏览器、生产代理、跨端点真实矩阵或长期流量验收。
 - 导航：[本类目录](./README.md) · [文档中心](../README.md)
 
@@ -23,13 +23,34 @@
 | C02 | 相同request_id、旧末尾 | 重放或409，不重复生成 | [会话测试](../../tests/test_conversation_store.py) | 2026-09-09全量通过 |
 | C03 | 分块跨JSON行 | 事件顺序及拼接正确 | [后端](../../tests/test_chat_stream.py)、[前端](../../web/src/__tests__/stream.test.ts) | 2026-09-09后端/前端通过；前端在流未完成时已派发首块 |
 | C04 | 检索/生成失败、断开 | error/interrupted，无半截完成答案 | [stream测试](../../tests/test_chat_stream.py) | 2026-09-09通过；上游异步流主动关闭已覆盖 |
-| C05 | 无标记/越界编号 | 不兜底造引用 | [citation测试](../../tests/test_citation.py) | 2026-09-09全量通过 |
+| C05 | 无标记/越界编号 | 不伪造正文引用；当前返回全部有效检索来源及正文引用状态 | [citation测试](../../tests/test_citation.py) | 2026-09-19定向回归通过 |
 | C06 | 跨格式、跨unit、失效chunk | 正确定位或明确错误 | [结构预览](../../tests/test_structured_citation_preview.py) | 2026-09-09全量通过 |
 | C07 | 带人工延迟的异步mock + 真实HTTP逐行读取 | meta、delta、citations、done按逻辑顺序且逐步到达；到达时间与服务端里程碑分开记录 | [BUG-004回归结果](../测试/BUG-004-流式响应缓冲至完成时一次性输出.md#regression)、[OPT-006验收](../优化/OPT-006-Trace计量拆分与首字延迟优化.md#acceptance) | 2026-09-09通过：3个80ms间隔delta首尾窗口≥100ms；检索等待时健康检查<500ms |
 | C08 | `chat-v2`流式Trace与持久化重放 | 真实上下文/生成耗时、首字/delta窗口、提交耗时按边界记录，加载和重放不改首次Trace | [stream测试](../../tests/test_chat_stream.py)、[设置Trace](./TEST-005-设置与Trace回归.md#cases) | 2026-09-09通过：普通/无检索/LLM关闭/持久化与重放均覆盖 |
 | C09 | 运行时关闭查询改写后发送持久化追问 | 不调用改写模型、原问题直接检索，Trace状态为`disabled`；回答流协议不变 | [API](../../tests/test_api.py)、[设置Trace](./TEST-005-设置与Trace回归.md#cases) | 2026-09-12通过 |
 
 ## 3. 复跑
+
+<a id="current-policy"></a>
+### 2026-09-19来源、拒答与多轮收尾
+
+- 后端定向127项通过：引用构造、同步/流式聊天、会话存储与重放、LLM运行时及设置接口。使用隔离数据和fake模型，未调用外部模型。
+- 新增多轮四场景：同步/流式分别验证改写成功及失败回退；第二轮重新检索新增文档，来源1指向新文档而非上一轮，旧消息保存的来源不变。幂等重放另有回归，不重复检索。
+- 拒答、无标记及仅引用部分来源均保留有效最终TopK；思考标记不计正文引用；旧消息缺字段兼容。提示词测试确认普通/带历史入口共享部分回答、资料缺口和本轮编号约束，不把提示词断言等同于真实模型服从。
+- 前端全量12文件65项通过，包含来源分组、未引用卡片原文高亮/定位及思考折叠；lint、TypeScript和Vite生产构建通过。保留既有jsdom伪元素提示及大chunk警告。
+- 文档静态检查及11项检查器自检通过，覆盖51份核心文档的ID、链接、导航和关系；git diff --check通过。静态检查不代替业务效果验证。
+- 本次未重跑后端全库、真实模型拒答准确率、多轮语义质量或浏览器人工验收。09-18的738/3及62项是不同日期的历史结果，不替换为本次计数。首次新增流式测试替身遗漏include_reasoning参数造成2项失败；修正替身签名后127项全通过，非产品故障。
+
+本轮可复跑命令（仓库根；前端命令在web目录）：
+
+```powershell
+.\.venv-gpu\Scripts\python.exe -m pytest tests/test_citation.py tests/test_chat_stream.py tests/test_api.py tests/test_conversation_store.py tests/test_llm_runtime.py tests/test_settings_router.py -q -p no:cacheprovider
+npm --prefix web test
+npm --prefix web run lint
+npm --prefix web run build
+```
+
+以下命令与说明保留为既往协议/结构专项入口：
 
 ```powershell
 .\.venv\Scripts\python.exe -m pytest -p no:cacheprovider --basetemp .pytest-tmp\docs-chat-check tests/test_conversation_store.py tests/test_chat_stream.py tests/test_citation.py tests/test_structured_citation_preview.py -q
@@ -61,6 +82,7 @@ S6历史定向83项包含chat/API/会话路径，来源[S6证据](../测试/TEST
 
 | 日期 | 内容 | 原因 |
 |---|---|---|
+| 2026-09-19 | 记录127项后端定向、65项前端全量及新多轮/提示词回归 | 以可复跑证据收尾本期策略，不外推真实模型效果 |
 | 2026-09-12 | 增加C09并同步用途级通用生成设置、改写关闭、833/42全量结果及跨端点未验证边界 | 确认设置扩展不改变流式正文、持久化和失败回退协议 |
 | 2026-09-10 | 查询改写方案A的LLM专项通过，并完成一条不含项目数据的真实DeepSeek兼容验证 | 确认关闭思考扩展只作用于DeepSeek改写，最终回答与协议不受影响 |
 | 2026-09-09 | 新增C08，验证流式`chat-v2`阶段、服务端里程碑、持久化加载/重放及无检索/LLM关闭语义；更新827项结果 | 验收OPT-006方向一且不把mock墙钟值外推为生产指标 |

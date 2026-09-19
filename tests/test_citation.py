@@ -9,7 +9,13 @@
 - Markdown 格式化
 """
 
-from backend.utils.citation import extract_citations, format_answer_with_citations
+import pytest
+
+from backend.utils.citation import (
+    build_retrieval_sources,
+    extract_citations,
+    format_answer_with_citations,
+)
 from backend.services.parsers.constants import PARSER_VERSION
 
 
@@ -57,6 +63,48 @@ def _result(
         "metadata": meta,
         "distance": 0.2,
     }
+
+
+class TestRetrievalSources:
+    def test_keeps_all_chunks_in_retrieval_order_with_answer_flags(self):
+        rows = [
+            _result("手册.pdf", 1, "第一个片段", "c1"),
+            _result("手册.pdf", 2, "第二个片段", "c2"),
+            _result("其他.pdf", 1, "第三个片段", "c3", document_id="doc-2"),
+        ]
+        sources = build_retrieval_sources(
+            "【来源3】【来源 1】【来源3】【来源99】【来源0】", rows,
+            preview_enabled=True,
+        )
+        assert [item.source_id for item in sources] == [1, 2, 3]
+        assert [item.cited_in_answer for item in sources] == [True, False, True]
+        assert [item.chunk_id for item in sources] == ["c1", "c2", "c3"]
+        assert all(item.preview_available for item in sources)
+        assert sources[1].start_char == 0
+        assert sources[1].end_char == len("第二个片段")
+
+    @pytest.mark.parametrize("answer", ["", "根据现有文档，未找到相关信息。", "【来源99】"])
+    def test_no_valid_body_marker_keeps_sources_as_uncited(self, answer):
+        sources = build_retrieval_sources(answer, [_result("手册", 1, "内容", "c1")])
+        assert len(sources) == 1 and sources[0].cited_in_answer is False
+        assert build_retrieval_sources(answer, []) == []
+
+    def test_invalid_metadata_is_skipped_without_renumbering(self):
+        rows = [
+            {"content": "坏条目", "metadata": {}},
+            _result("旧版本", 1, "内容", "c2", parser_version="structured-v1"),
+            _result("手册", 2, "有效内容", "c3"),
+        ]
+        sources = build_retrieval_sources("【来源3】", rows)
+        assert len(sources) == 1
+        assert sources[0].source_id == 3 and sources[0].cited_in_answer is True
+
+    def test_old_saved_citation_defaults_to_cited(self):
+        from backend.models.schemas import Citation
+
+        saved = extract_citations("【来源1】", [_result("手册", 1, "内容", "c1")])[0].model_dump()
+        saved.pop("cited_in_answer")
+        assert Citation.model_validate(saved).cited_in_answer is True
 
 
 class TestExtractCitations:

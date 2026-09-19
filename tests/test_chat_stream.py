@@ -162,7 +162,9 @@ def test_reasoning_stream_persists_reloads_and_replays_separately(client, monkey
     payload = {"question": "年假几天？", "conversation_id": cid, "request_id": "reasoning-test"}
     events = _events(client.post("/api/chat/stream", json=payload))
     assert [e["event"] for e in events] == ["meta", "reasoning_delta", "reasoning_delta", "delta", "citations", "done"]
-    assert events[-2]["citations"] == []  # 思考中的来源标记不得进入答案引用。
+    sources = events[-2]["citations"]
+    assert len(sources) == 1
+    assert sources[0]["cited_in_answer"] is False  # 思考中的标记不算正文引用。
     saved = client.get(f"/api/conversations/{cid}").json()["messages"][-1]
     assert saved["content"] == "年假5天。"
     assert saved["reasoning_content"] == "先检查文档【来源1】。再整理答案。"
@@ -170,6 +172,108 @@ def test_reasoning_stream_persists_reloads_and_replays_separately(client, monkey
     replay = _events(client.post("/api/chat/stream", json=payload))
     assert replay[1] == {"event": "reasoning_delta", "text": saved["reasoning_content"]}
     assert replay[2] == {"event": "delta", "text": "年假5天。"}
+    assert saved["citations"] == sources == replay[-2]["citations"]
+
+
+@pytest.mark.parametrize("endpoint", ["/api/chat", "/api/chat/stream"])
+@pytest.mark.parametrize("answer, cited", [
+    ("根据现有文档，未找到相关信息。", [False, False]),
+    ("见【来源2】，不存在的编号【来源99】。", [False, True]),
+])
+def test_all_retrieval_sources_survive_answer_save_and_replay(
+    client, monkeypatch, endpoint, answer, cited,
+):
+    from backend.routers import chat as chat_router
+
+    row = _retrieval_row()
+    other = {**row, "chunk_id": "unit-2_s0_e49", "metadata": {
+        **row["metadata"], "unit_id": "unit-2", "unit_index": 1,
+        "location_label": "第 2 页", "page_number": 2,
+    }}
+    _mock_retrieval(monkeypatch, rows=[row, other])
+    _mock_stream(monkeypatch, [answer])
+    monkeypatch.setattr(chat_router, "ask_with_history", lambda *args: answer)
+    cid = client.post("/api/conversations", json={}).json()["conversation_id"]
+    payload = {"question": "年假？", "conversation_id": cid, "request_id": "all-sources"}
+    response = client.post(endpoint, json=payload)
+    assert response.status_code == 200
+    sources = (
+        _events(response)[-2]["citations"]
+        if endpoint.endswith("/stream") else response.json()["citations"]
+    )
+    assert [item["source_id"] for item in sources] == [1, 2]
+    assert [item["cited_in_answer"] for item in sources] == cited
+    assert [item["chunk_id"] for item in sources] == [row["chunk_id"], other["chunk_id"]]
+    saved = client.get(f"/api/conversations/{cid}").json()["messages"][-1]
+    assert saved["content"] == answer
+    assert saved["citations"] == sources
+
+    # 幂等重放不重新检索，也不丢失未引用条目或误改来源状态。
+    _mock_retrieval(monkeypatch, raise_error=AssertionError("不应再次检索"))
+    assert client.post("/api/chat", json=payload).json()["citations"] == sources
+    assert _events(client.post("/api/chat/stream", json=payload))[-2]["citations"] == sources
+
+
+@pytest.mark.parametrize("endpoint", ["/api/chat", "/api/chat/stream"])
+@pytest.mark.parametrize("rewrite_fails", [False, True])
+def test_followup_always_retrieves_fresh_sources(client, monkeypatch, endpoint, rewrite_fails):
+    from backend.models.schemas import RetrievalResponse
+    from backend.routers import chat as chat_router
+
+    old = _retrieval_row()
+    new = {**old, "chunk_id": "new-unit_s0_e49", "content": "本轮新增制度证据", "metadata": {
+        **old["metadata"], "document_id": "doc-new", "document_name": "new.pdf",
+        "unit_id": "new-unit",
+    }}
+    questions, rewrites, generations = [], [], []
+
+    def retrieve(question, **kwargs):
+        questions.append(question)
+        return RetrievalResponse(results=[old] if len(questions) == 1 else [new], trace=None)
+
+    def rewrite(question, history, runtime=None):
+        rewrites.append((question, history))
+        if rewrite_fails:
+            raise RuntimeError("受控改写失败")
+        return "新增制度的年假安排"
+
+    def answer(question, standalone, context, history, runtime=None):
+        generations.append((context, history))
+        return "本轮结论【来源1】"
+
+    async def stream(*args, include_reasoning=False):
+        assert include_reasoning is True
+        yield answer(*args)
+
+    monkeypatch.setattr(chat_router, "retrieve_with_trace", retrieve)
+    monkeypatch.setattr(chat_router, "rewrite_followup", rewrite)
+    monkeypatch.setattr(chat_router, "ask_with_history", answer)
+    monkeypatch.setattr(chat_router, "ask_with_history_stream_async", stream)
+    cid = client.post("/api/conversations", json={}).json()["conversation_id"]
+
+    def send(question, request_id, last=None):
+        response = client.post(endpoint, json={
+            "question": question, "conversation_id": cid, "request_id": request_id,
+            "expected_last_message_id": last,
+        })
+        assert response.status_code == 200, response.text
+        if endpoint.endswith("/stream"):
+            events = _events(response)
+            assert events[-1]["event"] == "done", events
+            return {**events[-1], "citations": events[-2]["citations"]}
+        return response.json()
+
+    first = send("年假？", "fresh-1")
+    second = send("新的制度呢？", "fresh-2", first["assistant_message_id"])
+    assert questions == ["年假？", "新的制度呢？" if rewrite_fails else "新增制度的年假安排"]
+    assert len(rewrites) == 1 and "本轮结论【来源1】" in rewrites[0][1]
+    assert "本轮新增制度证据" in generations[1][0]
+    assert old["content"] not in generations[1][0]
+    assert first["citations"][0]["document_id"] == "doc-1"
+    assert [(s["source_id"], s["document_id"], s["cited_in_answer"]) for s in second["citations"]] == [(1, "doc-new", True)]
+    saved = client.get(f"/api/conversations/{cid}").json()["messages"]
+    assert saved[1]["citations"] == first["citations"]
+    assert saved[3]["citations"] == second["citations"]
 
 
 def test_reasoning_only_stream_stays_failed_and_keeps_no_partial_message(client, monkeypatch):
