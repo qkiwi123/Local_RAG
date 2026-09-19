@@ -7,6 +7,9 @@ httpx==0.28.1
 chromadb==1.5.9
 jieba==0.42.1
 rank-bm25==0.2.2
+bm25s==0.3.11
+# CI 预先从 PyTorch 官方 CPU 索引安装；不下载 CUDA 运行库或模型权重。
+torch==2.13.0
 PyPDF2==3.0.1
 python-docx==1.1.2
 markdown-it-py==4.0.0

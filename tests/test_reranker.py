@@ -1,7 +1,8 @@
 """P1-5 Reranker 精排链路测试。"""
 
 import os
-from types import SimpleNamespace
+import sys
+from types import ModuleType, SimpleNamespace
 
 import pytest
 
@@ -183,8 +184,6 @@ def test_selected_reranker_defaults_keep_safe_switch_and_use_k15(monkeypatch):
 
 
 def test_reranker_model_receives_device_and_precision_config(monkeypatch):
-    import FlagEmbedding
-
     captured = {}
 
     class _ConfiguredReranker:
@@ -192,7 +191,10 @@ def test_reranker_model_receives_device_and_precision_config(monkeypatch):
             captured["model_path"] = model_path
             captured.update(kwargs)
 
-    monkeypatch.setattr(FlagEmbedding, "FlagReranker", _ConfiguredReranker)
+    # 这里只验证配置传递，不导入完整模型库或读取真实权重。
+    fake_flag_embedding = ModuleType("FlagEmbedding")
+    fake_flag_embedding.FlagReranker = _ConfiguredReranker
+    monkeypatch.setitem(sys.modules, "FlagEmbedding", fake_flag_embedding)
     monkeypatch.setattr(
         "backend.services.model_cache.resolve_cached_snapshot",
         lambda model_name: f"cached/{model_name}",

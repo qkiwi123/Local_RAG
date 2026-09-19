@@ -8,6 +8,7 @@ import hashlib
 import json
 from pathlib import Path
 import sys
+from tempfile import TemporaryDirectory
 
 import pytest
 
@@ -256,14 +257,17 @@ def test_publisher_rejects_parent_directory_before_any_write():
     assert not (revision.PARENT_ROOT / "must-not-exist.json").exists()
 
 
-def test_publisher_preflights_all_outputs_and_refuses_overwrite(tmp_path):
-    assert tmp_path.resolve().is_relative_to(ROOT)
-    existing = tmp_path / "already.json"
-    existing.write_bytes(b"original")
-    with pytest.raises(FileExistsError, match="Refusing to overwrite"):
-        revision.publish({"new.json": b"new", "already.json": b"changed"}, tmp_path, check=False)
-    assert existing.read_bytes() == b"original"
-    assert not (tmp_path / "new.json").exists()
+def test_publisher_preflights_all_outputs_and_refuses_overwrite():
+    # 发布器只允许写入v3_1内部；不依赖调用方额外指定pytest --basetemp。
+    with TemporaryDirectory(prefix=".pytest-publisher-", dir=ROOT) as directory:
+        output = Path(directory).resolve()
+        assert output.is_relative_to(ROOT)
+        existing = output / "already.json"
+        existing.write_bytes(b"original")
+        with pytest.raises(FileExistsError, match="Refusing to overwrite"):
+            revision.publish({"new.json": b"new", "already.json": b"changed"}, output, check=False)
+        assert existing.read_bytes() == b"original"
+        assert not (output / "new.json").exists()
 
 
 def test_new_runner_pins_new_dataset_and_does_not_allow_overwrite(capsys):
