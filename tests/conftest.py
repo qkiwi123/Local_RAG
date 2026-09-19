@@ -104,6 +104,20 @@ def isolated_data_dir():
     return _TEST_ROOT
 
 
+@pytest.fixture
+def offline_token_counter(monkeypatch):
+    """API/存储合同测试用确定性计数，不加载BGE；真实模型测试不引用此fixture。"""
+    from backend.routers import upload
+    from backend.services import conversation_context, retrieval_trace
+
+    def count(text):
+        return len(text) + 2
+
+    for module in (upload, conversation_context, retrieval_trace):
+        monkeypatch.setattr(module, "count_tokens", count)
+    return count
+
+
 @pytest.fixture(scope="session")
 def sample_pdf_path(fixtures_dir):
     """示例 PDF 文件路径。"""

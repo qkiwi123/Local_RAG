@@ -15,7 +15,7 @@ from fastapi.testclient import TestClient
 
 
 @pytest.fixture
-def client(isolated_data_dir):
+def client(isolated_data_dir, offline_token_counter):
     from backend.config import settings
     from backend.main import app
 

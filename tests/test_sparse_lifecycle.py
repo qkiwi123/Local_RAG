@@ -384,7 +384,7 @@ class TestUploadLifecycleIntegration:
     """真实Chroma + 伪造embedding的上传/删除/失败清理集成。"""
 
     @pytest.fixture()
-    def api(self, monkeypatch, tmp_path):
+    def api(self, monkeypatch, tmp_path, offline_token_counter):
         from backend.config import settings
         from backend.main import app
         from backend.services import vector_store

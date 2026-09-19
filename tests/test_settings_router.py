@@ -570,6 +570,7 @@ def _retrieval_with_trace():
 def test_retrieval_only_sync_stream_and_followup_make_zero_llm_calls(
     tmp_path,
     monkeypatch,
+    offline_token_counter,
 ):
     from backend.routers import chat as chat_router
 
@@ -675,6 +676,7 @@ def test_retrieval_only_sync_stream_and_followup_make_zero_llm_calls(
 def test_chat_endpoints_use_the_effective_retrieval_snapshot(
     tmp_path,
     monkeypatch,
+    offline_token_counter,
 ):
     from backend.routers import chat as chat_router
 
@@ -745,6 +747,7 @@ def test_chat_endpoints_use_the_effective_retrieval_snapshot(
 def test_chat_trace_distinguishes_settings_before_and_after_update(
     tmp_path,
     monkeypatch,
+    offline_token_counter,
 ):
     from backend.routers import chat as chat_router
 

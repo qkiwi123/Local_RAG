@@ -11,7 +11,7 @@ from fastapi.testclient import TestClient
 
 
 @pytest.fixture
-def client(monkeypatch, isolated_data_dir):
+def client(monkeypatch, isolated_data_dir, offline_token_counter):
     from backend.config import settings
     from backend.models.schemas import RetrievalResponse
     from backend.routers import chat as chat_router

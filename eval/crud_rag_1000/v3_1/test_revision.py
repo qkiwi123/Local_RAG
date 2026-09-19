@@ -233,7 +233,21 @@ def test_outputs_match_provenance():
     assert provenance["retrieval_rerun"] is False
 
 
-def test_deterministic_generation_without_writes():
+@pytest.mark.parametrize("reverse_snapshot_order", [False, True])
+def test_deterministic_generation_without_writes(monkeypatch, reverse_snapshot_order):
+    # 冻结生成器以Path排序：Windows忽略大小写，Linux不忽略。
+    # 验证完整路径/hash/长度后按冻结清单顺序输入；不修改生成器或原始产物。
+    saved_files = load("source_preservation.json")["files"]
+    original_snapshot = revision.protected_snapshot
+
+    def snapshot_in_frozen_order():
+        current = original_snapshot()
+        if reverse_snapshot_order:
+            current = dict(reversed(list(current.items())))
+        assert current == saved_files
+        return {path: current[path] for path in saved_files}
+
+    monkeypatch.setattr(revision, "protected_snapshot", snapshot_in_frozen_order)
     artifacts, summary = revision.build_artifacts()
     assert summary["changed_questions"] == 10
     revision.publish(artifacts, ROOT, check=True)
