@@ -1,4 +1,4 @@
-# 中文企业知识库 RAG
+# 中文个人本地知识库 RAG
 
 一个以“可评估、可追溯、可复现”为核心的中文 RAG 项目。系统通过统一文档结构处理
 PDF、DOCX、TXT、Markdown 和 PPTX，完成解析、切分、向量检索、Cross-encoder
