@@ -1,568 +1,306 @@
-# 中文企业知识库 RAG
+# 中文个人本地知识库 RAG
 
-一个以“可评估、可追溯、可复现”为核心的中文 RAG 项目。系统通过统一文档结构处理
-PDF、DOCX、TXT、Markdown 和 PPTX，完成解析、切分、向量检索、Cross-encoder
-重排和 DeepSeek 问答，并使用稳定的 `【来源N】` 协议返回可定位到原文结构的引用。
+面向中文文档的知识库检索与问答系统。项目将多格式文档解析为统一结构，结合向量检索、关键词检索与可选重排序生成回答，并提供可定位的来源引用、结构化原文预览和检索过程追踪。
 
-## 当前状态
+当前以 **Windows 可信本地环境中的源码运行**为主要使用方式：React 提供会话、知识库和设置三个工作区，FastAPI 提供 API 并托管前端构建产物。本地完成文档存储、Embedding 与重排序；启用问答生成或视觉识别时调用配置的模型 API。
 
-截至 2026-09-19，以下链路已经贯通：
+[功能与边界](#功能与边界) · [数据链路与存储](#数据链路与存储) · [项目结构](#项目结构) · [快速上手](#快速上手) · [测试与评测](#测试与评测) · [文档导航](#文档导航)
 
-- 验收轮新增：知识库按文档名称模糊搜索（与标签筛选组合）；
-- OCR 文本做确定性结构分类（独立标题/列表块 + 混合段落首行标题渲染），
-  全文预览与引用预览不再把 OCR 内容全部压成普通段落；
-- OCR 原图对照预览：OCR 块旁展示被识别的原始图片（可放大），
-  配置 `OCR_IMAGE_PREVIEW_ENABLED` 与 `OCR_IMAGE_DIR`；
-- eval 指标去除 structured-v1 硬编码，structured-v2 的 MD/PPTX 引用可正确统计；
-- 生产 SQLite 与 Chroma 均已 100% 为 structured-v2。
+## 功能与边界
 
-- 五种文档格式统一输出 `ParsedBlock`、`ParsedUnit` 和 `SourceLocator`；
-- 公共 Assembler 负责稳定 ID、连续 sequence、canonical text 和字符 offset；
-- 生产上传和索引重建均使用 `structured-v2`；可选 OCR/图片理解产出进入 canonical text，
-  并以 `attributes.ocr` 标记来源；
-- Chroma 保存检索所需的轻量定位 metadata，SQLite schema v5 保存文档、结构化 unit、
-  标签、会话、模型思考内容和受容量限制的持久化 Trace；
-- Dense 检索使用 `BAAI/bge-large-zh-v1.5`，可选
-  `BAAI/bge-reranker-v2-m3` 进行 Cross-encoder 重排；
-- 引用预览按 unit 原序恢复整份文档结构并高亮命中区间；
-- 支持持久化多轮对话、NDJSON 流式回答、停止/失败重试、追问改写、有界历史、
-  幂等重放和 409 并发冲突重同步；
-- 标签支持父子路径、父级含子孙和多标签并集，可同时用于问答检索范围与文档管理；
-- React SPA 已成为 8000 端口的主前端，覆盖会话、检索范围、引用/OCR 预览、Trace、
-  文档上传、标签管理和文档维护，并通过桌面、缩放等效视口与移动端验收；
-- 视觉模型可跟随问答模型或独立配置，并分别控制文字识别、图片描述的思考模式、
-  思考强度、Temperature、输出长度和超时；设置页支持真实图片连接测试；
-- OCR/视觉失败会区分限流、超时、空输出和截断，记录服务商请求 ID/错误码；单进程视觉
-  请求串行执行并沿用有限重试，便于核对免费额度或账号级并发限制；
-- 文档预览将同一原图及其 OCR 文本视为一个布局组，组结束后正文恢复整行，避免文字
-  受不定高度浮动图片影响；
-- 来源引用会在预览抽屉完成动画和图片布局后重新定位命中标记；模型思考按独立流展示，
-  正文开始时自动折叠，历史消息可再次展开；
-- “本轮检索来源”展示全部有效最终 Top K，按“正文已引用/正文未引用”分组；
-  拒答或没有正文来源编号时仍可查看检索原文，chunk 高亮与自动定位保持原有逻辑；
-- `scripts/start.ps1` 默认重建并启动 React SPA，打开带缓存戳的 8000 地址；旧 Streamlit
-  仅在显式指定兼容参数时启动；
-- 检索 Trace 可持久化并展示 Dense、BM25、RRF、Reranker、最终上下文、阶段耗时、
-  settings revision、本次实际检索参数和不含密钥的 LLM 调用摘要。
+| 能力 | 当前实现 |
+|---|---|
+| 文档入库 | 支持 PDF、DOCX、TXT、Markdown、PPTX，统一保留结构单元、来源位置、稳定 ID 和字符偏移；提供上传队列、失败重试、文档搜索与删除 |
+| 检索问答 | 支持 Dense、BM25、Hybrid 三种模式；Hybrid 使用 RRF 融合双路候选，可用 BGE Reranker 重排，并控制最终 Top K 与单文档片段数量 |
+| 来源追溯 | 通过本轮稳定的 `【来源N】` 编号映射真实检索结果，支持结构化全文预览、命中高亮、自动定位与 OCR 原图对照 |
+| 视觉识别 | 可选扫描 PDF 页 OCR、PDF 页面图片说明及 DOCX/PPTX 内嵌图片识别，包含结果缓存、调用预算、超时重试与失败警告 |
+| 会话交互 | 持久化多轮会话、追问改写、有界历史、NDJSON 流式输出、独立推理内容展示、停止生成、失败重试与请求幂等回放 |
+| 知识组织 | 层级标签管理，父标签包含子孙标签，多标签按并集筛选；同时用于知识库管理和问答检索范围 |
+| 配置与诊断 | 页面调整问答、检索和视觉设置；记录请求配置版本、候选分数、筛选原因与阶段耗时，支持持久化 Trace |
+| 索引维护 | Chroma 持久化向量；支持内存 BM25 与持久化 BM25S 内存映射后端，以及索引失效标记、后台重建、校验和活动版本切换 |
 
-当前仍未完成的正式验收项：
+使用与实现边界：
 
-- Dataset v3 的 41 个审核组仍为 `draft`，尚未由真实审核者逐项签核；
-- 自动关键点评分器对 Markdown、代码符号、空格和同义改写过于敏感；
-- 正文引用是否真正支持结论仍需效果评测；页面展示检索来源本身不作为拒答错误；
-- CPU Reranker 的检索延迟仍然较高。
+- **使用范围**：尚无账号、角色或文档权限体系，接口面向可信本地环境。远程或多人部署需要补充身份认证与访问控制。
+- **数据流向**：开启生成会发送问题、选定文档片段及有界会话历史；开启视觉识别会发送相应图片。关闭这些功能后可以只运行本地检索，关闭生成并不自动关闭视觉识别。
+- **格式能力**：不支持 Excel/CSV、旧版 Office 格式、Markdown 外部图片、SmartArt 和演讲者备注。DOCX/TXT 使用逻辑页，不能等同于原文件真实分页；PDF 以逐页文本提取为基础，视觉识别不等同于复杂版面或扫描表格恢复。
+- **答案可靠性**：来源编号与预览便于核对证据，但不自动证明证据支持结论。专用拒答门控尚未开放；Dense 距离阈值和无结果短路不能保证识别所有不可回答问题。
+- **运行规模**：当前一致性协调主要在单个服务进程内完成。后台稀疏索引维护采用全量重建；失效、缺失或不匹配的持久化索引会显式报错，不自动降级或保证无中断。
+- **发布状态**：当前公开仓库提供源码运行方式，服务托管与启动流程见[开发说明](new_docs/开发/DEV-012-服务托管与启动停止.md)。
+- **公开数据范围**：仓库不附带课程资料、测试文档、评测语料、题库、原始检索结果或截图。使用者需要自行准备有权使用的文档；这些本地文件和业务数据应保持在 Git 忽略范围内。
 
-### 设置接口的当前安全边界
+## 技术栈
 
-后端已提供 `GET /api/settings`、`GET /api/settings/runtime-status`、
-`PATCH /api/settings`、`POST /api/settings/reset` 和 `POST /api/settings/test-llm`。
-React 主前端已增加 `/settings` 路由和导航入口，可以读取脱敏配置与运行状态、保存问答
-LLM、Retrieval 设置和 DPAPI Key、恢复部署默认，并用未保存草稿执行一次最小连接测试。检索设置
-会在保存后的下一请求生效，Dense、BM25、RRF、Reranker 与最终 Top K 使用各自参数。默认
-`SPARSE_BACKEND=rank_bm25_memory`时，BM25 k1/b变化刷新进程内缓存；部署级选择
-`bm25s_mmap`时，k1/b必须与预构建generation合同一致，否则显式失败。两者都不重写生产
-向量库。读取接口不会返回
-API Key 明文，也不会为查看状态而冷加载模型；敏感字段的 422 校验错误同样不会回显输入。
+| 层次 | 主要组件 |
+|---|---|
+| 后端与结构模型 | Python、FastAPI、Pydantic、SQLite |
+| 检索与本地模型 | ChromaDB、Sentence-Transformers、FlagEmbedding、PyTorch、Jieba、rank-bm25、BM25S |
+| 文档处理 | PyPDF2、python-docx、python-pptx、markdown-it-py、pypdfium2、Pillow |
+| 生成与视觉接口 | OpenAI SDK，连接 DeepSeek 或其他 OpenAI 兼容模型服务 |
+| 主前端 | React、TypeScript、Vite、Ant Design、React Router、原生 Fetch 流读取 |
+| 验证 | pytest、Vitest、Testing Library；隔离评测与索引校验脚本 |
 
-当前项目没有账号、角色或权限体系，设置接口只适用于可信本地工作空间。不要把后端直接
-暴露到不受信任的网络；如需远程或多人使用，应先在反向代理或应用层增加身份认证和访问
-控制。连接测试会真实请求所填模型服务，可能产生少量费用，只应由用户显式触发。
-设置页不使用 localStorage 保存配置，API Key 输入框不会回填旧明文；恢复默认只删除运行时
-覆盖和当前用户 DPAPI 密钥，不修改 `.env`、不清空或重建向量库。启用
-`RETRIEVAL_TRACE_ENABLED` 后，新问答 Trace 会记录该请求冻结的 revision、实际 Top K/候选深度/
-Dense threshold/BM25/RRF/Reranker 参数，以及模型是否实际调用和 provider/model；不会记录 API Key。
-旧持久化 Trace 继续可读，并在 Drawer 中标注“旧 Trace 未记录”。2026-09-19 确认不启用
-硬拒答门控，多轮继续每轮检索、有历史且开启改写时先改写。V3-5 A—F 实验其实已经执行，
-M2 在 validation 上误拒 1/20、拦截不可回答 1/4，结论为不采用；详见
-[F 验收](new_docs/测试/TEST-006-数据集与评测验收.md#v35-f)。视觉与会话优化的完整记录及剩余事项见
-[`docs/2026-09-18-视觉与会话体验优化记录.md`](docs/2026-09-18-视觉与会话体验优化记录.md)。
+默认模型标识为 `BAAI/bge-large-zh-v1.5` 和 `BAAI/bge-reranker-v2-m3`；前者用于 Embedding，后者在启用重排序时使用。具体依赖版本以 [requirements.txt](requirements.txt)、[web/package.json](web/package.json) 和前端锁文件为准。
 
-## 当前架构
+## 数据链路与存储
+
+### 文档入库
 
 ```text
-React SPA（主前端，FastAPI 托管 web/dist）
-   │ /api
-   ▼
-FastAPI
-   ├── upload
-   │     file
-   │       → format adapter
-   │       → optional OCR / image understanding
-   │       → ParsedUnit
-   │       → structured chunker
-   │       → BGE embedding
-   │       → Chroma
-   │       └── SQLite documents / document_units / tags
-   │
-   ├── chat
-   │     question + tag scope + bounded conversation history
-   │       → standalone question rewrite
-   │       → Dense / BM25 / Hybrid retrieval
-   │       → optional Reranker
-   │       → DeepSeek
-   │       → NDJSON stream + source-ID citations
-   │
-   └── citation/document preview / conversations / persistent retrieval trace
-
-legacy Streamlit（兼容对照，尚未删除）
-   └── HTTP → FastAPI
-
-eval
-   └── isolated corpus + Chroma + SQLite
-         → Dataset v3 validation
-         → retrieval / answer / citation metrics
-         → report and review packet
+上传文件与可选标签
+  → 分配 document_id，保存临时文件，登记 processing 状态
+  → 格式适配器解析；按配置执行 OCR / 图片说明
+  → 统一 ParsedUnit / ParsedBlock / SourceLocator
+  → 组装规范文本、稳定 ID 和字符偏移
+  → 生成带来源范围的文本块
+  → SQLite 保存结构单元
+  → BGE Embedding → Chroma 保存文本块与定位元数据
+  → 保存标签，原子移动原文件，标记 ready
+  → 按稀疏后端配置触发后台索引重建
 ```
 
-核心目录：
+当前结构契约为 `structured-v2`。切块支持 `fixed` 与 `recursive`；`recursive` 结合段落、句子边界、字符窗口与 tokenizer 上限控制片段长度，保留原始规范文本中的字符范围，且不跨来源单元。
+
+每次上传创建独立文档 ID，同名文件不会覆盖旧文档。入库失败时执行补偿清理并保留失败记录；原文件、SQLite 与 Chroma 的协调并非跨存储 ACID 事务。删除以文档 ID 清理关联记录和向量。
+
+### 检索与生成
 
 ```text
-backend/                  FastAPI、数据模型和 RAG 服务
-backend/services/parsers/ structured-v2 五格式 Adapter 与可选 OCR
-web/                      React 19 + TypeScript + Ant Design 6 主前端
-frontend/                 兼容保留的旧 Streamlit 前端
-eval/                     数据集、隔离评测 CLI、历史结果
-tests/                    unit / integration / external 测试
-scripts/rebuild_index.py  安全索引重建
-docs/                     设计、操作指南和项目说明
+当前问题 + 标签范围 + 有界会话历史
+  → 可选追问改写（失败时使用原问题）
+  → Dense / BM25 / Hybrid 召回
+      Dense：问题向量 → Chroma → 距离阈值过滤
+      BM25：中文分词 → 词法召回
+      Hybrid：两路候选 → 按 chunk_id 去重 → RRF 排名融合
+  → 可选 Cross-encoder 重排序
+  → 单文档片段限额与最终 Top K
+  → 带来源编号的上下文
+  → 模型 API 生成，或关闭生成后直接返回检索来源
+  → NDJSON 事件流 → 来源列表 → 成功结果与可选 Trace 持久化
 ```
 
-## 文档结构与定位
+每个新问题重新检索；历史用于理解指代和保持表达连贯，来源编号仅对应本轮结果。流式协议依次传输 `meta`、`reasoning_delta` / `delta`、`citations` 和 `done`，失败使用 `error` 事件。中断或失败不将半截内容保存为成功答案。
 
-所有格式使用同一套结构模型，但保留格式自身的定位语义：
+引用预览按文档 ID、单元 ID、解析版本与字符范围回查结构，验证文本切片后高亮来源。列表中的“正文已引用 / 未引用”只表示回答是否使用该编号，不是证据有效性的自动评分。
 
-| 格式 | locator | 主要结构 |
-|---|---|---|
-| PDF | `page` | 真实页、段落 |
-| DOCX | `virtual_page` | 标题路径、段落、列表、表格 |
-| TXT | `virtual_page` | 固定物理行窗口、段落 |
-| Markdown | `section` | 标题路径、段落、列表、引用、代码块 |
-| PPTX | `slide` | 标题、文本框、组合形状、列表、表格 |
+### 存储职责
 
-前端统一使用 `location_label` 展示来源，不把逻辑页、幻灯片或章节错误地称为“页码”。
-SQLite 中保存的结构 JSON 在读取时会重新经过 Pydantic 校验；损坏或版本不兼容的数据会被拒绝。
+| 位置 | 保存内容与用途 |
+|---|---|
+| `data/uploads/` | 原始文档，以文档 ID 命名 |
+| `data/metadata.db` | 文档状态、结构单元、标签、会话、运行时设置和受容量限制的 Trace |
+| `data/chroma_db/` | 向量、文本块与检索所需的轻量来源元数据 |
+| `data/sparse_index/` | BM25S 索引版本、校验清单与活动指针，仅持久化稀疏后端使用 |
+| `data/vision_cache/`、`data/ocr_images/` | 视觉结果缓存及用于原图对照的图片 |
+| `data/runtime_secrets.bin` | 默认数据库路径下，页面保存的模型密钥的 Windows 用户级 DPAPI 密文 |
+| Hugging Face 缓存 | 本地 Embedding / Reranker 模型；下载与运行需使用同一缓存目录 |
+| `logs/` | 源码启动脚本的日志与进程记录 |
 
-可选 OCR 支持扫描 PDF、PDF 页内图片/图表以及 DOCX/PPTX 内嵌图片；各层默认关闭，
-失败只产生 warning，不阻塞其余内容入库。当前不支持 Excel、旧版 PowerPoint/Excel、
-Markdown 外部相对路径图片、SmartArt 和演讲者备注。
-OCR 表格转 Markdown 已推迟到下一轮；当前 OCR 表格内容仍以段落原文展示。
+主数据与缓存路径可以通过环境变量调整。备份需要同时考虑原文件、结构化元数据和相关索引，不能只复制 Chroma。详细步骤见[备份恢复与索引重建](new_docs/运维/OPS-002-数据备份恢复与索引重建.md)。
 
-## 环境准备
+## 项目结构
 
-当前 GPU 默认环境已在 Windows、Python 3.14.0、RTX 4060 Laptop GPU 上验证。
-原 `.venv` 作为 CPU 回退环境保留；日常启动使用独立的 `.venv-gpu`。
+```text
+backend/
+  main.py                    FastAPI 入口、启动初始化与 SPA 托管
+  config.py                  部署默认配置与校验
+  models/                    文档结构、接口与运行时设置模型
+  routers/                   上传、问答、会话、引用、标签、设置 API
+  services/
+    parsers/                 五格式适配器、公共组装器与可选 OCR
+    chunker.py               带来源偏移的文本切块
+    retriever.py             召回、融合、重排与最终上下文选择
+    sparse_*.py              稀疏检索、生命周期与后台重建
+    bm25s_store.py           持久化索引构建、加载与发布
+    *_store.py               文档、会话、结构单元、标签与配置存储
+web/
+  src/pages/                 chat / knowledge / settings 三个工作区
+  src/components/            结构渲染、来源预览、Trace 与标签组件
+  src/api/                   API 类型、请求与 NDJSON 流解析
+  src/__tests__/             前端测试
+frontend/                    保留的旧 Streamlit 兼容前端
+scripts/                     源码启停、索引重建与专项验证
+tests/                       后端单元与集成测试
+eval/                        隔离评测源码、指标与使用说明；数据由本地准备
+new_docs/                    按需求、设计、开发、测试与运维组织的文档中心
+docs/                        历史方案、反馈与操作记录
+```
+
+阅读代码可从 `backend/main.py` 进入，再沿 `routers/upload.py` 和 `routers/chat.py` 查看两条主链路；前端入口为 `web/src/App.tsx`。
+
+## 快速上手
+
+以下步骤面向**全新源码目录和新空库**，使用 CPU 跑通基础链路。已有部署请保留自己的 `.env`、数据和索引配置，不要用示例覆盖。
+
+### 1. 准备环境与依赖
+
+需要 Python 3.14、Node.js 24.x 和 npm。Python 版本与仓库依赖验证基线一致；前端锁文件包含要求 Node.js 22.19 或更高版本的依赖。以下命令均在仓库根目录的 PowerShell 中执行：
 
 ```powershell
-D:\Python\python.exe -m venv .venv-gpu
-.\.venv-gpu\Scripts\python.exe -m pip install --no-cache-dir `
-  torch==2.13.0 --index-url https://download.pytorch.org/whl/cu130
-.\.venv-gpu\Scripts\python.exe -m pip install --no-cache-dir -r requirements.txt
-.\.venv-gpu\Scripts\python.exe -m pip check
-Copy-Item .env.example .env
+python -m venv .venv
+.\.venv\Scripts\python.exe -m pip install torch==2.13.0 --index-url https://download.pytorch.org/whl/cpu
+.\.venv\Scripts\python.exe -m pip install -r requirements.txt
+.\.venv\Scripts\python.exe -m pip check
+
+Push-Location web
+npm.cmd ci
+Pop-Location
 ```
 
-CUDA PyTorch wheel 应从官方索引安装。当前已验证组合为
-`torch 2.13.0+cu130`、CUDA runtime 13.0、Python 3.14；不要在原 `.venv`
-中直接替换 PyTorch，以免同时破坏 CPU 回退环境。
+### 2. 准备本地模型
 
-编辑 `.env`。如果启用问答生成，需要环境 Key 或已通过设置 API 保存的用户级 DPAPI
-Key；如果只使用检索链路，可设 `LLM_ENABLED=false` 并留空 Key。首次启动尚无 DPAPI Key
-时，可以先使用环境 Key，或以 retrieval-only 模式启动后再保存 Key：
+服务以 `local_files_only=True` 加载模型，不会在启动或提问时自动下载。首次运行前下载到 Hugging Face 标准缓存；`.env.example` 与下述上手配置启用 Reranker，因此准备两个模型：
+
+如需自定义 `HF_HOME` 或 `HF_HUB_CACHE`，先在当前 PowerShell 设置环境变量；下面的下载命令不会自行读取项目 `.env`。
+
+```powershell
+$env:HF_HUB_OFFLINE = "0"
+.\.venv\Scripts\python.exe -c "from huggingface_hub import snapshot_download; snapshot_download('BAAI/bge-large-zh-v1.5')"
+.\.venv\Scripts\python.exe -c "from huggingface_hub import snapshot_download; snapshot_download('BAAI/bge-reranker-v2-m3')"
+```
+
+下载需要网络和模型存储空间。若自定义 `HF_HOME` 或 `HF_HUB_CACHE`，下载和启动必须使用相同配置。资源有限时可关闭 Reranker，届时只需准备 Embedding 模型。
+
+### 3. 创建并调整配置
+
+```powershell
+if (-not (Test-Path -LiteralPath .env)) {
+    Copy-Item -LiteralPath .env.example -Destination .env
+}
+```
+
+编辑新目录的 `.env`，覆盖以下字段。先关闭外部模型调用，使用 Dense 与内存 BM25 后端；保留重排，并在可信本地环境开启来源预览与 Trace：
 
 ```dotenv
-LLM_ENABLED=true
-DEEPSEEK_API_KEY=your_key
-DEEPSEEK_BASE_URL=https://api.deepseek.com
-DEEPSEEK_MODEL=deepseek-flash
-LLM_ANSWER_THINKING_MODE=disabled
-RETRIEVAL_TRACE_ENABLED=false
-TRACE_STORAGE_MAX_BYTES=52428800
-EMBEDDING_DEVICE=cuda:0
-EMBEDDING_BATCH_SIZE=32
-RERANKER_DEVICE=cuda:0
-RERANKER_USE_FP16=true
+LLM_ENABLED=false
+DEEPSEEK_API_KEY=
+RETRIEVAL_MODE=dense
 SPARSE_BACKEND=rank_bm25_memory
-SPARSE_INDEX_ROOT=./data/sparse_index
 SPARSE_INDEX_CORPUS_ID=
+SPARSE_AUTO_REBUILD=false
+CHUNK_STRATEGY=recursive
+EMBEDDING_DEVICE=cpu
+RERANKER_ENABLED=true
+RERANKER_DEVICE=cpu
+RERANKER_USE_FP16=false
+CITATION_PREVIEW_ENABLED=true
+RETRIEVAL_TRACE_ENABLED=true
 OCR_ENABLED=false
-OCR_PDF_SCANNED=false
-OCR_PDF_PAGE_IMAGES=false
-OCR_EMBEDDED_IMAGES=false
-OCR_IMAGE_PREVIEW_ENABLED=true
-OCR_IMAGE_DIR=./data/ocr_images
 ```
 
-`bm25s_mmap`只适用于已用`scripts/rebuild_sparse_index.py`构建并验证的匹配generation；
-缺失、dirty、损坏或合同错配不会自动退回全库内存BM25。当前生产默认值不启用该后端。
-固定1000篇/120题的P4同期对照显示，mmap的Sparse暖态均值由20.700 ms降至5.630 ms，
-完整暖态均值由354.806 ms降至342.947 ms；质量与GPU峰值不变。该结果只进入P5评审，
-尚未授权修改默认后端，也不能外推到更大语料或生产容量。完整证据见
-`eval/crud_rag_1000/v3_1/bm25_persistence_p4/README.md`。
+`.env.example` 中的持久化稀疏后端与语料标识来自既有部署，新空库不能直接照搬。上述内存后端无需预构建 BM25S 索引；跑通后可在设置页切换 Hybrid，体验关键词与向量混合检索。
 
-在设置页的“视觉模型”中开启总开关和所需场景。默认 `VISION_SOURCE=follow_llm`，
-使用已保存的问答服务商、地址、模型及密钥；关闭问答生成不会关闭视觉识别。
-所选模型须支持图片输入（例如当前部署所使用的 `deepseek-flash`）。选择“自定义模型”后，
-可独立配置连接及加密密钥，`VISION_*` 环境变量作为自定义连接的部署默认。
-页面密钥优先于环境变量；清除页面密钥恢复环境变量，不会清除另一类模型的密钥。
+如需生成答案，在设置页保存有效模型连接和密钥并启用生成，或在首次启动前配置 `LLM_ENABLED=true` 与有效的 `DEEPSEEK_API_KEY`。视觉识别另行启用，所选视觉模型必须支持图片输入。
 
-文字识别和图片描述分别配置思考模式/强度、Temperature、最大输出 Tokens 和超时；
-默认关闭思考，Temperature 为 0，输出上限分别为 4000/800，超时 60 秒。
-“测试视觉模型”对当前视觉草稿发送一张内置图片，检查实际识别结果，不保存草稿；
-跟随模式使用**已保存**的问答连接。测试及正式识别均会消耗服务商额度。
-视觉设置从下次文档上传/重新解析生效，每份文档固定使用一份配置；旧文档不会自动更新，
-仅重建检索索引也不会补做 OCR。页面不会开放 Prompt、并发或重试策略编辑。
-
-视觉链路排查：先在设置页点击“测试视觉连接”。它验证真实图片输入和识别结果，而不只是接口可达；
-跟随模式使用已保存的问答连接，自定义模式使用视觉草稿。再上传一份小文档，检查上传警告及文档预览。
-扫描页识别失败会显示“视觉识别未完成”及原因，不再与未启用识别时的“无可提取文本”混为一谈。
-`logs/backend.error.log` 中搜索 `Vision failure` 可查页/图片对象、模型、错误类别、HTTP 状态及服务商请求 ID。
-HTTP 429 仅确认服务商拒绝了该次请求，是否属于并发、频率或额度限制仍需结合警告里的服务商代码和服务商后台判断。
-当前单个后端进程的视觉调用按 1 路执行，正常调用沿用 SDK 最多 2 次重试，草稿测试不重试；
-这不能保证避开账号级额度或其他应用同时调用的限制。空回复、输出截断不会作为成功结果写入缓存。
-修改模型、任务输出参数或图片内容会使用新缓存；更换密钥或提高超时后，旧的短期失败记忆不会阻止重试。
-
-需要独立复现完整链路时，在项目目录运行：
+### 4. 启动并验证基础链路
 
 ```powershell
-.\.venv-gpu\Scripts\python.exe -m scripts.validate_vision_settings --run-external
+.\scripts\start.ps1 -InferenceProfile cpu
 ```
 
-该命令会真实调用当前已保存的问答模型（可能产生少量费用），只发送程序生成的测试图片和两页扫描式 PDF，
-并在 `logs/vision-acceptance-*/` 的隔离库中验收上传、识别、入库、预览，输出 `report.json` 和 `preview.json`。
-不会改动生产设置、原文档或生产索引；这是一项链路验证，不是复杂版式的 OCR 准确率评估。
-识别结果缓存按有效连接、任务、参数和图片区分；限流、超时、空输出、截断通过上传警告报告。
+脚本使用 `.venv`，重新构建 React，启动 FastAPI，并在模型预热就绪后打开页面：
 
-Embedding 和 Reranker 都以 `local_files_only=True` 加载。运行前需要确保以下模型已在
-Hugging Face 本地缓存：
+- [主页面](http://localhost:8000/)：进入知识库上传小型 TXT 或 Markdown 文件，再到会话页提问并查看来源。
+- [API 文档](http://localhost:8000/docs)：查看请求与响应结构。
+- [健康接口](http://localhost:8000/api/health)：查看存活及模型预热状态。
 
-- `BAAI/bge-large-zh-v1.5`；
-- 启用 `RERANKER_ENABLED=true` 时需要 `BAAI/bge-reranker-v2-m3`。
-
-BGE large 输出 1024 维向量，旧的 384 维索引不能直接复用。文档结构、Embedding 模型或
-chunk 规则变化后，应使用 `scripts/rebuild_index.py` 在独立目录安全重建，不要直接覆盖
-现有索引。
-
-## 启动
-
-开发时分别在两个终端启动 FastAPI 与 Vite。后端终端从仓库根目录运行：
+关闭生成时，页面返回相关文档来源而不调用回答模型。停止服务：
 
 ```powershell
-.\.venv-gpu\Scripts\python.exe -m uvicorn backend.main:app --reload --reload-dir backend
+.\scripts\stop.ps1
 ```
 
-前端终端运行：
+### 5. 前后端开发
+
+前后端分别启动时，后端终端在根目录运行：
+
+```powershell
+.\.venv\Scripts\python.exe -m uvicorn backend.main:app --reload --reload-dir backend
+```
+
+另一终端启动 Vite：
 
 ```powershell
 Set-Location web
 npm.cmd run dev
 ```
 
-Vite 默认通过 `http://localhost:5173/` 提供开发页面，并把 `/api` 代理到 8000。
-只有需要与旧界面对照时，才从仓库根目录另行运行
-`.\.venv-gpu\Scripts\python.exe -m streamlit run frontend/app.py`。
+访问 [Vite 开发页面](http://localhost:5173/)，`/api` 请求由 Vite 代理到后端 8000。不要同时运行另一份 `start.ps1` 后端。已有 `web/dist` 时，8000 可能展示旧构建；源码开发页面以 Vite 为准。
 
-或使用一键脚本：
+### 6. 可选 GPU 环境
+
+GPU 使用独立的 `.venv-gpu`，避免替换 CPU 环境。仓库使用的 CUDA PyTorch 安装组合如下，新机器需要匹配驱动并验证：
 
 ```powershell
+python -m venv .venv-gpu
+.\.venv-gpu\Scripts\python.exe -m pip install torch==2.13.0 --index-url https://download.pytorch.org/whl/cu130
+.\.venv-gpu\Scripts\python.exe -m pip install -r requirements.txt
+.\.venv-gpu\Scripts\python.exe -m pip check
 .\scripts\start.ps1
 ```
 
-默认 profile 为 GPU：使用 `.venv-gpu`，Embedding/Reranker 均为 `cuda:0`，
-Reranker 使用 FP16。需要故障回退时才显式启动 CPU profile：
+`start.ps1` 默认选择 GPU，覆盖运行进程的模型设备为 `cuda:0`，Reranker 使用 FP16；CPU 模式使用 CPU / FP32。可附加 `-Reload`、`-NoBrowser`，旧 Streamlit 仅在显式指定 `-LegacyFrontend` 时启动。更多环境说明见[源码启停指南](new_docs/运维/OPS-001-环境配置与服务启停.md)。
+
+## 配置与开发约定
+
+- **配置优先级**：部署默认来自 `backend/config.py` 与环境变量，页面保存的运行时覆盖值优先。请求开始时冻结配置快照，保存后的设置用于后续请求；修改 `.env` 后也要检查页面是否保留旧覆盖。
+- **配置生效范围**：问答和检索设置影响后续请求；视觉设置影响后续上传或重新解析，旧文档不会自动补做 OCR。更换 Embedding 模型或切块规则需要重建派生索引。
+- **来源契约**：新增格式应通过 `backend/services/parsers/` 的适配器和公共组装器输出统一结构，保持定位、规范文本、稳定 ID 与偏移一致，避免另建一条与预览脱节的解析链路。
+- **持久化 Sparse 首代**：切换 `bm25s_mmap` 前需受控构建并发布匹配的首个活动索引，后台不自动初始化缺失的首代。发布后再配置后端、语料标识与自动重建开关；索引合同中的解析、切块与 BM25 参数必须匹配。完整步骤见[索引重建](new_docs/运维/OPS-002-数据备份恢复与索引重建.md#rebuild)。
+- **当前运行依赖**：持久化 Sparse 后台重建仍从 `eval/crud_rag_1000/v3_1/questions_v3_120q.json` 读取 120 道验证问题。公开仓库不附带该文件，使用者需按代码要求自行准备本地验证题库；否则不能直接使用自动重建。首次运行使用上文的 `rank_bm25_memory` 配置。缺失、失效或错配的索引会使相关检索显式失败，需要查看状态并重建或主动调整模式。
+- **密钥与诊断数据**：页面保存的密钥使用当前 Windows 用户的 DPAPI 加密，读取接口不回填明文；环境密钥仍由部署者自行管理。Trace 与原文预览可能包含完整文档内容，应按实际使用范围控制开关。
+- **数据维护**：索引重建、恢复或升级先备份并在独立目录验证。恢复页面默认只删除运行时覆盖，不修改 `.env`，也不清空知识库。
+
+## 测试与评测
+
+公开仓库保留测试代码，但不附带 `tests/fixtures/` 与 `eval/` 下的测试数据。公开 CI 与下列命令排除依赖固定文档的测试模块、真实 PDF 文件测试、依赖固定题库的稀疏索引重建测试及数据集验收测试；其余测试覆盖检索、会话、存储、适配器逻辑与配置等独立行为：
 
 ```powershell
-.\scripts\start.ps1 -InferenceProfile cpu
+$env:PYTHONUTF8 = "1"
+.\.venv\Scripts\python.exe -m pytest tests -m "not integration and not external" -q `
+    --ignore=tests/test_api.py --ignore=tests/test_parser.py `
+    --ignore=tests/test_structured_ingest.py --ignore=tests/test_hybrid_dataset.py `
+    --ignore=tests/test_sparse_rebuild.py `
+    --deselect=tests/test_pdf_adapter.py::test_pdfium_engine_reads_real_pdf_fixture `
+    --deselect=tests/test_rebuild_sparse_index.py::test_controlled_build_on_isolated_real_storage `
+    --deselect=tests/test_sparse_lifecycle.py::TestUploadLifecycleIntegration
 ```
 
-CPU profile 使用原 `.venv`，并在启动进程中强制覆盖为 CPU/FP32；两个 profile
-不会同时启动，防双开检查仍然生效。
-
-只有需要后端热重载时才使用：
+已经准备本地测试资料时，可运行完整后端与评测测试；本地模型集成及真实 API 调用仍需单独启用：
 
 ```powershell
-.\scripts\start.ps1 -Reload
+.\.venv\Scripts\python.exe -m pytest -m "not integration and not external" -q -p no:cacheprovider
 ```
 
-一键脚本默认重新构建并打开 React 页面，不再启动旧 Streamlit。只在人工对照旧界面时使用：
+本地模型集成测试需要准备缓存；`external` 测试默认跳过，真实 API 调用需要显式启用。普通后端测试使用隔离目录，避免读写业务数据。测试范围与外部调用方式见[测试文档](new_docs/测试/README.md)。
+
+前端检查：
 
 ```powershell
-.\scripts\start.ps1 -LegacyFrontend
-```
-
-不希望自动打开浏览器时可附加 `-NoBrowser`。
-
-访问地址：
-
-- React SPA（主入口）：http://localhost:8000/
-- API 文档：http://localhost:8000/docs
-- 旧 Streamlit（仅 `-LegacyFrontend` 时启动）：http://localhost:8501
-
-`start.ps1` 每次都会重新构建 React SPA，由 FastAPI 静态托管，并将它作为默认打开页面。
-启动脚本会等待后台 Embedding/Reranker 预热状态变为 `ready`
-后才报告成功；模型加载失败时会停止刚创建的后端进程，并在错误日志中保留完整异常。
-脚本使用独立隐藏进程，启动成功后会记录 PID，再次启动前检测到服务仍在运行会拒绝执行
-（防双开）。一键停止服务：
-
-```powershell
-.\scripts\stop.ps1
-# 或等价地：
-.\scripts\start.ps1 -Stop
-```
-
-`stop.ps1` 会校验记录中的进程启动时间（防止 PID 被复用后误杀），优先用 `taskkill /T /F`
-终止整个进程树（覆盖 `-Reload` 模式下 Uvicorn 的子进程）；若隐藏窗口的 `conhost` 令
-`taskkill` 失败，则回退终止已验证的主进程，并清理当前启动日志中经过身份校验的 Uvicorn
-worker；确认全部退出后才清理 PID 文件。服务异常退出或手动结束后，启动输出中的
-Backend/Frontend PID 仍可作为兜底手段：
-
-```powershell
-Stop-Process -Id <Backend PID>,<Frontend PID>
-```
-
-如果上传中断，查看 `logs/backend.error.log`。失败文件不会因页面刷新而自动重试，需要
-在前端显式点击“重试失败文件”。
-
-## 会话中的模型思考
-
-React 会话会单独显示最终回答模型实际返回的 `reasoning_content`：收到思考片段时默认展开，
-第一段非空正文到达时自动折叠一次，之后可以手动展开或收起。没有思考文本的响应不显示空面板。
-是否返回思考文本取决于上游接口，开启思考开关不保证接口会提供该字段。
-
-成功回答的思考内容随消息保存，重新打开历史会话时默认折叠。metadata schema v5 会为旧消息
-补充默认空值，保留现有会话和知识库数据；升级前可备份 `data/metadata.db`。
-思考文本不参与正文引用提取，也不加入后续问答历史提示词。查询改写和 OCR 思考不在会话展示范围内。
-
-仅有思考、正文为空仍判定为失败。失败或主动停止时，当前页面保留已接收内容并提示未完成；
-刷新后不保留半截内容，与现有失败会话策略一致。
-流式协议在 `delta` 之外增加 `reasoning_delta` 事件，其 `text` 只包含思考片段。
-
-## 本轮检索来源
-
-来源列表取自实际交给回答模型的最终 Top K，不依赖模型是否拒答。`citations` 中增加
-`cited_in_answer`：正文出现合法的 `【来源N】` 时为 true，否则为 false。前端据此分为
-“正文已引用”和“正文未引用”；思考与历史文本里的编号不参与判断。分组只表示正文是否标注
-来源，不代表系统已验证证据足够支持结论。
-
-每项仍显示文档名、位置、摘要和“查看原文”；同一文档的不同 chunk 可能分属两组，编号不重排，
-高亮与定位仍指向各自 chunk。结果为空时不生成来源，元数据不合法的条目沿用原校验跳过。
-来源仍在回答完成后返回，并保存在原有 `citations_json` 中，不需要 schema 迁移。
-旧消息原本只保存被正文引用的来源，字段缺省视为已引用；不补造旧会话未保存的检索结果。
-
-`extract_citations` 保留仅提取正文引用的原语义；聊天接口改用 `build_retrieval_sources`。
-评测仍从正文提取编号，不把页面的“正文未引用”列表计作正文引用；本轮没有重跑外部模型效果评测。
-
-当前不启用硬拒答门控，也不新增模型裁判调用。回答规则要求仅回答证据支持的部分、说明资料缺口，
-完全无支持时限定为“本轮检索到的文档不足”，不能断言整个知识库没有答案。
-多轮每个新问题重新检索：有历史且开启改写时先改写，失败或关闭时使用原问题；
-本轮来源编号只映射本轮结果，幂等重放不重复检索。实现与本次127项后端定向、65项前端回归见
-[会话验收记录](new_docs/测试/TEST-003-会话引用与流式协议.md#current-policy)。
-
-## 文档生命周期
-
-每次上传都会创建独立 `document_id`：
-
-```text
-临时文件
-  → SQLite processing 记录
-  → structured-v2 parse（可选 OCR）
-  → document_units
-  → chunk / embed
-  → Chroma
-  → 原子移动为 document_id.ext
-  → SQLite ready
-```
-
-同名文件会成为两个独立版本。失败时会清理临时文件、结构化 unit 和可能写入的向量，
-同时保留 `failed` 记录用于排查。删除文档时按 `document_id` 级联清理关联数据。
-
-## 测试
-
-### 本地完整测试
-
-默认测试不会调用 DeepSeek，也不会写入生产 `data/`：
-
-```powershell
-.\.venv-gpu\Scripts\python.exe -m pytest tests -q -p no:cacheprovider
-```
-
-2026-09-18 完整后端复验结果为 `738 passed, 3 skipped`。跳过项均为需要显式授权才会
-执行的真实外部 LLM 测试；普通测试使用隔离临时目录，不写入生产 `data/`。建议明确传入
-`tests`，避免 pytest 从仓库根目录递归扫描本地 `logs/` 验收临时目录并因 Windows ACL
-产生与代码无关的收集错误。
-
-不依赖本地模型权重的 CI 测试：
-
-```powershell
-.\.venv-gpu\Scripts\python.exe -m pytest -m "not integration and not external" -q
-```
-
-React 前端检查：
-
-```powershell
-Set-Location web
-npm.cmd test -- --reporter=dot
+Push-Location web
+npm.cmd test
 npm.cmd run lint
 npm.cmd run build
+Pop-Location
 ```
 
-2026-09-18 结果为 12 个测试文件、62/62 测试通过，lint、TypeScript 和生产构建通过；
-构建仍有单个 JavaScript chunk 超过 500 kB 的体积警告。
+评测代码提供隔离入库、检索扫描、模式消融、答案与引用指标及报告对比。先区分检索评测和实际模型生成，再选择数据集与命令；检索指标不能直接当作回答准确率，不同数据集和配置的结果也不能直接比较。
 
-### 真实 DeepSeek 测试
+评测命令仍会读取本地数据文件，公开源码目录不能直接运行默认数据集。数据结构与命令见[评测 CLI 文档](eval/README.md)，历史测试口径和调参记录见[评测验收说明](new_docs/测试/TEST-006-数据集与评测验收.md)及[优化文档](new_docs/优化/README.md)。这些记录描述当时的本地环境；原始测试资料与逐题结果不随公开仓库发布。
 
-`tests/test_llm.py` 包含基于上下文回答、无关问题拒答和流式输出三项真实 API 测试。
-当前 `tests/conftest.py` 会为隔离测试覆盖 `DEEPSEEK_API_KEY`；在该问题修复前，可在明确
-允许外部调用后，仅对这个测试文件禁用公共 conftest：
+## 文档导航
 
-```powershell
-.\.venv-gpu\Scripts\python.exe -m pytest --noconftest tests/test_llm.py -m external -q -s
-```
+| 阅读目的 | 入口 |
+|---|---|
+| 按主题浏览完整文档 | [文档中心](new_docs/README.md) |
+| 理解整体架构与数据职责 | [系统架构与存储边界](new_docs/设计/DES-001-系统架构与存储边界.md) |
+| 扩展格式、修改解析或入库 | [五格式结构化解析](new_docs/开发/DEV-001-五格式结构化解析.md)、[上传与索引生命周期](new_docs/开发/DEV-002-上传与索引生命周期.md) |
+| 理解检索与上下文选择 | [检索与模型推理](new_docs/开发/DEV-004-检索与模型推理.md)、[检索融合与上下文选择](new_docs/设计/DES-003-检索融合与上下文选择.md) |
+| 修改会话、流式输出与引用 | [会话流式问答](new_docs/开发/DEV-005-会话流式问答.md)、[来源引用与结构预览](new_docs/开发/DEV-006-来源引用与结构预览.md) |
+| 配置视觉、设置与 Trace | [OCR 识别与原图预览](new_docs/开发/DEV-003-OCR识别与原图预览.md)、[运行时设置与密钥](new_docs/开发/DEV-009-运行时设置与密钥.md)、[检索 Trace](new_docs/开发/DEV-010-检索Trace与配置追溯.md) |
+| 开发前端 | [React 主前端](new_docs/开发/DEV-008-React主前端.md)、[web 使用说明](web/README.md) |
+| 启停、备份、恢复与故障排查 | [环境配置与服务启停](new_docs/运维/OPS-001-环境配置与服务启停.md)、[数据备份恢复与索引重建](new_docs/运维/OPS-002-数据备份恢复与索引重建.md)、[设置密钥与故障排查](new_docs/运维/OPS-003-设置密钥与故障排查.md) |
+| 运行评测、查看测试与优化证据 | [评测说明](eval/README.md)、[测试目录](new_docs/测试/README.md)、[优化目录](new_docs/优化/README.md) |
+| 理解服务托管与启动流程 | [服务托管与启动停止](new_docs/开发/DEV-012-服务托管与启动停止.md) |
 
-2026-07-30 使用 `.env` 中配置的 `deepseek-v4-flash` 实测为 `3 passed`。
-
-## Dataset v3
-
-Dataset v3 使用单一顶层 JSON、独立 corpus manifest 和 `structured-v2` parser。当前包括：
-
-- 35 道单题；
-- 6 组对话、17 个 dialogue turn；
-- 43 个可回答项、9 个不可回答项；
-- 80 条确定性定位的 evidence；
-- PDF、DOCX、TXT、Markdown、PPTX 共 23 份语料。
-
-非严格校验用于检查结构、manifest 和证据绑定：
-
-```powershell
-.\.venv-gpu\Scripts\python.exe -m eval.dataset_v3 validate `
-  --dataset eval/dataset/questions_v3.json `
-  --corpus eval/corpus `
-  --manifest eval/dataset/corpus_v3_manifest.json
-```
-
-严格校验只应在真实审核者完成全部签核后通过：
-
-```powershell
-.\.venv-gpu\Scripts\python.exe -m eval.dataset_v3 validate `
-  --dataset eval/dataset/questions_v3.json `
-  --corpus eval/corpus `
-  --manifest eval/dataset/corpus_v3_manifest.json `
-  --strict
-```
-
-当前非严格校验通过；严格校验按设计失败，因为所有审核组仍为 `draft`，不能自动补写为
-`verified`。
-
-## v3 完整预检结果
-
-2026-07-30 曾运行完整 structured-v1 预检。以下结果作为升级前历史基线保留，不代表当前
-structured-v2 评测结果。该运行创建隔离 Chroma、SQLite 和上传目录，并在用户明确授权后，
-将每题检索到的 Top-K 片段发送给 DeepSeek：
-
-```powershell
-$env:PYTHONIOENCODING='utf-8'
-$env:HF_HUB_OFFLINE='1'
-$env:TRANSFORMERS_OFFLINE='1'
-.\.venv-gpu\Scripts\python.exe -m eval.eval run `
-  --label <label> `
-  --dataset eval/dataset/questions_v3.json `
-  --corpus eval/corpus `
-  --manifest eval/dataset/corpus_v3_manifest.json `
-  --allow-draft-v3
-```
-
-`--allow-draft-v3` 表示结果只能用于 preflight，不能作为正式冻结评测。
-
-运行规模：
-
-| 项目 | 结果 |
-|---|---:|
-| 文档 | 23 |
-| Parsed units | 2,438 |
-| Chunks | 2,584 |
-| Parser warnings | 0 |
-| 评测项 | 52 |
-| DeepSeek 调用 | 51 |
-| 空检索短路 | 1 |
-| 结构化入库耗时 | 703.11s |
-
-自动指标：
-
-| 指标 | 结果 |
-|---|---:|
-| Hit Rate | 100.00% |
-| Recall | 100.00% |
-| MRR | 97.67% |
-| Keypoint Coverage | 67.67% |
-| Strict Accuracy | 53.49% |
-| Citation Precision | 97.67% |
-| Citation Recall | 100.00% |
-| Citation Emission Rate | 100.00% |
-| False Refusal Rate | 0.00% |
-| Refusal Accuracy | 100.00% |
-| 不可回答题伪引用 | 1 |
-
-延迟：
-
-| 阶段 | Mean | P50 | P95 |
-|---|---:|---:|---:|
-| Retrieval | 5.674s | 5.557s | 7.976s |
-| LLM | 1.793s | 1.701s | 2.977s |
-| Total | 7.432s | 7.469s | 10.036s |
-
-### 指标解释
-
-本次 20 个自动 Strict Fail 均已逐项进行 AI 语义复核，未发现明显的核心答案遗漏。
-主要误差来自当前评分器使用连续字符串匹配，无法稳定处理以下等价表达：
-
-- Markdown 加粗、代码反引号和标点差异；
-- `O(nlog₂n)` 与 `O(nlog2n)` 等符号差异；
-- “队尾是允许插入的一端”与“在队尾插入”等同义改写；
-- 表格答案中冒号、空格或解释性文字造成的短语不连续。
-
-因此 `Keypoint Coverage` 和 `Strict Accuracy` 当前会系统性低估回答质量，不能单独作为
-合并或发布阻断指标。该 AI 复核不替代 Dataset v3 要求的真实人工签核。
-
-当前确认的回答或引用问题：
-
-1. `D-001-q0005` 正确拒答，但仍输出了一个来源标记；
-2. `D-001-d0001-t1/t2` 各引用了一个额外的非 gold 文档；
-3. CPU Reranker 是当前检索延迟的主要来源。
-
-本次本地报告保存在
-`eval/runs/codex-v3-full-preflight-20260730-211947/`。`eval/runs/` 默认被 Git 忽略，
-避免把 API 原始回答和临时索引误提交到仓库。
-
-## 历史评测证据
-
-旧 Dataset v1/v2 和 P1/P2 实验结果继续保留，用于追溯历史决策，不作为当前
-structured-v2 的主验收集，也不应与 Dataset v3 指标直接比较。
-
-| 阶段 | 结论 | 证据目录 |
-|---|---|---|
-| Baseline | MiniLM、固定滑窗的初始基线 | `eval/runs/baseline/` |
-| P1-1 | 选择 BGE large，无 query instruction | `eval/results/p1-1-bge/` |
-| P1-2 | 保守文本清洗和 DOCX 表格原序解析 | `eval/results/p1-2-docx-table/` |
-| P1-3 | 选择 token-aware recursive 400/80 | `eval/results/p1-3-recursive-chunking/` |
-| P1-4 | 选择 cosine distance threshold 0.67 | `eval/results/p1-4-threshold-calibration/` |
-| P1-5 | 启用候选数 15 的 BGE Reranker | `eval/results/p1-5-reranker/` |
-| P2-1 | Hybrid 未超过 Dense + Reranker，未部署 | `eval/results/p2-1-hybrid-retrieval/` |
-| P2-3 | 检索 Trace 完成受控验收 | `eval/results/p2-3-retrieval-trace/` |
-| v3 structured preflight | 五格式统一结构和检索预检 | `eval/results/v3-structured-preflight/` |
-
-完整评测命令、指标定义、隔离约束和历史数据集说明见 `eval/README.md`。
-
-## 已知限制与后续工作
-
-当前后续工作只记录未完成的验收或明确问题，不再保留已经完成的迁移计划：
-
-1. 由真实审核者完成 Dataset v3 的问题、答案、证据和不可回答项签核；
-2. 改进 keypoint 规范化或引入可靠的语义评分，减少自动误判；
-3. 继续评测正文引用的真实性及其对结论的支持程度；拒答展示检索来源的策略已实现；
-4. 多轮每轮检索已确认；允许本轮召回新增文档，仍需评测历史指代和引用编号误用；
-5. 评估 Reranker 加速方案，降低 CPU 检索延迟；
-6. 为 OCR/图片理解建立带人工真值的准确率与版面/表格专项评测；复杂表格目前仍主要以
-   OCR 段落保存，不等同于结构化表格恢复；
-7. 验证更多 OpenAI-compatible 服务商对 `reasoning_content`、思考开关和思考强度的兼容性；
-8. 对 React 主包做按路由或面板拆分，消除单个 JavaScript chunk 超过 500 kB 的警告；
-9. 处理 FastAPI lifespan、PyPDF2、Starlette TestClient、`pkg_resources` 等依赖弃用警告；
-10. 决定旧 Streamlit 前端的退役时间；如需远程或多人使用，先实现认证、授权和文档级权限。
+`new_docs/` 按主题维护实现说明、验证边界与运维步骤；`docs/` 保留历史方案，`eval/` 保留评测源码与说明。查看历史记录时，先核对其数据集、配置、时间与实际代码，避免将旧实验结论当作当前默认行为；文中提到的本地数据与报告路径不代表公开仓库附带这些文件。

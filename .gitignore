@@ -5,46 +5,23 @@ data/
 web/node_modules/
 web/dist/
 
-# 评估运行输出（报告、隔离向量库；基线报告手动挑选提交）
-eval/runs/
-eval/crud_rag_1000/runs/
-eval/crud_rag_1000/v3/runs/
+# 公开仓库仅保留评测源码与 README。语料、题库、报告、截图和索引留在本地。
+eval/**
+!eval/**/
+!eval/**/*.py
+!eval/**/README.md
+tests/fixtures/
 
-# v3.1 评测源码、题库、汇总和验收报告可提交；本地数据库、向量索引、
-# pytest工作目录及大体积逐次检索日志可由固定协议重建，不进入Git历史。
-eval/crud_rag_1000/v3_1/__pycache__/
-eval/crud_rag_1000/v3_1/.pytest-tmp/
-eval/crud_rag_1000/v3_1/.validation/**/pytest/
-eval/crud_rag_1000/v3_1/.validation/basetemp*/
-eval/crud_rag_1000/v3_1/.validation/pytest-v*/
-eval/crud_rag_1000/v3_1/.validation/pytest-*/
-eval/crud_rag_1000/v3_1/.validation/tmp-*/
-eval/crud_rag_1000/v3_1/.validation/v35-*/
-eval/crud_rag_1000/v3_1/**/_deps/
-eval/crud_rag_1000/v3_1/**/storage/
-eval/crud_rag_1000/v3_1/**/work/
-eval/crud_rag_1000/v3_1/**/temp/
-eval/crud_rag_1000/v3_1/**/passes/
-eval/crud_rag_1000/v3_1/**/replays/
-eval/crud_rag_1000/v3_1/**/results/
-eval/crud_rag_1000/v3_1/**/*.sqlite3
-eval/crud_rag_1000/v3_1/**/*.db
-eval/crud_rag_1000/v3_1/**/*.bin
-eval/crud_rag_1000/v3_1/**/*.npy
-eval/crud_rag_1000/v3_1/**/*.pickle
-eval/crud_rag_1000/v3_1/**/*.cache
-eval/crud_rag_1000/v3_1/**/*.log
-eval/crud_rag_1000/v3_1/**/params.index.json
-eval/crud_rag_1000/v3_1/**/vocab.index.json
-eval/crud_rag_1000/v3_1/**/*.jsonl
-!eval/crud_rag_1000/v3_1/tuning/v35-a-baseline-20260829/phase-e/v35-e-evidence-gate-guard-20260831/per-question.jsonl
-!eval/crud_rag_1000/v3_1/tuning/v35-a-baseline-20260829/phase-f/v35-f-validation-m2-gpu-20260831/per-question.jsonl
+# 本地历史备份、公开清理清单（可能包含原始测试资料）
+.private-backups/
 
 # 本地启动脚本输出
 logs/
 
 # 环境变量（含真实 API Key，绝对不能提交）
 .env
+.env.*
+!.env.example
 
 # Python 缓存
 __pycache__/
@@ -69,13 +46,24 @@ env/
 
 # 测试缓存
 .pytest_cache/
-.pytest-tmp/
+.pytest-tmp*/
+.pytest-tmp2/
 eval/crud_rag_1000/.pytest-tmp*/
 .coverage
 htmlcov/
 
 # 本地助手配置
 .claude/
+.codex/
+.agents/
+.aws/
+.ssh/
+
+# 私钥及证书容器
+*.key
+*.pem
+*.p12
+*.pfx
 
 # 系统文件
 .DS_Store
