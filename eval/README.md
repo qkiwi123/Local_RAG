@@ -1,6 +1,7 @@
 # RAG 评估基准使用文档（面向 AI / 人类通用）
 
-> 本文档自足：按此文档即可运行评估、解读结果，无需阅读 eval/ 源码。
+> 公开仓库仅保留评测源码和使用说明，不附带语料、题库、manifest 或运行报告。
+> 下文的数据集路径和历史结果对应本地开发环境，运行前需自行准备符合代码契约的数据；全新公开克隆不能直接运行默认数据集。
 > 让 AI 跑评估时，直接说「跑 eval，label 叫 <名字>」或「对比 <A> 和 <B>」即可。
 
 ## 运行命令
@@ -155,8 +156,8 @@ PYTHONIOENCODING=utf-8 ./.venv/Scripts/python.exe -m eval.eval compare \
 
 ## 数据集与语料
 
-- legacy v2 语料：`eval/corpus_legacy/` 4 篇中文文档（docx×2、pdf、txt），已随 git
-  固化，勿随意改动（改动会使历史 run 不可比）。
+- legacy v2 语料：历史本地基线在 `eval/corpus_legacy/` 使用 4 篇中文文档（docx×2、pdf、txt）。
+  原件不随公开仓库发布；替换本地语料后，结果不能直接与历史 run 比较。
 - Dataset v3 语料：`eval/corpus/`，由独立 manifest 冻结，不得与 legacy v2 混用。
 - Dataset v3 主文件：`eval/dataset/questions_v3.json`。可用下列命令生成与当前数据集
   SHA-256 绑定的逐项审核包；审核包不会自动修改 `review`，必须由真实审核者核对后再回写：
