@@ -10,6 +10,21 @@ eval/**
 !eval/**/
 !eval/**/*.py
 !eval/**/README.md
+# 运行目录和本地依赖即使包含 Python/README 文件也不提交。
+eval/**/_deps/
+eval/**/storage/
+eval/**/work/
+eval/**/temp/
+eval/**/passes/
+eval/**/replays/
+eval/**/results/
+eval/**/runs/
+eval/**/.pytest-tmp*/
+eval/**/.validation/**/pytest/
+eval/**/.validation/basetemp*/
+eval/**/.validation/pytest-*/
+eval/**/.validation/tmp-*/
+eval/**/.validation/v35-*/
 tests/fixtures/
 
 # 本地历史备份、公开清理清单（可能包含原始测试资料）
