@@ -14,6 +14,11 @@ import pytest
 from launcher import common, portable
 
 
+@pytest.fixture(autouse=True)
+def no_desktop_tray_in_unit_tests(monkeypatch):
+    monkeypatch.setattr(portable, "ensure_tray", lambda *a: {"outcome": "test"})
+
+
 @pytest.fixture
 def bundle(tmp_path):
     root = tmp_path / "W3 中文 空格"

@@ -1,5 +1,7 @@
 # 开发文档导航
 
+2026-10-24便携入口：[DEV-012](./DEV-012-服务托管与启动停止.md#tray-auto-port)补自动独占端口、轻量托盘和原实例停止保护，已有产品变更单独检查点保存。
+
 2026-10-24回切修复：[DEV-008](./DEV-008-React主前端.md#conversation-return)按会话/草稿保存后台请求，导航不取消、返回恢复，显式停止仅作用当前会话；[TEST-004](../测试/TEST-004-标签与React交互.md#conversation-return)记录99项前端及真实HTTP保存验收，以下97项按前轮理解。
 
 2026-10-24后续：[DEV-008](./DEV-008-React主前端.md#conversation-followup)补空白新建、请求隔离、折叠来源和端口/对齐；[DEV-009](./DEV-009-运行时设置与密钥.md#chunking)补动态分块及[Trace开关](./DEV-009-运行时设置与密钥.md#trace-switch)。最终97项前端、192项后端专项及独立浏览器结果见[TEST-004](../测试/TEST-004-标签与React交互.md#conversation-followup)。

@@ -1,5 +1,7 @@
 # 设计文档导航
 
+2026-10-24便携入口：[DEV-012](../开发/DEV-012-服务托管与启动停止.md#tray-auto-port)说明后台持有实际socket、独立原生托盘/锁与停止保护，不增加模型或HTTP停止接口。
+
 2026-10-24回切修正：[DES-005](./DES-005-标签与React交互.md#conversation-followup)撤销“导航即取消”合同，按会话保留生成与后台保存；返回中的/完成后的状态验证见[TEST-004](../测试/TEST-004-标签与React交互.md#conversation-return)。
 
 2026-10-24后续：[DES-005](./DES-005-标签与React交互.md#conversation-followup)固定首次发送创建、会话请求失效、来源默认折叠和端口来源；[DES-006](./DES-006-运行时设置与Trace.md#chunking)将分块纳入下一上传快照，Trace按下一请求生效。测试见[TEST-005](../测试/TEST-005-设置与Trace回归.md#chunking)。

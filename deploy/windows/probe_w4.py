@@ -129,7 +129,7 @@ def exercise(root):
     owned = []
     try:
         print("W4: start extracted ZIP and create baseline via actual GPU HTTP upload", flush=True)
-        cli("start", "--no-browser", "--port", str(port))
+        cli("start", "--no-browser", "--no-tray", "--port", str(port))
         baseline = upload("baseline")
         wait_for(sparse_ready)
         cli("stop")
@@ -144,7 +144,7 @@ def exercise(root):
         child.wait(timeout=20)
         thread.join(timeout=20)
         assert not thread.is_alive()
-        cli("start", "--no-browser", "--port", str(port))
+        cli("start", "--no-browser", "--no-tray", "--port", str(port))
         wait_for(sparse_ready)
         with sqlite3.connect(root / "data/metadata.db") as db:
             assert db.execute("PRAGMA integrity_check").fetchone() == ("ok",)
@@ -164,7 +164,7 @@ def exercise(root):
         wait_for((root / "temp/w4-rebuild.json").exists)
         cli("stop", "--timeout", "0", "--force")
         child.wait(timeout=20)
-        cli("start", "--no-browser", "--port", str(port))
+        cli("start", "--no-browser", "--no-tray", "--port", str(port))
         wait_for(sparse_ready)
         assert request(f'/api/documents/id/{uploaded["document_id"]}/preview')
         answer = request("/api/chat", body=json.dumps({"question": "备份知识库前怎么操作？"}).encode())
@@ -187,7 +187,7 @@ def exercise(root):
         out, err = stopper.communicate(timeout=120)
         assert stopper.returncode == 0, err[-1000:]
         child.wait(timeout=20)
-        cli("start", "--no-browser", "--port", str(port))
+        cli("start", "--no-browser", "--no-tray", "--port", str(port))
         wait_for(sparse_ready)
         assert request(f'/api/documents/id/{result[0]["document_id"]}/preview')
         cli("stop")

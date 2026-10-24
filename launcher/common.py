@@ -164,7 +164,9 @@ def same_process(root: Path, record: dict, *, action: str = "serve", process=Non
             return False
         if action == "start":
             return "start" in command
-        return ("serve" in command and "--instance-id" in command
+        if action not in {"serve", "tray"}:
+            return False
+        return (action in command and "--instance-id" in command
                 and command[command.index("--instance-id") + 1] == valid_instance(record["instance_id"]))
     except (OSError, ValueError, KeyError, IndexError, psutil.Error):
         return False

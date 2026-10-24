@@ -59,9 +59,9 @@ def exercise(root: Path) -> dict:
 
     port = free_port()
     command = [str(root / "runtime/python.exe"), str(root / "launcher/portable.py"),
-               "start", "--no-browser", "--port", str(port)]
+               "start", "--no-browser", "--no-tray", "--port", str(port)]
     print("W3: concurrent GPU start via CMD and direct launcher...", flush=True)
-    commands = [["cmd.exe", "/d", "/c", str(root / "启动.cmd"), "--no-browser", "--port", str(port)], command]
+    commands = [["cmd.exe", "/d", "/c", str(root / "启动.cmd"), "--no-browser", "--no-tray", "--port", str(port)], command]
     children = [subprocess.Popen(item, cwd=root / "temp", stdin=subprocess.DEVNULL,
                                  stdout=subprocess.PIPE, stderr=subprocess.PIPE) for item in commands]
     outcomes = []
@@ -127,7 +127,7 @@ def exercise(root: Path) -> dict:
     try:
         other_port = dummy.server_port
         assert request(other_port, "/api/health")[0] == 200
-        run(root, ["start", "--cpu", "--no-browser", "--port", str(other_port)], expected=1)
+        run(root, ["start", "--cpu", "--no-browser", "--no-tray", "--port", str(other_port)], expected=1)
         assert request(other_port, "/api/health")[0] == 200
         result["foreign_http200_port_untouched"] = "passed"
     finally:
@@ -142,7 +142,7 @@ def exercise(root: Path) -> dict:
     result["stale_pid_not_killed"] = "passed"
     # Stop while the new server is still initializing, before browser readiness.
     pending = subprocess.Popen([str(root / "runtime/python.exe"), str(root / "launcher/portable.py"),
-                                "start", "--cpu", "--no-browser", "--port", str(port)],
+                                "start", "--cpu", "--no-browser", "--no-tray", "--port", str(port)],
                                 cwd=root / "temp", stdin=subprocess.DEVNULL,
                                 stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     deadline = time.monotonic() + 120
@@ -159,7 +159,7 @@ def exercise(root: Path) -> dict:
     result["stop_during_initialization"] = "passed"
     print("W3: initialization cancelled cleanly; testing CPU CMD and forced owned stop...", flush=True)
     # CPU CMD forwards its options and works independently of caller cwd.
-    cpu = run(root, ["--no-browser", "--port", str(port)], wrapper="CPU启动.cmd")
+    cpu = run(root, ["--no-browser", "--no-tray", "--port", str(port)], wrapper="CPU启动.cmd")
     assert cpu["device"] == "cpu"
     status, data, _ = request(port, f"/api/documents/id/{document_id}/preview")
     assert status == 200, data
@@ -169,7 +169,7 @@ def exercise(root: Path) -> dict:
     assert run(root, ["stop", "--timeout", "0", "--force"])["outcome"] == "stopped"
     assert not same_process(root, cpu)
     result["explicit_force_stop_owned_instance"] = "passed"
-    assert run(root, ["--no-browser", "--port", str(port)], wrapper="CPU启动.cmd")["device"] == "cpu"
+    assert run(root, ["--no-browser", "--no-tray", "--port", str(port)], wrapper="CPU启动.cmd")["device"] == "cpu"
     (root / "temp/unknown-user-file.txt").write_text("keep", encoding="utf-8")
     run(root, ["maintain", "--action", "cache", "--yes"], expected=1)
     assert (root / "temp/unknown-user-file.txt").is_file()

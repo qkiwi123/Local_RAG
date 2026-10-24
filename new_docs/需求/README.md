@@ -1,5 +1,7 @@
 # 需求文档导航
 
+2026-10-24便携入口：[REQ-006](./REQ-006-本地运行与数据安全.md#tray-auto-port)补用户实测后的自动端口/托盘建议，停止仍绑定原实例并确认强制。
+
 2026-10-24回切修正：[REQ-003](./REQ-003-会话与知识库交互.md)明确切换历史/新建后原请求继续，切回恢复进度或保存答案；[DEV-008](../开发/DEV-008-React主前端.md#conversation-return)和[TEST-004](../测试/TEST-004-标签与React交互.md#conversation-return)记录根因与99项回归。
 
 2026-10-24后续：[REQ-003](./REQ-003-会话与知识库交互.md)补新建空白/首条发送持久化、切换清理、来源默认折叠与布局；[REQ-004](./REQ-004-运行时设置与诊断.md#requirements)补分块、Trace开关和端口显示。最终验收见[TEST-004](../测试/TEST-004-标签与React交互.md#conversation-followup)、[TEST-005](../测试/TEST-005-设置与Trace回归.md#chunking)。

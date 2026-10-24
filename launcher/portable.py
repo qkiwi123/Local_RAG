@@ -89,6 +89,39 @@ def available_port(port: int) -> None:
             raise RuntimeError(f"本机端口{port}已占用或不可用；未认领或停止占用程序") from error
 
 
+def bind_listener(port: int | None):
+    """Reserve the actual listening socket; auto fallback has no check/bind race."""
+    listener = socket.socket()
+    if hasattr(socket, "SO_EXCLUSIVEADDRUSE"):
+        listener.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
+    try:
+        try:
+            listener.bind(("127.0.0.1", 8000 if port is None else port))
+        except OSError:
+            if port is not None:
+                raise
+            listener.bind(("127.0.0.1", 0))
+        return listener
+    except OSError as error:
+        listener.close()
+        raise RuntimeError("无法绑定本机端口；明确指定的端口不会被自动替换") from error
+
+
+def ensure_tray(root: Path, record: dict, disabled: bool) -> dict:
+    if disabled:
+        return {"outcome": "disabled"}
+    from launcher.tray import ensure
+
+    try:
+        result = ensure(root, record)
+    except Exception as error:
+        print(f"托盘初始化异常：{error}", file=sys.stderr, flush=True)
+        result = {"outcome": "failed"}
+    if result["outcome"] == "failed":
+        print("后台已启动，但托盘入口未就绪；请查看logs/tray.log，仍可使用停止.cmd。", flush=True)
+    return result
+
+
 def _wait_ready(root: Path, child, instance_id: str, owner: dict, timeout: float) -> dict:
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
@@ -131,12 +164,13 @@ def _cleanup_child(root: Path, child, instance_id: str, *, force: bool) -> None:
 
 
 def _start_attempt(root: Path, manifest: dict, asset_id: str, owner: dict, *,
-                   port: int, device: str, batch_profile: str, timeout: float) -> dict:
+                   port: int | None, device: str, batch_profile: str, timeout: float) -> dict:
     check_cancelled(root, owner)
-    available_port(port)
+    if port is not None:
+        available_port(port)
     instance_id = uuid.uuid4().hex
     command = [str(root / "runtime/python.exe"), str(root / "launcher/portable.py"), "serve",
-               "--instance-id", instance_id, "--asset-id", asset_id, "--port", str(port),
+               "--instance-id", instance_id, "--asset-id", asset_id, "--port", str(port or 0),
                "--device", device, "--batch-profile", batch_profile]
     with safe_path(root, "logs/backend.out.log").open("ab") as stdout, safe_path(root, "logs/backend.error.log").open("ab") as stderr:
         child = subprocess.Popen(command, cwd=root, stdout=stdout, stderr=stderr,
@@ -148,7 +182,7 @@ def _start_attempt(root: Path, manifest: dict, asset_id: str, owner: dict, *,
         raise
 
 
-def start(root: Path, *, cpu: bool = False, port: int = 8000, no_browser: bool = False,
+def start(root: Path, *, cpu: bool = False, port: int | None = None, no_browser: bool = False, no_tray: bool = False,
           accept_cpu_fallback: bool = False, timeout: float = 180) -> dict:
     load_assets(root)  # Source trees fail before creating state or personal data.
     safe_path(root, "state").mkdir(exist_ok=True)
@@ -164,7 +198,7 @@ def start(root: Path, *, cpu: bool = False, port: int = 8000, no_browser: bool =
                 print("当前已有GPU实例；切换CPU须先停止。本次仅打开原实例。", flush=True)
             if not no_browser:
                 webbrowser.open(browser_url(old))
-            return {"outcome": "reused", **old}
+            return {"outcome": "reused", **old, "tray": ensure_tray(root, old, no_tray)}
         if service_locked(root):
             raise RuntimeError("本目录仍有服务锁，未覆盖实例记录或启动第二份服务")
         if old:
@@ -178,7 +212,8 @@ def start(root: Path, *, cpu: bool = False, port: int = 8000, no_browser: bool =
             from backend.portable import prepare_environment
 
             prepare_environment(root, "cpu" if cpu else "cuda:0")
-            available_port(port)
+            if port is not None:
+                available_port(port)
             device = "cpu" if cpu else "cuda:0"
             if not cpu:
                 probe = inspect_gpu(root, owner)
@@ -213,7 +248,7 @@ def start(root: Path, *, cpu: bool = False, port: int = 8000, no_browser: bool =
             if not no_browser:
                 webbrowser.open(browser_url(record))
             print(f"服务已就绪：{browser_url(record)}\n实际模式：{record['device']} / {record['batch_profile']}；关闭浏览器不会停止服务。", flush=True)
-            return {"outcome": "started", **record}
+            return {"outcome": "started", **record, "tray": ensure_tray(root, record, no_tray)}
         finally:
             current = controller(root)
             if current and current["instance_id"] == owner["instance_id"]:
@@ -221,8 +256,10 @@ def start(root: Path, *, cpu: bool = False, port: int = 8000, no_browser: bool =
             safe_path(root, f"state/cancel-{owner['instance_id']}.json").unlink(missing_ok=True)
 
 
-def stop(root: Path, *, timeout: float = 30, force: bool = False) -> dict:
+def stop(root: Path, *, timeout: float = 30, force: bool = False, expected_instance_id: str | None = None) -> dict:
     record = read_record(root)
+    if expected_instance_id is not None and (not record or record["instance_id"] != expected_instance_id):
+        return {"outcome": "instance_changed"}
     starting = controller(root)
     if starting and same_process(root, starting, action="start"):
         write_json(root, f"state/cancel-{valid_instance(starting['instance_id'])}.json", {"cancel": True})
@@ -280,11 +317,9 @@ def serve(root: Path, args) -> None:
         raise ValueError("启动前后资源清单已变化，拒绝启动")
     os.environ.update(RAG_DISTRIBUTION_MODE="portable", RAG_PORTABLE_DEVICE=args.device,
                       RAG_PORTABLE_BATCH_PROFILE=args.batch_profile, PYTHONDONTWRITEBYTECODE="1")
-    with file_lock(root, "service.lock"), socket.socket() as listener:
-        if hasattr(socket, "SO_EXCLUSIVEADDRUSE"):
-            listener.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
-        listener.bind(("127.0.0.1", args.port))
-        record = process_record(root, args.instance_id, port=args.port, asset_id=asset_id,
+    with file_lock(root, "service.lock"), bind_listener(None if args.port == 0 else args.port) as listener:
+        actual_port = listener.getsockname()[1]
+        record = process_record(root, args.instance_id, port=actual_port, asset_id=asset_id,
                                 frontend_build_id=manifest["frontend_build_id"], device=args.device,
                                 batch_profile=args.batch_profile)
         write_json(root, "state/service.json", record)
@@ -292,8 +327,8 @@ def serve(root: Path, args) -> None:
 
         app.state.portable_instance = {name: record[name] for name in
             ("instance_id", "root_id", "asset_id", "frontend_build_id", "pid")}
-        app.state.portable_port = args.port
-        server = uvicorn.Server(uvicorn.Config(app, host="127.0.0.1", port=args.port, workers=1,
+        app.state.portable_port = actual_port
+        server = uvicorn.Server(uvicorn.Config(app, host="127.0.0.1", port=actual_port, workers=1,
                     proxy_headers=False, access_log=False, server_header=False, log_level="info"))
         finished = threading.Event()
         def monitor():
@@ -356,8 +391,9 @@ def main() -> int:
     starter = commands.add_parser("start")
     starter.add_argument("--cpu", action="store_true")
     starter.add_argument("--no-browser", action="store_true")
+    starter.add_argument("--no-tray", action="store_true", help="不创建托盘入口（自动化/无桌面验证）")
     starter.add_argument("--accept-cpu-fallback", action="store_true")
-    starter.add_argument("--port", type=int, default=8000)
+    starter.add_argument("--port", type=int, default=None, help="指定端口；省略时优先8000，占用则由系统分配")
     starter.add_argument("--timeout", type=float, default=180)
     stopper = commands.add_parser("stop")
     stopper.add_argument("--force", action="store_true")
@@ -369,6 +405,8 @@ def main() -> int:
     worker.add_argument("--device", choices=["cpu", "cuda:0"], required=True)
     worker.add_argument("--batch-profile", choices=["normal", "reduced"], default="normal")
     commands.add_parser("inspect-device")
+    tray = commands.add_parser("tray")
+    tray.add_argument("--instance-id", required=True)
     maintenance = commands.add_parser("maintain")
     maintenance.add_argument("--action", choices=["directory", "logs", "cache", "prepare-remove"])
     maintenance.add_argument("--yes", action="store_true")
@@ -377,12 +415,13 @@ def main() -> int:
     root = Path(__file__).resolve().parents[1]
     if os.name != "nt" or not sys.flags.isolated or Path(sys.executable).resolve() != (root / "runtime/python.exe").resolve():
         parser.error("请使用此便携目录自带的Windows解释器和CMD入口")
-    if hasattr(args, "port") and not 1024 <= args.port <= 65535:
+    if (hasattr(args, "port") and args.port is not None and not 1024 <= args.port <= 65535
+            and not (args.command == "serve" and args.port == 0)):
         parser.error("端口必须在1024到65535之间")
     sys.dont_write_bytecode = True
     try:
         if args.command == "start":
-            result = start(root, cpu=args.cpu, port=args.port, no_browser=args.no_browser,
+            result = start(root, cpu=args.cpu, port=args.port, no_browser=args.no_browser, no_tray=args.no_tray,
                            accept_cpu_fallback=args.accept_cpu_fallback, timeout=args.timeout)
         elif args.command == "stop":
             result = stop(root, timeout=args.timeout, force=args.force)
@@ -394,6 +433,11 @@ def main() -> int:
 
             prepare_environment(root, "cuda:0")
             return inspect_device()
+        elif args.command == "tray":
+            from launcher.tray import run
+
+            run(root, args.instance_id)
+            return 0
         else:
             action = args.action
             if action is None:
