@@ -173,6 +173,8 @@ Computer Use已依技能读取接口，尝试观察网页时工具无法可靠�
 
 最终回归8文件208通过/2权限跳过，补齐右键/双击消息路由、打开/停止菜单命令及托盘失败降级；前轮204项仅为阶段历史，不累加。测试全部使用隔离数据，无远程模型调用。
 
+新版642c2809实际ZIP为5,403,060,630字节，CRC及解压全量资产/排除检查通过；解压后的CPU CMD自动端口、原生托盘、新分块设置、真实上传/Hybrid与停止CMD均通过，1条合成来源，SQLite完整性ok，后台与托盘退出。原始报告为build/windows-release/accept-642c2809/RAG/reports/final-package-check.json。汇总与原型报告摘要见[动态端口/托盘结果](../../deploy/windows/tray-port-result.json)。右键实点未因此标为通过。
+
 ## 关联文档
 
 - 关系：Windows发布验收合同；[OPS-005 Windows单人本地发布与初始化方案](../运维/OPS-005-Windows单人本地发布与初始化方案.md)

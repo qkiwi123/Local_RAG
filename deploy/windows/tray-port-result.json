@@ -1,0 +1,69 @@
+{
+  "schema": 1,
+  "date": "2026-10-24",
+  "status": "Automatic ports and native tray implemented; local programmatic acceptance passed; desktop menu click acceptance pending",
+  "branch": "codex/windows-portable",
+  "existing_product_checkpoint": "8fbe2e9",
+  "package_source_commit": "642c28090ca006b6c6beee0868cc3818ecfa3fd0",
+  "package": {
+    "name": "LocalRAG-win64-preview-642c2809.zip",
+    "destination": "User local preference in ignored build/windows-release/output-preference.json",
+    "bytes": 5403060630,
+    "sha256": "b6914bb100d2014debcd09a2fbaa8a8287598a9be7e4908347ba3f5cdc5c7e5b",
+    "files": 34509,
+    "portable_manifest_sha256": "6174ce2e945c0bf2c4afb28adee59e79c3f1afbcb3885fc292019c38a107c725",
+    "crc_and_full_extracted_asset_hashes": "passed",
+    "private_data_and_validation_scripts_excluded": true,
+    "prior_package_preserved": true
+  },
+  "implementation": {
+    "auto_port": "Exclusive socket binds preferred 8000 or OS-assigned port; socket retained for Uvicorn, explicit port never silently replaced",
+    "runtime_url": "Same actual port in service record, health, local-origin guard, browser and tray; frontend existing actual-port display retained",
+    "tray": "Windows stdlib ctypes; separate lightweight process, one icon per root/backend instance, no extra dependency/model",
+    "actions": "Double-click opens website; context menu shows mode/port, open website, stop and exit",
+    "stop": "Instance-bound existing stop file, 30-second explicit force confirmation, expected-instance guard before force stop; stop CMD retained",
+    "restart": "Tray follows backend exit and re-registers after Explorer recreation; launch with --no-tray for headless validation",
+    "settings_boundary": "No application service/autostart/firewall or always-visible-icon setting installed; Windows may retain notification-icon/system records"
+  },
+  "tests": {
+    "backend_files": 8,
+    "backend_passed": 208,
+    "backend_skipped": 2,
+    "skip_reason": "Windows symlink privilege unavailable",
+    "frontend_files": 14,
+    "frontend_passed": 99,
+    "frontend_build": "passed",
+    "coverage": "Port reservation/conflicts; ownership; callback/menu routing; explicit force denial; tray failure fallback; portable/settings/retrieval regressions"
+  },
+  "acceptance": {
+    "old_package_cpu_recheck": "passed with 3 retrieval sources; original synthetic data only",
+    "prototype_directory": "build/tray-dev/RAG",
+    "prototype_report": "reports/tray-acceptance.json",
+    "prototype_report_sha256": "6132e2852070deaad3618f83a8c248605c28e2ae972eda5c3966ecfb06d0b1c9",
+    "prototype_checks": [
+      "Explicit occupied 8000 refused without adopting or stopping its listener",
+      "CPU and GPU automatic-port startup and real Hybrid sources",
+      "Actual port in health and single backend/tray across repeated start",
+      "Stop action shared with menu ends the bound backend and tray",
+      "Document retained across device restart"
+    ],
+    "native_icon_proof": "reports/tray-native-proof.json",
+    "native_icon_proof_sha256": "f83ae2cc120385d3ee356531a9866daa89030936eb7a200891b6efb131c5cb66",
+    "shell_notify_icon_get_rect_hresult": 0,
+    "observed_tray_resident_mib": 36.1,
+    "final_zip_directory": "build/windows-release/accept-642c2809/RAG",
+    "final_zip_report": "reports/final-package-check.json",
+    "final_zip_report_sha256": "ac7e3c13e4eeaf852c9d1ac4cb164a62a1038d31c32cc335dfc9124351132046",
+    "final_zip_checks": "Real CPU CMD starts a native tray; health has actual port; chunking settings present; actual upload/Hybrid returns 1 source; stop CMD exits service/tray; SQLite integrity ok",
+    "all_test_services_stopped": true,
+    "remote_model_api_calls": 0
+  },
+  "limits": [
+    "Desktop automation stopped because the tool could not confidently establish the current Chrome URL; no further desktop input or alternate UI bypass attempted",
+    "Taskbar window was not exposed by desktop inventory; physical right-click/menu-click and browser visual acceptance remain manual",
+    "Native icon existence and action APIs were real; menu message/command routing uses unit coverage, not a claimed mouse test",
+    "CPU inference tested on this NVIDIA-equipped host; no-driver/clean Windows remains untested",
+    "Original wheel/VC redistribution provenance and W5 full system-write/move/backup/removal/scale gates remain open; this is an internal preview",
+    "Browser and Windows notification-icon/system records may remain outside package; no zero-external-write claim"
+  ]
+}
