@@ -177,6 +177,10 @@ async def startup_event():
     )
     app.state.runtime_settings_manager = RuntimeSettingsManager()
     recover_interrupted_requests()
+    if settings.DISTRIBUTION_MODE == "portable":
+        from backend.services.portable_recovery import recover_interrupted_ingests
+
+        app.state.portable_ingest_recovery = recover_interrupted_ingests()
     app.state.model_warmup_thread = start_background_warmup()
     # P6-A：Sparse后台重建协调。仅bm25s_mmap部署生效；启动时识别
     # dirty/错配指针并自愈重建，重启不会把持久化dirty悄悄恢复成ready。
@@ -209,21 +213,14 @@ async def startup_event():
 @app.on_event("shutdown")
 async def shutdown_event():
     """停止后台任务；Sparse重建worker退出前不再发布新generation。"""
+    if settings.DISTRIBUTION_MODE == "portable":
+        from backend.services.portable_shutdown import drain
+
+        app.state.portable_shutdown_result = await drain(getattr(app.state, "model_warmup_thread", None))
+        return
     try:
         from backend.services import sparse_rebuild
 
-        if settings.DISTRIBUTION_MODE == "portable":
-            import asyncio
-
-            while not (await asyncio.to_thread(sparse_rebuild.stop_worker, timeout=1.0))["stopped"]:
-                await asyncio.sleep(0.1)
-            from backend.services import sparse_retriever
-
-            sparse_retriever.clear_cache()
-            warmup_thread = getattr(app.state, "model_warmup_thread", None)
-            while warmup_thread is not None and warmup_thread.is_alive():
-                await asyncio.to_thread(warmup_thread.join, 1.0)
-        else:
-            sparse_rebuild.stop_worker(timeout=5.0)
+        sparse_rebuild.stop_worker(timeout=5.0)
     except Exception:  # noqa: BLE001
         pass

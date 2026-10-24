@@ -94,7 +94,8 @@ def service_locked(root: Path) -> bool:
 def load_assets(root: Path) -> tuple[dict, str]:
     path = safe_path(root, "portable-manifest.json")
     manifest = read_json(path)
-    if manifest.get("format") != 1 or manifest.get("stage") != "W3 internal prototype":
+    if manifest.get("format") != 1 or manifest.get("stage") not in {
+            "W3 internal prototype", "W4 internal preview"}:
         raise ValueError("缺少匹配的便携清单；不能把源码目录直接当作便携包启动")
     required = {"runtime/python.exe", "runtime/python314._pth", "backend/main.py",
                 "launcher/portable.py", "web/dist/index.html", "locks/w1-lock.json"}
