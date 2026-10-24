@@ -118,7 +118,7 @@ export function RuntimeStatusCard({
             {
               key: "chunk",
               label: "Chunk 配置",
-              children: `${status.index.chunk_size} / overlap ${status.index.chunk_overlap} / max tokens ${status.index.chunk_max_tokens}`,
+              children: `${status.index.chunk_size} 字符 / 重叠 ${status.index.chunk_overlap} 字符 / ${status.index.chunk_strategy === "recursive" ? `上限 ${status.index.chunk_max_tokens} Token` : "固定长度切分"}（下一次上传使用）`,
             },
             {
               key: "sparse-index",

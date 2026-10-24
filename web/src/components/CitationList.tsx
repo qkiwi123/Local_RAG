@@ -1,4 +1,5 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
+import { DownOutlined, FileSearchOutlined } from "@ant-design/icons";
 import { Button, List, Modal, Spin, Typography } from "antd";
 import { api } from "../api/client";
 import type { Citation, CitationPreviewPayload } from "../api/types";
@@ -155,6 +156,8 @@ function CitationPreviewModal({
 
 export function CitationList({ citations }: { citations: Citation[] }) {
   const [openCitation, setOpenCitation] = useState<Citation | null>(null);
+  const [expanded, setExpanded] = useState(false);
+  const contentId = useId();
 
   if (!citations.length) {
     return null;
@@ -167,7 +170,12 @@ export function CitationList({ citations }: { citations: Citation[] }) {
 
   return (
     <section className="citation-list" aria-label="本轮检索来源">
-      <Text strong>📎 本轮检索来源</Text>
+      <button type="button" className="citation-list__toggle" aria-expanded={expanded} aria-controls={contentId}
+        onClick={() => { setExpanded((value) => !value); setOpenCitation(null); }}>
+        <FileSearchOutlined /><span>本轮检索来源</span><small>{citations.length} 个片段</small>
+        <DownOutlined className={expanded ? "citation-list__arrow citation-list__arrow--open" : "citation-list__arrow"} />
+      </button>
+      {expanded && <div id={contentId} className="citation-list__body">
       <div>
         <Text type="secondary">按正文中的来源编号分组，可查看原文自行核对。</Text>
       </div>
@@ -202,6 +210,7 @@ export function CitationList({ citations }: { citations: Citation[] }) {
           />
         </section>
       ))}
+      </div>}
       {openCitation &&
         openCitation.document_id &&
         openCitation.chunk_id && (

@@ -6,7 +6,7 @@
 - 文档类型：设计
 - 状态：已完成
 - 创建日期：2026-08-27
-- 最后更新：2026-09-19
+- 最后更新：2026-10-24
 - 证据口径：当前文件静态核对；2026-09-12已实现回答/改写独立生成配置、provider适配、查询改写开关和Trace配置快照；全量结果在[TEST-005](../测试/TEST-005-设置与Trace回归.md#evidence)登记。
 - 完成范围：设置快照、Trace安全、旧Trace兼容、`chat-v2`及通用生成控制已完成；跨模型/兼容端点真实调用、生产代理和长期性能仍未验收。
 - 导航：[本类目录](./README.md) · [文档中心](../README.md)
@@ -30,10 +30,19 @@ GET /api/settings读取脱敏值；GET /api/settings/runtime-status不冷加载�
 
 思考模式为`provider_default/enabled/disabled`，思考强度为`provider_default/low/medium/high/max`。界面不根据某个模型名禁用Temperature或其他字段，只给兼容性提示。调用适配层在DeepSeek下用`extra_body.thinking`表达显式开关，在通用OpenAI-compatible下用`reasoning_effort`表达明确开关/强度；明确关闭时模式优先并映射为`none`，明确开启但未选强度时映射为`medium`，两者均为默认时不发送控制。未知兼容端点可能忽略或拒绝参数，必须保留显式错误和Trace，不做静默重试或参数删除。
 
-Embedding模型、维度、路径、切分与设备是部署/重建级配置，不在动态白名单。Key省略表示保持，显式replace/clear才修改；clear不是“使用空字符串猜测意图”。
+Embedding模型、维度、路径和设备仍是部署/重建级配置，不在动态白名单。文档切分从2026-10-24起单列为`chunking`动态分组，仅影响新上传；Key省略表示保持，显式replace/clear才修改；clear不是“使用空字符串猜测意图”。
+
+<a id="chunking"></a>
+### 文档分块配置（2026-10-24）
+
+`chunking.strategy/chunk_size/chunk_overlap/max_tokens`加入同一不可变快照、JSON覆盖、GET/PATCH和RESET，不迁移SQLite表。默认依次来自`CHUNK_STRATEGY/CHUNK_SIZE/CHUNK_OVERLAP/CHUNK_MAX_TOKENS`；字段生效级别为`next_document_upload`。完整合并后验证整数及重叠小于长度，错误不提交；`reset section=chunking`或`all`删除对应覆盖。
+
+上传读取一次snapshot，视觉和分块共用该snapshot；处理中设置变化不改当前文件的切分。固定方式保持原算法且不使用Token上限，递归方式按语义边界并使用Embedding分词器计数。状态页显示下一次上传使用的有效值，不宣称现有全库按该配置生成。旧文档不会自动重新解析/切分；需要重新上传。持久化BM25的`chunking`合同仍描述部署兼容基线，页面保存不触发重建；真实语料写入才走既有revision/dirty/后台重建。实现与验证见[DEV-009](../开发/DEV-009-运行时设置与密钥.md#chunking)、[TEST-005](../测试/TEST-005-设置与Trace回归.md#chunking)。
 
 <a id="trace"></a>
 ## 4. Trace数据合同与采集点
+
+2026-10-24增加`retrieval.trace_enabled`动态布尔覆盖，默认来自`RETRIEVAL_TRACE_ENABLED`，沿用revision、字段来源、PATCH和retrieval/all恢复。`RetrievalRuntimeConfig`接收请求开始冻结的开关，`retrieve_with_trace`使用该值；无快照的脚本才读取部署默认。关闭不计算或保存新Trace，历史可读；不会删除历史记录。实现[DEV-009](../开发/DEV-009-运行时设置与密钥.md#trace-switch)，验证[TEST-005](../测试/TEST-005-设置与Trace回归.md#chunking)。
 
 | 字段 | 来源 | 兼容规则 |
 |---|---|---|
@@ -75,6 +84,7 @@ called指调用尝试，不是调用成功；先尝试追问改写后空检索�
 
 | 日期 | 内容 | 原因 |
 |---|---|---|
+| 2026-10-24 | 将文档分块纳入上传级快照、增量设置与恢复；保留部署索引合同和旧文档边界 | 补齐可配置入口而不在保存时重切生产库 |
 | 2026-09-19 | 区分Trace摘要与消息思考存储，更新硬门控产品决策 | 避免沿用09-12不展示思考和等待校准的旧说明 |
 | 2026-09-12 | 设计并落地回答/改写独立通用生成字段、provider适配、提示而不禁用的UI原则、关闭状态和Trace配置摘要 | 支持更换模型与兼容端点，避免把设置逻辑固化到单一模型，同时明确不展示原始思考文本 |
 | 2026-09-09 | 落地`chat-v2`总耗时边界、五项可选字段、改写状态、持久化自引用规避和Drawer分区合同 | 将已评审设计转为可验证实现并保持旧Trace兼容 |

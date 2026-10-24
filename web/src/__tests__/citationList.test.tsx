@@ -157,12 +157,25 @@ afterEach(() => {
 });
 
 describe("CitationList 来源分组", () => {
+  it("来源默认折叠，展开后展示片段，收起后保留紧凑计数", () => {
+    render(<CitationList citations={[citation]} />);
+    const toggle = screen.getByRole("button", { name: /本轮检索来源/ });
+    expect(toggle).toHaveAttribute("aria-expanded", "false");
+    expect(screen.queryByText(/【来源1】/)).not.toBeInTheDocument();
+    fireEvent.click(toggle);
+    expect(toggle).toHaveAttribute("aria-expanded", "true");
+    expect(screen.getByText(/【来源1】/)).toBeVisible();
+    fireEvent.click(toggle);
+    expect(screen.queryByText(/【来源1】/)).not.toBeInTheDocument();
+    expect(toggle).toHaveTextContent("1 个片段");
+  });
   it("同一文档的已引用与未引用片段分别展示，原编号与预览目标保持一致", async () => {
     mocks.getCitationPreview.mockResolvedValue(preview);
     render(<CitationList citations={[
       { ...citation, source_id: 2, chunk_id: "other-chunk", cited_in_answer: true },
       { ...citation, source_id: 4, cited_in_answer: false },
     ]} />);
+    fireEvent.click(screen.getByRole("button", { name: /本轮检索来源/ }));
     expect(screen.getByRole("region", { name: "本轮检索来源" })).toBeVisible();
     const cited = within(screen.getByRole("region", { name: "正文已引用" }));
     const uncited = within(screen.getByRole("region", { name: "正文未引用" }));
@@ -180,12 +193,14 @@ describe("CitationList 来源分组", () => {
 
   it("拒答或正文无编号时仍展示所有未引用来源", () => {
     render(<CitationList citations={[{ ...citation, cited_in_answer: false }]} />);
+    fireEvent.click(screen.getByRole("button", { name: /本轮检索来源/ }));
     expect(within(screen.getByRole("region", { name: "正文已引用" })).getByText("无")).toBeVisible();
     expect(within(screen.getByRole("region", { name: "正文未引用" })).getByText(/【来源1】/)).toBeVisible();
   });
 
   it("旧消息缺省归入已引用，空检索不凭空补来源", () => {
     const { rerender } = render(<CitationList citations={[citation]} />);
+    fireEvent.click(screen.getByRole("button", { name: /本轮检索来源/ }));
     expect(within(screen.getByRole("region", { name: "正文已引用" })).getByText(/【来源1】/)).toBeVisible();
     rerender(<CitationList citations={[]} />);
     expect(screen.queryByRole("region", { name: "本轮检索来源" })).toBeNull();
@@ -245,6 +260,7 @@ describe("CitationList 引用定位", () => {
   it("加载完整预览后定位目标，并在用户操作后停止图片加载校正", async () => {
     mocks.getCitationPreview.mockResolvedValue(preview);
     render(<CitationList citations={[citation]} />);
+    fireEvent.click(screen.getByRole("button", { name: /本轮检索来源/ }));
 
     fireEvent.click(screen.getByRole("button", { name: /查看原文/ }));
 
@@ -268,6 +284,7 @@ describe("CitationList 引用定位", () => {
   it("快速响应时等待弹窗打开动画完成，不能只等待两帧", async () => {
     mocks.getCitationPreview.mockResolvedValue(preview);
     render(<CitationList citations={[citation]} />);
+    fireEvent.click(screen.getByRole("button", { name: /本轮检索来源/ }));
     fireEvent.click(screen.getByRole("button", { name: /查看原文/ }));
     await screen.findByLabelText("引用原文内容");
     await act(async () => {
@@ -288,6 +305,7 @@ describe("CitationList 引用定位", () => {
       resolvePreview = resolve;
     }));
     render(<CitationList citations={[citation]} />);
+    fireEvent.click(screen.getByRole("button", { name: /本轮检索来源/ }));
     fireEvent.click(screen.getByRole("button", { name: /查看原文/ }));
     act(() => mocks.finishOpening());
     expect(mocks.scrollTo).not.toHaveBeenCalled();
@@ -298,6 +316,7 @@ describe("CitationList 引用定位", () => {
   it("打开动画结束前已手动浏览时，不再强制跳转", async () => {
     mocks.getCitationPreview.mockResolvedValue(preview);
     render(<CitationList citations={[citation]} />);
+    fireEvent.click(screen.getByRole("button", { name: /本轮检索来源/ }));
     fireEvent.click(screen.getByRole("button", { name: /查看原文/ }));
     const container = await screen.findByLabelText("引用原文内容");
     fireEvent.wheel(container);

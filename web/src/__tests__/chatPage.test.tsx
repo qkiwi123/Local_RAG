@@ -66,6 +66,7 @@ describe("ChatPage 检索范围", () => {
       },
     ]);
     mocks.listConversations.mockResolvedValue([conversation]);
+    mocks.createConversation.mockResolvedValue({ ...conversation, conversation_id: "new-conversation", title: "新对话" });
     mocks.getConversation.mockResolvedValue({ ...conversation, messages: [] });
     mocks.streamChat.mockImplementation(
       async (
@@ -134,6 +135,166 @@ describe("ChatPage 检索范围", () => {
     expect(await screen.findByText("以前的问题")).toBeVisible();
     expect(screen.getByLabelText("问题输入框").closest(".chat-main")).toHaveClass("chat-main--conversation");
     expect(screen.queryByText("今天想从知识库里了解什么？")).not.toBeInTheDocument();
+  });
+
+  it("点击新建和输入草稿均不创建记录，首次发送才创建且只创建一次", async () => {
+    render(<ChatPage />);
+    await waitFor(() => expect(mocks.getConversation).toHaveBeenCalledTimes(1));
+    fireEvent.click(screen.getByRole("button", { name: /新建对话/ }));
+    fireEvent.click(screen.getByRole("button", { name: /新建对话/ }));
+    expect(mocks.createConversation).not.toHaveBeenCalled();
+    expect(screen.getByLabelText("1 个会话")).toBeInTheDocument();
+    const input = screen.getByLabelText("问题输入框");
+    expect(input.closest(".chat-main")).toHaveClass("chat-main--welcome");
+    fireEvent.change(input, { target: { value: "第一条问题" } });
+    expect(mocks.createConversation).not.toHaveBeenCalled();
+    mocks.listConversations.mockResolvedValue([{ ...conversation, conversation_id: "new-conversation" }, conversation]);
+    fireEvent.click(screen.getByRole("button", { name: /发\s*送/ }));
+    await waitFor(() => expect(mocks.streamChat).toHaveBeenCalledTimes(1));
+    expect(mocks.createConversation).toHaveBeenCalledTimes(1);
+    expect(mocks.streamChat.mock.calls[0][0]).toMatchObject({
+      conversation_id: "new-conversation", question: "第一条问题", expected_last_message_id: null,
+    });
+    await waitFor(() => expect(screen.getByLabelText("2 个会话")).toBeInTheDocument());
+  });
+
+  it("刷新显式新建的空白页时保留空白状态，不自动打开旧会话", async () => {
+    window.sessionStorage.setItem("rag.activeConversationId", "new");
+    render(<ChatPage />);
+    await waitFor(() => expect(mocks.listConversations).toHaveBeenCalled());
+    expect(mocks.getConversation).not.toHaveBeenCalled();
+    expect(mocks.createConversation).not.toHaveBeenCalled();
+    expect(screen.getByText("今天想从知识库里了解什么？")).toBeVisible();
+  });
+
+  it("切换会话隐藏原动画但继续后台生成，返回时恢复对应进度", async () => {
+    const other = { ...conversation, conversation_id: "conversation-2", title: "第二个会话" };
+    mocks.listConversations.mockResolvedValue([conversation, other]);
+    mocks.getConversation.mockImplementation(async (id) => ({ ...conversation, conversation_id: id, messages: [] }));
+    const runs: { handlers: import("../api/stream").ChatStreamHandlers; signal: AbortSignal; finish: () => void }[] = [];
+    mocks.streamChat.mockImplementation(async (_payload, handlers, signal) => {
+      await new Promise<void>((resolve) => runs.push({ handlers, signal, finish: resolve }));
+      return { events: [], aborted: signal.aborted };
+    });
+    render(<ChatPage />);
+    await waitFor(() => expect(mocks.getConversation).toHaveBeenCalledTimes(1));
+    const ask = (text: string) => {
+      fireEvent.change(screen.getByLabelText("问题输入框"), { target: { value: text } });
+      fireEvent.click(screen.getByRole("button", { name: /发\s*送/ }));
+    };
+    ask("旧问题");
+    await screen.findByText("正在检索并生成回答…");
+    fireEvent.click(screen.getByRole("button", { name: "打开会话「第二个会话」" }));
+    expect(runs[0].signal.aborted).toBe(false);
+    expect(screen.queryByText("正在检索并生成回答…")).not.toBeInTheDocument();
+    expect(screen.queryByText("旧问题")).not.toBeInTheDocument();
+    await waitFor(() => expect(mocks.getConversation).toHaveBeenCalledTimes(2));
+    ask("新问题");
+    await waitFor(() => expect(runs).toHaveLength(2));
+    act(() => runs[0].handlers.onDelta?.({ event: "delta", text: "第一个会话的后台回答" }));
+    expect(screen.queryByText("第一个会话的后台回答")).not.toBeInTheDocument();
+    expect(screen.getByText("正在检索并生成回答…")).toBeVisible();
+    expect(screen.getByRole("button", { name: /停止/ })).toBeVisible();
+    fireEvent.click(screen.getByRole("button", { name: /新建对话/ }));
+    expect(runs[1].signal.aborted).toBe(false);
+    expect(screen.queryByText("正在检索并生成回答…")).not.toBeInTheDocument();
+    expect(screen.getByLabelText("问题输入框").closest(".chat-main")).toHaveClass("chat-main--welcome");
+    fireEvent.click(screen.getByRole("button", { name: "打开会话「测试会话」" }));
+    expect(await screen.findByText("第一个会话的后台回答")).toBeVisible();
+    expect(screen.getByText("旧问题")).toBeVisible();
+    expect(screen.queryByText("新问题")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /停止/ })).toBeVisible();
+    await act(async () => {
+      runs[1].handlers.onDone?.({ event: "done" });
+      runs[1].finish();
+    });
+    expect(screen.getByText("第一个会话的后台回答")).toBeVisible();
+    expect(screen.getByRole("button", { name: /停止/ })).toBeVisible();
+    await act(async () => {
+      runs[0].handlers.onDone?.({ event: "done" });
+      runs[0].finish();
+    });
+    expect(mocks.createConversation).not.toHaveBeenCalled();
+    expect(mocks.deleteConversation).not.toHaveBeenCalled();
+  });
+
+  it("首次发送创建尚未返回时切换历史会话，迟到结果不切回新会话", async () => {
+    let finishCreate!: (value: typeof conversation) => void;
+    mocks.createConversation.mockReturnValueOnce(new Promise((resolve) => { finishCreate = resolve; }));
+    render(<ChatPage />);
+    await waitFor(() => expect(mocks.getConversation).toHaveBeenCalledTimes(1));
+    fireEvent.click(screen.getByRole("button", { name: /新建对话/ }));
+    fireEvent.change(screen.getByLabelText("问题输入框"), { target: { value: "创建中的问题" } });
+    fireEvent.click(screen.getByRole("button", { name: /发\s*送/ }));
+    await waitFor(() => expect(mocks.createConversation).toHaveBeenCalledTimes(1));
+    fireEvent.click(screen.getByRole("button", { name: "打开会话「测试会话」" }));
+    await act(async () => finishCreate({ ...conversation, conversation_id: "late-created" }));
+    expect(mocks.streamChat).toHaveBeenCalledTimes(1);
+    expect(mocks.streamChat.mock.calls[0][0]).toMatchObject({
+      conversation_id: "late-created", question: "创建中的问题",
+    });
+    expect(mocks.deleteConversation).not.toHaveBeenCalled();
+    expect(screen.queryByText("正在检索并生成回答…")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "打开会话「测试会话」" })).toHaveAttribute("aria-current", "page");
+  });
+
+  it("后台生成完成后切回，读取已保存答案且没有失败状态", async () => {
+    let finish!: () => void;
+    let handlers!: import("../api/stream").ChatStreamHandlers;
+    mocks.streamChat.mockImplementationOnce(async (_payload, callbacks) => {
+      handlers = callbacks;
+      await new Promise<void>((resolve) => { finish = resolve; });
+      handlers.onDone?.({ event: "done" });
+      return { events: [], aborted: false };
+    });
+    render(<ChatPage />);
+    await waitFor(() => expect(mocks.getConversation).toHaveBeenCalledTimes(1));
+    fireEvent.change(screen.getByLabelText("问题输入框"), { target: { value: "后台完成的问题" } });
+    fireEvent.click(screen.getByRole("button", { name: /发\s*送/ }));
+    await waitFor(() => expect(mocks.streamChat).toHaveBeenCalledTimes(1));
+    const signal = mocks.streamChat.mock.calls[0][2] as AbortSignal;
+    fireEvent.click(screen.getByRole("button", { name: /新建对话/ }));
+    expect(signal.aborted).toBe(false);
+    mocks.getConversation.mockResolvedValue({ ...conversation, messages: [
+      { message_id: "u-saved", request_id: "request-1", sequence: 0, role: "user", content: "后台完成的问题", status: "complete", citations: [], created_at: "" },
+      { message_id: "a-saved", request_id: "request-1", sequence: 1, role: "assistant", content: "后台完成并保存的回答", status: "complete", citations: [], created_at: "" },
+    ] });
+    await act(async () => { handlers.onDelta?.({ event: "delta", text: "后台完成并保存的回答" }); finish(); });
+    expect(screen.getByText("今天想从知识库里了解什么？")).toBeVisible();
+    fireEvent.click(screen.getByRole("button", { name: "打开会话「测试会话」" }));
+    expect(await screen.findByText("后台完成并保存的回答")).toBeVisible();
+    expect(screen.queryByText("处理失败")).not.toBeInTheDocument();
+    expect(screen.queryByText("正在检索并生成回答…")).not.toBeInTheDocument();
+    expect(mocks.streamChat).toHaveBeenCalledTimes(1);
+  });
+
+  it("返回会话后停止只中断当前会话，其他会话继续生成", async () => {
+    const other = { ...conversation, conversation_id: "conversation-2", title: "第二个会话" };
+    mocks.listConversations.mockResolvedValue([conversation, other]);
+    mocks.getConversation.mockImplementation(async (id) => ({ ...conversation, conversation_id: id, messages: [] }));
+    const runs: { signal: AbortSignal; finish: () => void }[] = [];
+    mocks.streamChat.mockImplementation(async (_payload, handlers, signal) => {
+      await new Promise<void>((resolve) => runs.push({ signal, finish: resolve }));
+      if (!signal.aborted) handlers.onDone?.({ event: "done" });
+      return { events: [], aborted: signal.aborted };
+    });
+    render(<ChatPage />);
+    await waitFor(() => expect(mocks.getConversation).toHaveBeenCalledTimes(1));
+    const ask = (text: string) => {
+      fireEvent.change(screen.getByLabelText("问题输入框"), { target: { value: text } });
+      fireEvent.click(screen.getByRole("button", { name: /发\s*送/ }));
+    };
+    ask("第一会话问题");
+    await waitFor(() => expect(runs).toHaveLength(1));
+    fireEvent.click(screen.getByRole("button", { name: "打开会话「第二个会话」" }));
+    await waitFor(() => expect(mocks.getConversation).toHaveBeenCalledTimes(2));
+    ask("第二会话问题");
+    await waitFor(() => expect(runs).toHaveLength(2));
+    fireEvent.click(screen.getByRole("button", { name: "打开会话「测试会话」" }));
+    fireEvent.click(screen.getByRole("button", { name: /停止/ }));
+    expect(runs[0].signal.aborted).toBe(true);
+    expect(runs[1].signal.aborted).toBe(false);
+    await act(async () => { runs[0].finish(); runs[1].finish(); });
   });
 
   it("请求尚未返回时立即显示用户问题，再显示模型思考状态", async () => {

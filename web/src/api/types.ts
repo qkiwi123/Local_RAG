@@ -286,6 +286,7 @@ export interface RefusalGateSettings {
 }
 
 export interface RetrievalSettings {
+  trace_enabled: boolean;
   mode: "dense" | "bm25" | "hybrid";
   final_top_k: number;
   dense_candidate_k: number;
@@ -300,17 +301,26 @@ export interface RetrievalSettings {
   refusal_gate: RefusalGateSettings;
 }
 
+export interface ChunkingSettings {
+  strategy: "fixed" | "recursive";
+  chunk_size: number;
+  chunk_overlap: number;
+  max_tokens: number;
+}
+
 export interface SettingsReadResponse {
   revision: number;
   updated_at?: string | null;
   llm: LlmSettings;
   vision: VisionSettings;
   retrieval: RetrievalSettings;
+  chunking: ChunkingSettings;
   runtime: {
     access_scope: "trusted_local_workspace";
     llm_activation: SettingsActivation;
     vision_activation: "next_document_upload";
     retrieval_activation: SettingsActivation;
+    chunking_activation: "next_document_upload";
     refusal_gate_activation: SettingsActivation;
   };
   field_sources: Record<string, SettingsFieldSource>;
@@ -365,6 +375,7 @@ export interface VisionSettingsPatch {
 }
 
 export interface RetrievalSettingsPatch {
+  trace_enabled?: boolean;
   mode?: "dense" | "bm25" | "hybrid";
   final_top_k?: number;
   dense_candidate_k?: number;
@@ -377,6 +388,8 @@ export interface RetrievalSettingsPatch {
   reranker_candidate_k?: number;
   max_chunks_per_document?: number;
 }
+
+export type ChunkingSettingsPatch = Partial<ChunkingSettings>;
 
 export interface SettingsPatchResponse {
   revision: number;

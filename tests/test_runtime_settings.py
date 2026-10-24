@@ -334,6 +334,41 @@ def test_non_whitelist_fields_are_rejected_without_revision_change(temp_dir, pat
     assert manager._store.load().revision == 0
 
 
+def test_chunking_persists_and_resets_without_mutating_existing_snapshot(temp_dir):
+    environment = _environment(CHUNK_STRATEGY="fixed", CHUNK_SIZE=400,
+                               CHUNK_OVERLAP=40, CHUNK_MAX_TOKENS=480)
+    manager = _manager(temp_dir, environment=environment)
+    before = manager.snapshot()
+    after, changed = manager.update_settings(
+        {"chunking": {"strategy": "recursive", "chunk_size": 640,
+                      "chunk_overlap": 100, "max_tokens": 420}}, expected_revision=0,
+    )
+    assert after.chunking.chunk_size == 640
+    assert before.chunking.chunk_size == 400
+    assert after.field_sources["chunking.chunk_size"] == "runtime"
+    assert sorted(changed) == sorted(f"chunking.{key}" for key in
+                                    ("strategy", "chunk_size", "chunk_overlap", "max_tokens"))
+    restarted = _manager(temp_dir, environment=environment)
+    assert restarted.snapshot().chunking == after.chunking
+    reset, _ = restarted.reset_settings("chunking", expected_revision=1)
+    assert reset.chunking == before.chunking
+    assert reset.field_sources["chunking.chunk_size"] == "environment"
+
+
+@pytest.mark.parametrize("patch", [
+    {"chunk_size": 0}, {"chunk_overlap": -1}, {"chunk_size": 50},
+    {"chunk_overlap": 500}, {"max_tokens": 0}, {"strategy": "semantic"},
+    {"chunk_size": 12.5}, {"chunk_overlap": True}, {"max_tokens": "420"},
+    {"chunk_size": None}, {"unknown": 1},
+])
+def test_invalid_chunking_is_atomic(temp_dir, patch):
+    manager = _manager(temp_dir)
+    with pytest.raises(RuntimeSettingsValidationError):
+        manager.update_settings({"chunking": patch}, expected_revision=0)
+    assert manager.snapshot().revision == 0
+    assert manager._store.load().payload == {}
+
+
 def test_sensitive_unknown_field_does_not_echo_value_in_exception(temp_dir):
     manager = _manager(temp_dir)
     secret = "must-not-appear-in-validation-error"

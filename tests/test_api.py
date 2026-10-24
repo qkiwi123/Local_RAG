@@ -93,6 +93,39 @@ def _upload_path(client, path: Path, upload_name=None):
 
 
 class TestUploadAPI:
+    def test_upload_freezes_chunking_and_applies_new_values_only_to_next_upload(self, client, monkeypatch):
+        from backend.main import app
+        from backend.routers import upload as upload_router
+        from backend.services.document_store import get_document
+
+        manager = app.state.runtime_settings_manager
+        manager.update_settings({"chunking": {"strategy": "recursive", "chunk_size": 40,
+            "chunk_overlap": 5, "max_tokens": 35}}, expected_revision=manager.snapshot().revision)
+        real_parse = upload_router.parse_document_structure
+        batches = []
+
+        def parse_then_change_settings(*args, **kwargs):
+            parsed = real_parse(*args, **kwargs)
+            manager.update_settings({"chunking": {"chunk_size": 80, "chunk_overlap": 0,
+                "max_tokens": 70}}, expected_revision=manager.snapshot().revision)
+            return parsed
+
+        def capture(chunks):
+            batches.append(chunks)
+            return len(chunks)
+
+        monkeypatch.setattr(upload_router, "parse_document_structure", parse_then_change_settings)
+        monkeypatch.setattr(upload_router, "add_chunks", capture)
+        first = client.post("/api/upload", files={"file": ("first.txt", b"abcdefghij" * 20, "text/plain")})
+        assert first.status_code == 200, first.text
+        assert max(chunk.metadata.token_count for chunk in batches[0]) <= 35
+        first_id = first.json()["document_id"]
+        second = client.post("/api/upload", files={"file": ("second.txt", b"abcdefghij" * 20, "text/plain")})
+        assert second.status_code == 200, second.text
+        assert max(chunk.metadata.token_count for chunk in batches[1]) <= 70
+        assert len(batches[1]) < len(batches[0])
+        assert get_document(first_id)["chunk_count"] == len(batches[0])
+
     def test_upload_returns_stable_document_id(self, client):
         from backend.config import settings
         from backend.services.document_store import get_document

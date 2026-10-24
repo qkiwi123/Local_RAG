@@ -13,6 +13,7 @@ from pathlib import Path
 from backend.config import settings
 from backend.models.settings_schemas import (
     APIKeyStatus,
+    ChunkingSettings,
     EffectiveSettingsSnapshot,
     IndexRuntimeStatus,
     LLMSettingsView,
@@ -47,6 +48,7 @@ _LLM_FIELDS = (
     "rewrite_timeout_seconds",
 )
 _RETRIEVAL_FIELDS = (
+    "trace_enabled",
     "mode",
     "final_top_k",
     "dense_candidate_k",
@@ -87,6 +89,7 @@ def build_settings_response(
     snapshot: EffectiveSettingsSnapshot,
 ) -> SettingsReadResponse:
     field_effects = {
+        **{f"chunking.{name}": "next_document_upload" for name in ChunkingSettings.model_fields},
         **{f"vision.{name}": "next_document_upload" for name in VisionSettings.model_fields},
         "vision.api_key": "next_document_upload",
         **{f"llm.{name}": "next_request" for name in _LLM_FIELDS},
@@ -115,6 +118,7 @@ def build_settings_response(
             ),
         ),
         retrieval=snapshot.retrieval,
+        chunking=snapshot.chunking,
         runtime=SettingsRuntimeSummary(),
         field_sources=dict(snapshot.field_sources),
         field_effects=field_effects,
@@ -313,10 +317,10 @@ def build_runtime_status(
         torch=_torch_status(),
         index=IndexRuntimeStatus(
             parser_version=PARSER_VERSION,
-            chunk_strategy=settings.CHUNK_STRATEGY,
-            chunk_size=settings.CHUNK_SIZE,
-            chunk_overlap=settings.CHUNK_OVERLAP,
-            chunk_max_tokens=settings.CHUNK_MAX_TOKENS,
+            chunk_strategy=snapshot.chunking.strategy,
+            chunk_size=snapshot.chunking.chunk_size,
+            chunk_overlap=snapshot.chunking.chunk_overlap,
+            chunk_max_tokens=snapshot.chunking.max_tokens,
             storage_profile=(
                 "test" if _is_test_storage(*storage_paths) else "production"
             ),

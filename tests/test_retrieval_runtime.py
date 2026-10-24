@@ -36,6 +36,22 @@ def _runtime(**overrides) -> RetrievalSettings:
     return RetrievalSettings(**values)
 
 
+def test_trace_switch_uses_frozen_request_value_instead_of_changed_environment(monkeypatch):
+    from backend.models.schemas import RetrievalResponse
+
+    observed = []
+    monkeypatch.setattr(retriever, "_retrieve_internal", lambda *args, **kwargs:
+        observed.append(kwargs["include_trace"]) or RetrievalResponse(results=[], trace=None))
+    enabled = _runtime(trace_enabled=True)
+    disabled = _runtime(trace_enabled=False)
+    monkeypatch.setattr(settings, "RETRIEVAL_TRACE_ENABLED", False)
+    retriever.retrieve_with_trace("旧请求仍开启", runtime_config=enabled)
+    monkeypatch.setattr(settings, "RETRIEVAL_TRACE_ENABLED", True)
+    retriever.retrieve_with_trace("新请求已关闭", runtime_config=disabled)
+    retriever.retrieve_with_trace("脚本无快照时使用部署默认")
+    assert observed == [True, False, True]
+
+
 def test_request_snapshot_drives_each_retrieval_stage_independently(monkeypatch):
     calls = {}
 
@@ -192,6 +208,7 @@ def test_request_threshold_filters_dense_and_is_visible_in_trace(monkeypatch):
     response = retriever.retrieve_with_trace(
         "阈值",
         runtime_config=_runtime(
+            trace_enabled=True,
             mode="dense",
             final_top_k=1,
             dense_candidate_k=2,

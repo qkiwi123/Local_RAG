@@ -34,6 +34,7 @@ vi.mock("../api/client", () => ({
 
 const settings: SettingsReadResponse = {
   revision: 3,
+  chunking: { strategy: "recursive", chunk_size: 500, chunk_overlap: 80, max_tokens: 450 },
   updated_at: "2026-08-24T10:00:00+08:00",
   llm: {
     enabled: true,
@@ -73,6 +74,7 @@ const settings: SettingsReadResponse = {
     max_image_edge: 1600, max_calls_per_document: 20,
   },
   retrieval: {
+    trace_enabled: false,
     mode: "hybrid",
     final_top_k: 5,
     dense_candidate_k: 15,
@@ -95,6 +97,7 @@ const settings: SettingsReadResponse = {
     llm_activation: "next_request",
     vision_activation: "next_document_upload",
     retrieval_activation: "next_request",
+    chunking_activation: "next_document_upload",
     refusal_gate_activation: "unavailable",
   },
   field_sources: {
@@ -280,6 +283,14 @@ describe("SettingsPage", () => {
     expect(screen.getByLabelText("视觉模型名")).not.toBeVisible();
   });
 
+  it("旧后端尚未重启时显示明确提示，避免新字段缺失导致白屏", async () => {
+    mocks.getSettings.mockResolvedValue({ ...settings, chunking: undefined });
+    render(<SettingsPage />);
+    expect(await screen.findByText("设置接口尚未更新，请重启项目后再试。")).toBeVisible();
+    expect(screen.getByText("设置加载失败")).toBeVisible();
+    expect(mocks.updateSettings).not.toHaveBeenCalled();
+  });
+
   it("只 PATCH 修改字段并用输入的草稿密钥执行替换", async () => {
     const next = {
       ...settings,
@@ -413,6 +424,74 @@ describe("SettingsPage", () => {
     await screen.findByText(/设置已应用到 revision 4/);
     expect(bm25).toHaveValue("27");
     expect(screen.getByRole("button", { name: /保存并应用/ })).toBeDisabled();
+  });
+
+  it("分块设置默认可见，只保存变化字段并同步服务端结果", async () => {
+    mocks.updateSettings.mockResolvedValue(response({ ...settings, revision: 4,
+      chunking: { ...settings.chunking, chunk_size: 640, chunk_overlap: 100, max_tokens: 420 },
+    }));
+    render(<SettingsPage />);
+    const size = await screen.findByLabelText("分块长度（字符）");
+    expect(size).toBeVisible();
+    expect(size).toHaveValue("500");
+    expect(screen.getByLabelText("重叠长度（字符）")).toHaveValue("80");
+    expect(screen.getByLabelText("单片段 Token 上限")).toBeEnabled();
+    fireEvent.click(screen.getByRole("button", { name: /文档分块.*切分方式/ }));
+    fireEvent.change(size, { target: { value: "640" } });
+    fireEvent.change(screen.getByLabelText("重叠长度（字符）"), { target: { value: "100" } });
+    fireEvent.change(screen.getByLabelText("单片段 Token 上限"), { target: { value: "420" } });
+    fireEvent.click(screen.getByRole("button", { name: /保存并应用/ }));
+    await waitFor(() => expect(mocks.updateSettings).toHaveBeenCalledWith({
+      expected_revision: 3, chunking: { chunk_size: 640, chunk_overlap: 100, max_tokens: 420 },
+    }));
+    await screen.findByText(/设置已应用到 revision 4/);
+    expect(size).toHaveValue("640");
+    expect(screen.getByRole("button", { name: /保存并应用/ })).toBeDisabled();
+  }, 15000);
+
+  it("Trace 开关独立保存为下一次请求的检索配置", async () => {
+    mocks.updateSettings.mockResolvedValue(response({ ...settings, revision: 4,
+      retrieval: { ...settings.retrieval, trace_enabled: true },
+    }));
+    render(<SettingsPage />);
+    const toggle = await screen.findByLabelText("记录检索 Trace");
+    expect(toggle).toHaveAttribute("aria-checked", "false");
+    fireEvent.click(toggle);
+    fireEvent.click(screen.getByRole("button", { name: /保存并应用/ }));
+    await waitFor(() => expect(mocks.updateSettings).toHaveBeenCalledWith({
+      expected_revision: 3, retrieval: { trace_enabled: true },
+    }));
+    await screen.findByText(/设置已应用到 revision 4/);
+    expect(toggle).toHaveAttribute("aria-checked", "true");
+  });
+
+  it("缩短分块长度到不大于重叠时阻止保存，放弃后恢复", async () => {
+    render(<SettingsPage />);
+    const size = await screen.findByLabelText("分块长度（字符）");
+    fireEvent.change(size, { target: { value: "80" } });
+    fireEvent.click(screen.getByRole("button", { name: /保存并应用/ }));
+    await waitFor(() => expect(screen.getByText("重叠长度必须小于分块长度")).toBeVisible());
+    expect(mocks.updateSettings).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: /放弃修改/ }));
+    expect(size).toHaveValue("500");
+    await waitFor(() => expect(screen.queryByText("重叠长度必须小于分块长度")).not.toBeInTheDocument());
+  });
+
+  it("固定切分禁用 Token 上限，切换递归后恢复并保存切分方式", async () => {
+    mocks.getSettings.mockResolvedValue({ ...settings,
+      chunking: { ...settings.chunking, strategy: "fixed" },
+    });
+    render(<SettingsPage />);
+    const tokens = await screen.findByLabelText("单片段 Token 上限");
+    expect(tokens).toBeDisabled();
+    expect(tokens).toHaveValue("450");
+    fireEvent.mouseDown(screen.getByLabelText("切分方式"));
+    fireEvent.click(await screen.findByText("按语义边界切分 · 递归"));
+    await waitFor(() => expect(tokens).toBeEnabled());
+    fireEvent.click(screen.getByRole("button", { name: /保存并应用/ }));
+    await waitFor(() => expect(mocks.updateSettings).toHaveBeenCalledWith({
+      expected_revision: 3, chunking: { strategy: "recursive" },
+    }));
   });
 
   it("BM25 召回数小于最终 Top K 时阻止保存", async () => {

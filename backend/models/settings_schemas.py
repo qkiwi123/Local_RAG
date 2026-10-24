@@ -130,6 +130,7 @@ class RefusalGateSettings(_StrictFrozenModel):
 
 
 class RetrievalSettings(_StrictFrozenModel):
+    trace_enabled: bool = False
     mode: RetrievalMode
     final_top_k: int = Field(ge=1, le=20)
     dense_candidate_k: int = Field(ge=1, le=100)
@@ -158,6 +159,19 @@ class RetrievalSettings(_StrictFrozenModel):
         return self
 
 
+class ChunkingSettings(_StrictFrozenModel):
+    strategy: Literal["fixed", "recursive"] = "fixed"
+    chunk_size: int = Field(default=500, gt=0, strict=True)
+    chunk_overlap: int = Field(default=50, ge=0, strict=True)
+    max_tokens: int = Field(default=480, gt=0, strict=True)
+
+    @model_validator(mode="after")
+    def validate_overlap(self) -> "ChunkingSettings":
+        if self.chunk_overlap >= self.chunk_size:
+            raise ValueError("重叠长度必须小于分块长度")
+        return self
+
+
 class EffectiveSettingsSnapshot(_StrictFrozenModel):
     revision: int = Field(ge=0)
     updated_at: str | None = None
@@ -166,6 +180,7 @@ class EffectiveSettingsSnapshot(_StrictFrozenModel):
     vision_api_key: SecretStr | None = Field(default=None, exclude=True, repr=False)
     vision_api_key_source: Literal["environment", "runtime_secret", "none"] = "none"
     retrieval: RetrievalSettings
+    chunking: ChunkingSettings = Field(default_factory=ChunkingSettings)
     api_key: SecretStr | None = Field(default=None, exclude=True, repr=False)
     api_key_source: Literal["environment", "runtime_secret", "none"]
     field_sources: dict[str, FieldSource]
@@ -213,6 +228,7 @@ class SettingsRuntimeSummary(_StrictFrozenModel):
     llm_activation: ActivationLevel = "next_request"
     vision_activation: ActivationLevel = "next_document_upload"
     retrieval_activation: ActivationLevel = "next_request"
+    chunking_activation: ActivationLevel = "next_document_upload"
     refusal_gate_activation: ActivationLevel = "unavailable"
 
 
@@ -222,6 +238,7 @@ class SettingsReadResponse(_StrictFrozenModel):
     llm: LLMSettingsView
     vision: VisionSettingsView
     retrieval: RetrievalSettings
+    chunking: ChunkingSettings
     runtime: SettingsRuntimeSummary
     field_sources: dict[str, FieldSource]
     field_effects: dict[str, ActivationLevel]
@@ -492,6 +509,7 @@ class RefusalGateOverrides(_PartialModel):
 
 
 class RetrievalSettingsOverrides(_PartialModel):
+    trace_enabled: bool | None = None
     mode: RetrievalMode | None = None
     final_top_k: int | None = Field(default=None, ge=1, le=20)
     dense_candidate_k: int | None = Field(default=None, ge=1, le=100)
@@ -504,6 +522,16 @@ class RetrievalSettingsOverrides(_PartialModel):
     reranker_candidate_k: int | None = Field(default=None, ge=1, le=100)
     max_chunks_per_document: int | None = Field(default=None, ge=1)
     refusal_gate: RefusalGateOverrides | None = None
+
+    def runtime_payload(self) -> dict:
+        return self.model_dump(exclude_none=True, exclude_unset=True)
+
+
+class ChunkingSettingsOverrides(_PartialModel):
+    strategy: Literal["fixed", "recursive"] | None = None
+    chunk_size: int | None = Field(default=None, gt=0, strict=True)
+    chunk_overlap: int | None = Field(default=None, ge=0, strict=True)
+    max_tokens: int | None = Field(default=None, gt=0, strict=True)
 
     def runtime_payload(self) -> dict:
         return self.model_dump(exclude_none=True, exclude_unset=True)
@@ -577,11 +605,12 @@ class SettingsPatchRequest(BaseModel):
     llm: LLMSettingsPatch | None = None
     vision: VisionSettingsPatch | None = None
     retrieval: RetrievalSettingsOverrides | None = None
+    chunking: ChunkingSettingsOverrides | None = None
 
     @model_validator(mode="after")
     def require_section(self) -> "SettingsPatchRequest":
-        if self.llm is None and self.retrieval is None and self.vision is None:
-            raise ValueError("至少需要提供 llm、vision 或 retrieval 设置")
+        if all(section is None for section in (self.llm, self.retrieval, self.vision, self.chunking)):
+            raise ValueError("至少需要提供 llm、vision、retrieval 或 chunking 设置")
         return self
 
 
@@ -597,13 +626,14 @@ class SettingsResetRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     expected_revision: int = Field(ge=0)
-    section: Literal["llm", "vision", "retrieval", "all"]
+    section: Literal["llm", "vision", "retrieval", "chunking", "all"]
 
 
 class RuntimeSettingsOverrides(_PartialModel):
     llm: LLMSettingsOverrides | None = None
     vision: VisionSettingsOverrides | None = None
     retrieval: RetrievalSettingsOverrides | None = None
+    chunking: ChunkingSettingsOverrides | None = None
 
     def to_payload(self) -> dict:
         """返回只包含显式覆盖字段的 JSON 兼容字典。"""

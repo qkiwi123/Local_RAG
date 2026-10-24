@@ -1,5 +1,9 @@
 # 设计文档导航
 
+2026-10-24回切修正：[DES-005](./DES-005-标签与React交互.md#conversation-followup)撤销“导航即取消”合同，按会话保留生成与后台保存；返回中的/完成后的状态验证见[TEST-004](../测试/TEST-004-标签与React交互.md#conversation-return)。
+
+2026-10-24后续：[DES-005](./DES-005-标签与React交互.md#conversation-followup)固定首次发送创建、会话请求失效、来源默认折叠和端口来源；[DES-006](./DES-006-运行时设置与Trace.md#chunking)将分块纳入下一上传快照，Trace按下一请求生效。测试见[TEST-005](../测试/TEST-005-设置与Trace回归.md#chunking)。
+
 2026-10-24 W4补充：[DES-001](./DES-001-系统架构与存储边界.md#windows-release)及[DEV-012 W4](../开发/DEV-012-服务托管与启动停止.md#w4-result)记录白名单内部ZIP、深许可路径收敛与便携退出/中断恢复；公开发行/系统外写等门禁保留。
 
 2026-10-24 W3更新：便携层已实现实例身份/资产/前端匹配、双锁、文件式正常停止、同源约束及保守维护，见[DEV-012 W3](../开发/DEV-012-服务托管与启动停止.md#w3-result)；[DES-001](./DES-001-系统架构与存储边界.md#windows-release)同步已实现和W4—W5边界，不改变RAG融合或前端结构。

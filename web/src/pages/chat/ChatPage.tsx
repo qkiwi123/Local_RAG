@@ -55,6 +55,7 @@ export default function ChatPage() {
   const [traceOpen, setTraceOpen] = useState<ConversationMessage | null>(null);
   const [renameTarget, setRenameTarget] = useState<ConversationSummary | null>(null);
   const [renameValue, setRenameValue] = useState("");
+  useEffect(() => setTraceOpen(null), [chat.currentId]);
   const hasConversation = Boolean(
     chat.messages.length || chat.pendingQuestion || chat.streaming || chat.streamingError,
   );

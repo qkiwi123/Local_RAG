@@ -9,6 +9,7 @@ import type {
   LlmConnectionTestResponse,
   LlmSettingsPatch,
   RetrievalSettingsPatch,
+  ChunkingSettingsPatch,
   SettingsPatchResponse,
   SettingsReadResponse,
   SettingsRuntimeStatus,
@@ -76,6 +77,7 @@ export const api = {
     llm?: LlmSettingsPatch;
     vision?: VisionSettingsPatch;
     retrieval?: RetrievalSettingsPatch;
+    chunking?: ChunkingSettingsPatch;
   }) =>
     request<SettingsPatchResponse>(
       "/api/settings",
@@ -83,7 +85,7 @@ export const api = {
     ),
   resetSettings: (
     expected_revision: number,
-    section: "llm" | "vision" | "retrieval" | "all",
+    section: "llm" | "vision" | "retrieval" | "chunking" | "all",
   ) =>
     request<SettingsPatchResponse>(
       "/api/settings/reset",

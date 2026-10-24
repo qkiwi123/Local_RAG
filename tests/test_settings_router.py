@@ -92,6 +92,67 @@ def test_get_settings_returns_effective_values_sources_and_masked_key():
         == "unavailable"
     )
     assert payload["runtime"]["access_scope"] == "trusted_local_workspace"
+    assert payload["chunking"]["chunk_size"] == settings.CHUNK_SIZE
+    assert payload["field_effects"]["chunking.chunk_size"] == "next_document_upload"
+    assert payload["runtime"]["chunking_activation"] == "next_document_upload"
+
+
+def test_chunking_api_validation_conflict_and_reset(tmp_path, monkeypatch):
+    from backend.services import sparse_rebuild
+
+    manager = _isolated_manager(tmp_path)
+    initial = manager.snapshot()
+    with TestClient(app) as client:
+        monkeypatch.setattr(app.state, "runtime_settings_manager", manager)
+        rebuild_calls = []
+        monkeypatch.setattr(sparse_rebuild, "request_rebuild", lambda *args: rebuild_calls.append(args))
+        result = client.patch("/api/settings", json={"expected_revision": 0, "chunking": {
+            "strategy": "recursive", "chunk_size": 640, "chunk_overlap": 100, "max_tokens": 420,
+        }})
+        assert result.status_code == 200, result.text
+        payload = result.json()
+        assert payload["effects"] == ["next_document_upload"]
+        assert "已有文档" in payload["warnings"][0]
+        assert payload["settings"]["chunking"]["chunk_size"] == 640
+        assert client.get("/api/settings").json()["chunking"]["chunk_overlap"] == 100
+        assert client.get("/api/settings/runtime-status").json()["index"]["chunk_size"] == 640
+        assert client.patch("/api/settings", json={"expected_revision": 0,
+            "chunking": {"chunk_size": 600}}).status_code == 409
+        assert client.patch("/api/settings", json={"expected_revision": 1,
+            "chunking": {"chunk_size": 100}}).status_code == 422
+        assert manager.snapshot().revision == 1
+        reset = client.post("/api/settings/reset", json={"expected_revision": 1, "section": "chunking"})
+        assert reset.status_code == 200, reset.text
+        assert reset.json()["settings"]["chunking"] == initial.chunking.model_dump()
+        assert rebuild_calls == []
+
+
+def test_trace_switch_persists_in_request_snapshot_and_resets(tmp_path, monkeypatch):
+    manager = _isolated_manager(tmp_path)
+    before = manager.snapshot()
+    with TestClient(app) as client:
+        monkeypatch.setattr(app.state, "runtime_settings_manager", manager)
+        result = client.patch("/api/settings", json={"expected_revision": 0,
+            "retrieval": {"trace_enabled": not before.retrieval.trace_enabled}})
+        assert result.status_code == 200, result.text
+        payload = result.json()
+        assert payload["effects"] == ["next_request"]
+        assert payload["changed_fields"] == ["retrieval.trace_enabled"]
+        assert payload["settings"]["field_sources"]["retrieval.trace_enabled"] == "runtime"
+        assert manager.snapshot().retrieval.trace_enabled != before.retrieval.trace_enabled
+        restarted = RuntimeSettingsManager(db_path=str(tmp_path / "metadata.db"), environment=settings,
+            secret_store=manager._secret_store)
+        assert restarted.snapshot().retrieval.trace_enabled == manager.snapshot().retrieval.trace_enabled
+        reset = client.post("/api/settings/reset", json={"expected_revision": 1, "section": "retrieval"})
+        assert reset.status_code == 200
+        assert manager.snapshot().retrieval.trace_enabled == before.retrieval.trace_enabled
+
+
+def test_health_returns_server_scope_port_instead_of_forwarded_header():
+    with TestClient(app, base_url="http://testserver:8123") as client:
+        result = client.get("/api/health", headers={"X-Forwarded-Port": "9999"})
+    assert result.status_code == 200
+    assert result.json()["runtime"]["port"] == 8123
 
 
 def test_get_settings_reports_runtime_override_without_leaking_secret(

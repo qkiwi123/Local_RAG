@@ -34,7 +34,7 @@ export function SettingsApplyBar({
           </Tag>
         </Space>
         <Typography.Text type="secondary">
-          问答配置下一次请求生效；视觉配置下一次文档上传生效。
+          问答与检索配置下一次提问生效；文档分块与视觉配置下一次上传生效。
         </Typography.Text>
       </Space>
       <Space wrap className="settings-apply-actions">

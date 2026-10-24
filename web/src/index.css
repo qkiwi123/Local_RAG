@@ -209,6 +209,11 @@ button, input, a, summary {
   color: var(--app-subtle);
 }
 
+.app-runtime-port { display: inline-flex; align-items: center; gap: 4px; padding: 4px 8px; border: 1px solid var(--app-border); border-radius: 7px; background: var(--app-surface-subtle); color: var(--app-text); font-size: 12px; font-variant-numeric: tabular-nums; }
+.app-runtime-port__label { color: var(--app-muted); }
+
+@media (max-width: 520px) { .app-runtime-port { padding: 3px 5px; font-size: 11px; } .app-runtime-port__label { display: none; } }
+
 .app-health {
   display: inline-flex;
   align-items: center;
@@ -440,6 +445,8 @@ mark {
 }
 
 @media (max-width: 460px) {
+  .app-menu .ant-menu-item-icon { display: none; }
+  .app-menu.ant-menu .ant-menu-title-content { margin-inline-start: 0; }
   .app-header-inner {
     padding-inline: 12px;
   }

@@ -19,7 +19,7 @@ vi.mock("../pages/settings/SettingsPage", () => ({
 describe("应用级布局", () => {
   beforeEach(() => {
     window.localStorage.removeItem("rag.appearance.theme");
-    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: true }));
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: true, json: async () => ({ runtime: { port: 8000 } }) }));
     vi.stubGlobal(
       "ResizeObserver",
       class {
@@ -60,6 +60,14 @@ describe("应用级布局", () => {
     expect(document.querySelector(".ant-layout-sider")).toBeNull();
     expect(screen.getByTestId("chat-page")).toBeInTheDocument();
     await waitFor(() => expect(screen.getByText("后端在线")).toBeInTheDocument());
+    expect(screen.getByLabelText("服务端口 8000")).toBeVisible();
+  });
+
+  it("连接失败时不展示上一次或当前网页的端口作为后端端口", async () => {
+    vi.mocked(fetch).mockRejectedValue(new Error("offline"));
+    render(<MemoryRouter><App /></MemoryRouter>);
+    await screen.findByText("后端离线");
+    expect(screen.getByLabelText("服务端口 未知")).toHaveTextContent("—");
   });
 
   it("日夜切换立即生效并在重新打开应用后保留选择", async () => {

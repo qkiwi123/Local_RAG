@@ -87,6 +87,8 @@ def _expected_contract(*, k1: float, b: float) -> dict[str, Any]:
             "user_dictionary_sha256": None,
             "stopwords_sha256": None,
         },
+        # 保留持久化索引的部署兼容基线，不把“下次上传”配置误当作全库已重新切分。
+        # 页面分块覆盖只影响新入库内容；语料写入仍通过 revision/dirty 与后台重建绑定。
         "chunking": {
             "parser_version": PARSER_VERSION,
             "strategy": settings.CHUNK_STRATEGY,

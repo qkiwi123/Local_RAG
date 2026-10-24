@@ -1,5 +1,9 @@
 # 需求文档导航
 
+2026-10-24回切修正：[REQ-003](./REQ-003-会话与知识库交互.md)明确切换历史/新建后原请求继续，切回恢复进度或保存答案；[DEV-008](../开发/DEV-008-React主前端.md#conversation-return)和[TEST-004](../测试/TEST-004-标签与React交互.md#conversation-return)记录根因与99项回归。
+
+2026-10-24后续：[REQ-003](./REQ-003-会话与知识库交互.md)补新建空白/首条发送持久化、切换清理、来源默认折叠与布局；[REQ-004](./REQ-004-运行时设置与诊断.md#requirements)补分块、Trace开关和端口显示。最终验收见[TEST-004](../测试/TEST-004-标签与React交互.md#conversation-followup)、[TEST-005](../测试/TEST-005-设置与Trace回归.md#chunking)。
+
 2026-10-24 W4继续：[REQ-006](./REQ-006-本地运行与数据安全.md#windows-release)补独立分支/内部ZIP和退出恢复范围，实际结果见[TEST-009 W4](../测试/TEST-009-本地运行与回滚验证.md#w4-result)；不把包内业务数据等同浏览器/驱动/Windows零外写。
 
 2026-10-24 W3更新：[REQ-006](./REQ-006-本地运行与数据安全.md#windows-release)的启停/实例/同源与最小维护范围已实现，真实本机与未验收范围见[TEST-009 W3](../测试/TEST-009-本地运行与回滚验证.md#w3-result)。用户后续ZIP导出目标单列本机偏好，W4—W5仍未交付。

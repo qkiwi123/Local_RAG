@@ -48,6 +48,7 @@ class RetrievalRuntimeConfig:
     reranker_candidate_k: int
     max_chunks_per_document: int
     refusal_gate_enabled: bool = False
+    trace_enabled: bool = False
 
 
 def _runtime_config(
@@ -71,6 +72,7 @@ def _runtime_config(
             reranker_candidate_k=runtime.reranker_candidate_k,
             max_chunks_per_document=runtime.max_chunks_per_document,
             refusal_gate_enabled=runtime.refusal_gate.enabled,
+            trace_enabled=runtime.trace_enabled,
         )
     else:
         final_top_k = (
@@ -90,6 +92,7 @@ def _runtime_config(
             )
         config = RetrievalRuntimeConfig(
             mode=settings.RETRIEVAL_MODE,
+            trace_enabled=settings.RETRIEVAL_TRACE_ENABLED,
             final_top_k=final_top_k,
             dense_candidate_k=max(final_top_k, int(dense_candidate_k)),
             dense_distance_threshold=settings.RETRIEVAL_DISTANCE_THRESHOLD,
@@ -358,7 +361,7 @@ def retrieve_with_trace(
     return _retrieve_internal(
         question,
         config,
-        include_trace=settings.RETRIEVAL_TRACE_ENABLED,
+        include_trace=config.trace_enabled,
         allowed_document_ids=allowed_document_ids,
         tag_filter=tag_filter,
     )

@@ -51,7 +51,7 @@ async def get_settings(request: Request):
 
 @router.patch("/settings", response_model=SettingsPatchResponse)
 async def patch_settings(payload: SettingsPatchRequest, request: Request):
-    """原子保存 LLM/Retrieval 设置；密钥只接受三态语义。"""
+    """原子保存动态设置；密钥只接受三态语义。"""
     manager = _manager(request)
     key_update = payload.llm.api_key_update if payload.llm else None
     vision_key_update = payload.vision.api_key_update if payload.vision else None
@@ -69,6 +69,8 @@ async def patch_settings(payload: SettingsPatchRequest, request: Request):
             patch["retrieval"] = payload.retrieval.runtime_payload()
         if payload.vision is not None:
             patch["vision"] = payload.vision.runtime_payload()
+        if payload.chunking is not None:
+            patch["chunking"] = payload.chunking.runtime_payload()
         snapshot, changed_fields = manager.update_settings(
             patch,
             expected_revision=payload.expected_revision,
@@ -103,6 +105,7 @@ async def patch_settings(payload: SettingsPatchRequest, request: Request):
     effects: list[str] = []
     warnings: list[str] = []
     _vision_effects(snapshot, changed_fields, effects, warnings)
+    _chunking_effects(changed_fields, effects, warnings)
     llm_changed = any(path.startswith("llm.") for path in changed_fields)
     retrieval_changed = any(
         path.startswith("retrieval.") for path in changed_fields
@@ -206,6 +209,7 @@ async def reset_settings(payload: SettingsResetRequest, request: Request):
     effects: list[str] = []
     warnings: list[str] = []
     _vision_effects(snapshot, changed_fields, effects, warnings)
+    _chunking_effects(changed_fields, effects, warnings)
     if llm_changed:
         clear_llm_client_cache()
         effects.append("llm_client_cache_cleared")
@@ -236,6 +240,13 @@ async def reset_settings(payload: SettingsResetRequest, request: Request):
         effects=effects,
         warnings=warnings,
     )
+
+
+def _chunking_effects(changed_fields, effects, warnings):
+    if any(path.startswith("chunking.") for path in changed_fields):
+        if "next_document_upload" not in effects:
+            effects.append("next_document_upload")
+        warnings.append("分块设置从下一次上传开始生效；已有文档保留原分块，需重新上传才能应用新参数")
 
 
 def _vision_effects(snapshot, changed_fields, effects, warnings):

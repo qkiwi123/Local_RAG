@@ -26,24 +26,32 @@ export function AppShell({ children }: AppShellProps) {
       : "chat";
   const [backendDown, setBackendDown] = useState(false);
   const [healthChecked, setHealthChecked] = useState(false);
+  const [backendPort, setBackendPort] = useState<number | null>(null);
 
   useEffect(() => {
     let cancelled = false;
-    fetch("/api/health")
-      .then((response) => {
+    const checkHealth = () => fetch("/api/health")
+      .then(async (response) => {
+        const payload = response.ok ? await response.json() : null;
         if (!cancelled) {
           setBackendDown(!response.ok);
+          const port = payload?.runtime?.port;
+          setBackendPort(Number.isInteger(port) && port > 0 && port <= 65535 ? port : null);
           setHealthChecked(true);
         }
       })
       .catch(() => {
         if (!cancelled) {
           setBackendDown(true);
+          setBackendPort(null);
           setHealthChecked(true);
         }
       });
+    void checkHealth();
+    const timer = window.setInterval(checkHealth, 30000);
     return () => {
       cancelled = true;
+      window.clearInterval(timer);
     };
   }, []);
 
@@ -89,7 +97,11 @@ export function AppShell({ children }: AppShellProps) {
                 aria-label={mode === "dark" ? "切换到日间模式" : "切换到夜间模式"}
                 icon={mode === "dark" ? <SunOutlined /> : <MoonOutlined />} onClick={toggle} />
             </Tooltip>
-            <span className="app-workspace-label">知识工作台</span>
+            <Tooltip title="后端正在监听的服务端口；开发时显示后端端口。">
+              <span className="app-runtime-port" aria-label={`服务端口 ${backendPort ?? "未知"}`}>
+                <span className="app-runtime-port__label">端口</span> {backendPort ?? "—"}
+              </span>
+            </Tooltip>
             <span
               className={`app-health app-health-${
                 !healthChecked ? "checking" : backendDown ? "down" : "up"

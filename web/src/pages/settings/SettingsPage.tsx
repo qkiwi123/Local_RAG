@@ -10,10 +10,11 @@ import {
   Typography,
   message,
 } from "antd";
-import { ApiOutlined, DatabaseOutlined, EyeOutlined, FilterOutlined, ReloadOutlined } from "@ant-design/icons";
+import { ApiOutlined, DatabaseOutlined, EyeOutlined, FilterOutlined, ReloadOutlined, ScissorOutlined, ExperimentOutlined } from "@ant-design/icons";
 import { api, ApiError } from "../../api/client";
 import type {
   LlmSettingsPatch,
+  ChunkingSettingsPatch,
   RetrievalSettingsPatch,
   SettingsPatchResponse,
   SettingsReadResponse,
@@ -25,6 +26,8 @@ import type { ApiKeyIntent, SettingsFormValues } from "./formTypes";
 import { ModelSettingsCard } from "./ModelSettingsCard";
 import { VisionSettingsCard } from "./VisionSettingsCard";
 import { RetrievalSettingsCard } from "./RetrievalSettingsCard";
+import { ChunkingSettingsCard } from "./ChunkingSettingsCard";
+import { DiagnosticsSettingsCard } from "./DiagnosticsSettingsCard";
 import { RuntimeStatusCard } from "./RuntimeStatusCard";
 import { SettingsApplyBar } from "./SettingsApplyBar";
 import "./settings-page.css";
@@ -48,6 +51,7 @@ const llmFields = [
 ] as const;
 
 const retrievalFields = [
+  "trace_enabled",
   "mode",
   "final_top_k",
   "dense_candidate_k",
@@ -60,6 +64,8 @@ const retrievalFields = [
   "reranker_candidate_k",
   "max_chunks_per_document",
 ] as const;
+
+const chunkingFields = ["strategy", "chunk_size", "chunk_overlap", "max_tokens"] as const;
 
 const visionFields = [
   "enabled",
@@ -86,6 +92,7 @@ const visionFields = [
 
 function formValues(settings: SettingsReadResponse): SettingsFormValues {
   return {
+    chunking: { ...settings.chunking },
     llm: {
       enabled: settings.llm.enabled,
       provider: settings.llm.provider,
@@ -128,6 +135,7 @@ function formValues(settings: SettingsReadResponse): SettingsFormValues {
       api_key_draft: "",
     },
     retrieval: {
+      trace_enabled: settings.retrieval.trace_enabled,
       mode: settings.retrieval.mode,
       final_top_k: settings.retrieval.final_top_k,
       dense_candidate_k: settings.retrieval.dense_candidate_k,
@@ -193,8 +201,14 @@ export default function SettingsPage() {
 
   const applyServerSettings = useCallback(
     (next: SettingsReadResponse) => {
+      if (!next.chunking || typeof next.retrieval.trace_enabled !== "boolean") {
+        throw new Error("设置接口尚未更新，请重启项目后再试。");
+      }
       setSettings(next);
       form.setFieldsValue(formValues(next));
+      const clearedErrors = form.getFieldsError().map(({ name }) => ({ name, errors: [], warnings: [] }));
+      // getFieldsError 返回内部通用路径；这些路径均来自当前强类型表单。
+      form.setFields(clearedErrors as unknown as Parameters<typeof form.setFields>[0]);
       setLlmApiKeyIntent("keep");
       setVisionApiKeyIntent("keep");
       setDirty(false);
@@ -319,11 +333,18 @@ export default function SettingsPage() {
         (retrieval as Record<string, unknown>)[field] = values.retrieval[field];
       }
     }
+    const chunking: ChunkingSettingsPatch = {};
+    for (const field of chunkingFields) {
+      if (values.chunking[field] !== undefined && values.chunking[field] !== settings.chunking[field]) {
+        (chunking as Record<string, unknown>)[field] = values.chunking[field];
+      }
+    }
     return {
       expected_revision: settings.revision,
       ...(Object.keys(llm).length ? { llm } : {}),
       ...(Object.keys(vision).length ? { vision } : {}),
       ...(Object.keys(retrieval).length ? { retrieval } : {}),
+      ...(Object.keys(chunking).length ? { chunking } : {}),
     };
   };
 
@@ -332,7 +353,7 @@ export default function SettingsPage() {
     try {
       const values = await form.validateFields();
       const patch = buildPatch(values);
-      if (!patch || (!patch.llm && !patch.vision && !patch.retrieval)) {
+      if (!patch || (!patch.llm && !patch.vision && !patch.retrieval && !patch.chunking)) {
         setDirty(false);
         message.info("没有需要保存的修改");
         return;
@@ -625,8 +646,10 @@ export default function SettingsPage() {
           <nav aria-label="设置分区">
             {[
               { id: "retrieval", title: "检索设置", detail: "召回、排序与回答依据", icon: <FilterOutlined /> },
+              { id: "chunking", title: "文档分块", detail: "切分方式、长度与重叠", icon: <ScissorOutlined /> },
               { id: "model", title: "问答模型", detail: "连接与生成参数", icon: <ApiOutlined /> },
               { id: "vision", title: "视觉解析", detail: "图片识别与扫描文档", icon: <EyeOutlined /> },
+              { id: "diagnostics", title: "诊断与追踪", detail: "检索 Trace 开关", icon: <ExperimentOutlined /> },
               { id: "runtime", title: "运行状态", detail: "本地模型与索引", icon: <DatabaseOutlined /> },
             ].map((section) => (
               <button key={section.id} type="button" aria-current={activeSection === section.id ? "location" : undefined}
@@ -638,8 +661,8 @@ export default function SettingsPage() {
               </button>
             ))}
           </nav>
-          <div className="settings-sidebar-note"><strong>更改何时生效？</strong><p>保存后，问答和检索设置用于下一次提问；视觉设置用于下一次上传。</p></div>
-          <details className="settings-workspace-note"><summary>本地工作空间说明</summary><p>当前没有账号或权限体系，请勿把设置接口暴露到不受信任网络。设备、模型文件、存储路径和片段切分策略是只读启动配置。</p></details>
+          <div className="settings-sidebar-note"><strong>更改何时生效？</strong><p>保存后，问答和检索设置用于下一次提问；文档分块和视觉设置用于下一次上传。</p></div>
+          <details className="settings-workspace-note"><summary>本地工作空间说明</summary><p>当前没有账号或权限体系，请勿把设置接口暴露到不受信任网络。设备、模型文件和存储路径是只读启动配置。</p></details>
         </aside>
         <div className="settings-panels">
       <Form<SettingsFormValues>
@@ -654,6 +677,9 @@ export default function SettingsPage() {
       >
         <section id="settings-retrieval" className="settings-anchor-section">
           <RetrievalSettingsCard form={form} settings={settings} />
+        </section>
+        <section id="settings-chunking" className="settings-anchor-section">
+          <ChunkingSettingsCard form={form} settings={settings} />
         </section>
         <section id="settings-model" className="settings-anchor-section">
         <ModelSettingsCard
@@ -678,6 +704,9 @@ export default function SettingsPage() {
           onApiKeyIntentChange={setVisionApiKeyIntentState}
           onTestConnection={(task) => void handleTestVisionConnection(task)}
         />
+        </section>
+        <section id="settings-diagnostics" className="settings-anchor-section">
+          <DiagnosticsSettingsCard settings={settings} />
         </section>
       </Form>
       <section id="settings-runtime" className="settings-anchor-section">
@@ -712,7 +741,7 @@ export default function SettingsPage() {
         onCancel={() => !resetting && setResetOpen(false)}
       >
         <Typography.Paragraph>
-          这会删除 LLM、视觉设置、API Key 和 Retrieval 的页面运行时覆盖，重新使用环境变量和代码默认值，并产生新的 revision。
+          这会删除问答模型、文档分块、视觉解析、检索设置和 API Key 的页面运行时覆盖，重新使用部署默认值，并产生新的 revision。
         </Typography.Paragraph>
         <Typography.Paragraph type="secondary">
           不会修改 .env，不会重建或清空向量数据库。

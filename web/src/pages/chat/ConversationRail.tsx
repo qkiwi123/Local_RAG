@@ -37,15 +37,18 @@ export function ConversationRail({
         </span>
       </div>
 
+      <div className="chat-rail__body">
+      <div className="chat-rail__new-wrap">
       <Button
         type="primary"
         icon={<PlusOutlined />}
-        onClick={onCreate}
+        onClick={() => { onCreate(); onNavigate?.(); }}
         block
         className="chat-rail__new"
       >
         新建对话
       </Button>
+      </div>
 
       <div className="chat-conversation-list" role="list">
         {conversations.length === 0 ? (
@@ -108,6 +111,7 @@ export function ConversationRail({
             );
           })
         )}
+      </div>
       </div>
     </section>
   );

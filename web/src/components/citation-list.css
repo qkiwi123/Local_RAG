@@ -12,6 +12,14 @@
   max-width: 100%;
 }
 
+.citation-list__toggle { display: flex; width: 100%; min-height: 36px; align-items: center; gap: 9px; padding: 4px 0; border: 0; border-radius: 6px; background: transparent; color: var(--app-muted); font: inherit; font-size: 13px; cursor: pointer; text-align: left; }
+.citation-list__toggle:hover { color: var(--app-primary); }
+.citation-list__toggle:focus-visible { outline: 2px solid var(--app-primary); outline-offset: 3px; }
+.citation-list__toggle small { font-size: 11px; color: var(--app-subtle); }
+.citation-list__arrow { margin-left: auto; font-size: 10px; transition: transform 150ms ease; }
+.citation-list__arrow--open { transform: rotate(180deg); }
+.citation-list__body { margin-top: 12px; }
+
 /* Keep long source text inside the reading column, with a separate preview column. */
 .citation-list .citation-item {
   display: grid;

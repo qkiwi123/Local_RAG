@@ -116,7 +116,7 @@ app.include_router(settings_router.router, prefix="/api")
 
 
 @app.get("/api/health")
-async def health():
+async def health(request: Request):
     """存活与模型预热状态（不依赖 SPA 构建产物）。"""
     from backend.services.warmup import get_warmup_status
 
@@ -124,6 +124,7 @@ async def health():
         "status": "ok",
         "version": "0.1.0",
         "model_warmup": get_warmup_status(),
+        "runtime": {"port": request.scope["server"][1] if request.scope.get("server") else None},
     }
     instance = getattr(app.state, "portable_instance", None)
     if settings.DISTRIBUTION_MODE == "portable" and instance is not None:

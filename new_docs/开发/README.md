@@ -1,5 +1,9 @@
 # 开发文档导航
 
+2026-10-24回切修复：[DEV-008](./DEV-008-React主前端.md#conversation-return)按会话/草稿保存后台请求，导航不取消、返回恢复，显式停止仅作用当前会话；[TEST-004](../测试/TEST-004-标签与React交互.md#conversation-return)记录99项前端及真实HTTP保存验收，以下97项按前轮理解。
+
+2026-10-24后续：[DEV-008](./DEV-008-React主前端.md#conversation-followup)补空白新建、请求隔离、折叠来源和端口/对齐；[DEV-009](./DEV-009-运行时设置与密钥.md#chunking)补动态分块及[Trace开关](./DEV-009-运行时设置与密钥.md#trace-switch)。最终97项前端、192项后端专项及独立浏览器结果见[TEST-004](../测试/TEST-004-标签与React交互.md#conversation-followup)。
+
 2026-10-24 W4内部本机范围通过：[DEV-012 W4](./DEV-012-服务托管与启动停止.md#w4-result)补独立分支/提交、白名单构建/许可路径、内部ZIP和退出恢复；实际解压GPU故障恢复、CPU CMD/Hybrid/停止通过，公开发行门禁未放宽。
 
 2026-10-24 W3更新：[DEV-012 W3](./DEV-012-服务托管与启动停止.md#w3-result)已实现CMD入口、GPU/CPU/有限batch重试、双锁与PID/实例/资产身份、初始化取消、正常/强制停止、本机同源保护和保守维护。源码停止脚本只补双向时间比较；W4—W5未实施，W1/W2以下按历史阶段理解。

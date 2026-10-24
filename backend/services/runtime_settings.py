@@ -12,6 +12,7 @@ from pydantic import ValidationError
 from backend.config import settings
 from backend.models.settings_schemas import (
     EffectiveSettingsSnapshot,
+    ChunkingSettings,
     LLMSettings,
     RefusalGateSettings,
     RetrievalSettings,
@@ -32,6 +33,7 @@ from backend.services.settings_store import (
 DYNAMIC_FIELD_WHITELIST = frozenset(
     {
         *(f"vision.{name}" for name in VisionSettings.model_fields),
+        *(f"chunking.{name}" for name in ChunkingSettings.model_fields),
         "llm.enabled",
         "llm.provider",
         "llm.base_url",
@@ -48,6 +50,7 @@ DYNAMIC_FIELD_WHITELIST = frozenset(
         "llm.rewrite_max_tokens",
         "llm.rewrite_timeout_seconds",
         "retrieval.mode",
+        "retrieval.trace_enabled",
         "retrieval.final_top_k",
         "retrieval.dense_candidate_k",
         "retrieval.dense_distance_threshold",
@@ -181,7 +184,14 @@ def _environment_payload(environment) -> dict:
             "recognize_timeout_seconds": float(getattr(environment, "OCR_TIMEOUT_SECONDS", 60)),
             "describe_timeout_seconds": float(getattr(environment, "OCR_TIMEOUT_SECONDS", 60)),
         },
+        "chunking": {
+            "strategy": str(getattr(environment, "CHUNK_STRATEGY", "fixed")),
+            "chunk_size": int(getattr(environment, "CHUNK_SIZE", 500)),
+            "chunk_overlap": int(getattr(environment, "CHUNK_OVERLAP", 50)),
+            "max_tokens": int(getattr(environment, "CHUNK_MAX_TOKENS", 480)),
+        },
         "retrieval": {
+            "trace_enabled": bool(getattr(environment, "RETRIEVAL_TRACE_ENABLED", False)),
             "mode": str(environment.RETRIEVAL_MODE),
             "final_top_k": final_top_k,
             "dense_candidate_k": int(dense_candidate_k),
@@ -295,6 +305,10 @@ class RuntimeSettingsManager:
         effective = _merge_nested(environment_payload, overrides)
         llm, retrieval = _validate_effective(effective)
         try:
+            chunking = ChunkingSettings.model_validate(effective["chunking"])
+        except ValidationError as error:
+            raise RuntimeSettingsValidationError("分块设置无效：长度和 Token 上限须为正整数，重叠须为非负整数且小于分块长度") from error
+        try:
             vision = VisionSettings.model_validate(effective["vision"])
         except ValidationError:
             raise RuntimeSettingsValidationError("合并后的视觉设置校验失败") from None
@@ -366,6 +380,7 @@ class RuntimeSettingsManager:
             vision_api_key=vision_key,
             vision_api_key_source=vision_key_source,
             retrieval=retrieval,
+            chunking=chunking,
             api_key=api_key,
             api_key_source=api_key_source,
             field_sources=field_sources,
@@ -552,12 +567,13 @@ class RuntimeSettingsManager:
         expected_revision: int,
     ) -> tuple[EffectiveSettingsSnapshot, list[str]]:
         """删除指定运行时覆盖并重新使用部署默认值。"""
-        if section not in {"llm", "vision", "retrieval", "all"}:
+        if section not in {"llm", "vision", "retrieval", "chunking", "all"}:
             raise RuntimeSettingsValidationError("不支持的设置恢复范围")
 
         reset_llm = section in {"llm", "all"}
         reset_vision = section in {"vision", "all"}
         reset_retrieval = section in {"retrieval", "all"}
+        reset_chunking = section in {"chunking", "all"}
         with _COMMIT_LOCK, self._lock:
             current = self._store.load()
             if current.revision != expected_revision:
@@ -574,6 +590,8 @@ class RuntimeSettingsManager:
                 removed["retrieval"] = next_overrides.pop("retrieval")
             if reset_vision and "vision" in next_overrides:
                 removed["vision"] = next_overrides.pop("vision")
+            if reset_chunking and "chunking" in next_overrides:
+                removed["chunking"] = next_overrides.pop("chunking")
 
             prior_runtime_key = self._secret_store.get_secret("llm_api_key")
             future_runtime_key = None if reset_llm else prior_runtime_key

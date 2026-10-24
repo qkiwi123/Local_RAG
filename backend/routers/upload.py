@@ -164,7 +164,9 @@ async def upload_document(
     manager = getattr(request.app.state, "runtime_settings_manager", None)
     if manager is None:
         raise HTTPException(status_code=503, detail="运行时设置尚未初始化")
-    vision_config = vision_config_from_snapshot(manager.snapshot())
+    snapshot = manager.snapshot()
+    vision_config = vision_config_from_snapshot(snapshot)
+    chunking = snapshot.chunking
     document_id = uuid4().hex
     stored_name = f"{document_id}{suffix}"
     upload_dir = Path(settings.UPLOAD_DIR)
@@ -215,11 +217,11 @@ async def upload_document(
 
         chunks = chunk_units(
             units,
-            chunk_size=settings.CHUNK_SIZE,
-            overlap=settings.CHUNK_OVERLAP,
-            max_tokens=settings.CHUNK_MAX_TOKENS,
+            chunk_size=chunking.chunk_size,
+            overlap=chunking.chunk_overlap,
+            max_tokens=chunking.max_tokens,
             token_counter=count_tokens,
-            strategy=settings.CHUNK_STRATEGY,
+            strategy=chunking.strategy,
         )
         if not chunks:
             raise ValueError("文档切分失败：未能生成任何文本块")

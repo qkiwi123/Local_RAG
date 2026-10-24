@@ -2,338 +2,296 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { message } from "antd";
 import { api } from "../../api/client";
 import { streamChat } from "../../api/stream";
-import type {
-  ConversationMessage,
-  ConversationSummary,
-  TagInfo,
-} from "../../api/types";
+import type { ConversationMessage, ConversationSummary, TagInfo } from "../../api/types";
 
 const RESYNC_CODES = ["conversation_conflict", "request_in_progress", "stale_retry"];
 const ACTIVE_CONVERSATION_KEY = "rag.activeConversationId";
+const NEW_CONVERSATION = "new";
 
-interface PendingQuestion {
-  conversationId: string | null;
-  content: string;
+interface RunState {
+  requestId: string;
+  question: string;
+  streaming: boolean;
+  text: string;
+  reasoning: string;
+  error: string | null;
+}
+
+interface ActiveRun {
+  key: string;
+  controller: AbortController;
+  state: RunState;
 }
 
 function readStoredConversationId(): string | null {
-  try {
-    return window.sessionStorage.getItem(ACTIVE_CONVERSATION_KEY);
-  } catch {
-    return null;
-  }
+  try { return window.sessionStorage.getItem(ACTIVE_CONVERSATION_KEY); }
+  catch { return null; }
 }
 
 function storeConversationId(id: string | null) {
-  try {
-    if (id) {
-      window.sessionStorage.setItem(ACTIVE_CONVERSATION_KEY, id);
-    } else {
-      window.sessionStorage.removeItem(ACTIVE_CONVERSATION_KEY);
-    }
-  } catch {
-    // 无存储权限时仍可在当前页面正常使用。
-  }
+  try { window.sessionStorage.setItem(ACTIVE_CONVERSATION_KEY, id ?? NEW_CONVERSATION); }
+  catch { /* 无存储权限时仍可在当前页面正常使用。 */ }
 }
 
 export function useChatController() {
   const [conversations, setConversations] = useState<ConversationSummary[]>([]);
   const [currentId, setCurrentId] = useState<string | null>(null);
+  const [viewKey, setViewKey] = useState("draft-0");
   const [messages, setMessages] = useState<ConversationMessage[]>([]);
   const [tags, setTags] = useState<TagInfo[]>([]);
   const [tagFilter, setTagFilter] = useState<string[]>([]);
   const [input, setInput] = useState("");
-  const [streaming, setStreaming] = useState(false);
-  const [streamingText, setStreamingText] = useState("");
-  const [streamingReasoning, setStreamingReasoning] = useState("");
-  const [streamingRequestId, setStreamingRequestId] = useState("");
-  const [streamingError, setStreamingError] = useState<string | null>(null);
-  const [pendingQuestion, setPendingQuestion] = useState<PendingQuestion | null>(
-    null,
-  );
-  const abortRef = useRef<AbortController | null>(null);
+  const [runs, setRuns] = useState<Record<string, RunState>>({});
+  const requestsRef = useRef(new Map<string, ActiveRun>());
   const currentIdRef = useRef<string | null>(null);
+  const viewKeyRef = useRef("draft-0");
+  const draftSequenceRef = useRef(0);
   const loadSequenceRef = useRef(0);
+  const listSequenceRef = useRef(0);
   const loadedRef = useRef(false);
+  const mountedRef = useRef(true);
+
+  useEffect(() => {
+    mountedRef.current = true;
+    const requests = requestsRef.current;
+    return () => {
+      mountedRef.current = false;
+      for (const run of requests.values()) run.controller.abort();
+      requests.clear();
+    };
+  }, []);
+
+  const publishRun = useCallback((run: ActiveRun, patch: Partial<RunState>) => {
+    if (!mountedRef.current || requestsRef.current.get(run.key) !== run) return;
+    run.state = { ...run.state, ...patch };
+    const key = run.key;
+    const state = run.state;
+    setRuns((previous) => ({ ...previous, [key]: state }));
+  }, []);
+
+  const retireRun = useCallback((run: ActiveRun) => {
+    if (!mountedRef.current || requestsRef.current.get(run.key) !== run) return;
+    requestsRef.current.delete(run.key);
+    const key = run.key;
+    setRuns((previous) => {
+      if (run.state.error) return { ...previous, [key]: { ...run.state, streaming: false } };
+      const next = { ...previous };
+      delete next[key];
+      return next;
+    });
+  }, []);
 
   const setActiveConversation = useCallback((id: string | null) => {
-    if (currentIdRef.current !== id) {
-      setStreamingError(null);
-      setStreamingReasoning("");
-      setStreamingText("");
-    }
+    const key = id ?? `draft-${++draftSequenceRef.current}`;
     currentIdRef.current = id;
+    viewKeyRef.current = key;
     setCurrentId(id);
+    setViewKey(key);
     storeConversationId(id);
   }, []);
 
   const refreshConversations = useCallback(async () => {
+    const sequence = ++listSequenceRef.current;
     try {
       const list = await api.listConversations();
-      setConversations(list);
+      if (mountedRef.current && sequence === listSequenceRef.current) setConversations(list);
       return list;
-    } catch {
-      return null;
-    }
+    } catch { return null; }
   }, []);
 
-  const loadConversation = useCallback(
-    async (id: string) => {
-      const sequence = ++loadSequenceRef.current;
+  const loadConversation = useCallback(async (id: string, preserveView = false) => {
+    if (!preserveView && currentIdRef.current === id && requestsRef.current.has(id)) return;
+    const sequence = ++loadSequenceRef.current;
+    if (!preserveView) {
       setActiveConversation(id);
-      try {
-        const detail = await api.getConversation(id);
-        if (sequence !== loadSequenceRef.current || currentIdRef.current !== id) {
-          return;
-        }
-        setMessages(detail.messages);
-      } catch (error) {
-        if (sequence === loadSequenceRef.current) {
-          message.error(`加载会话失败: ${(error as Error).message}`);
-        }
+      setMessages([]);
+      setInput("");
+      if (!requestsRef.current.has(id)) {
+        setRuns((previous) => { const next = { ...previous }; delete next[id]; return next; });
       }
-    },
-    [setActiveConversation],
-  );
+    }
+    try {
+      const detail = await api.getConversation(id);
+      if (mountedRef.current && sequence === loadSequenceRef.current && currentIdRef.current === id) {
+        setMessages(detail.messages);
+      }
+    } catch (error) {
+      if (mountedRef.current && sequence === loadSequenceRef.current) {
+        message.error(`加载会话失败: ${(error as Error).message}`);
+      }
+    }
+  }, [setActiveConversation]);
 
   const refreshTags = useCallback(async () => {
     try {
-      setTags(await api.listTags());
-    } catch {
-      // 标签加载失败不阻断会话读取。
-    }
+      const list = await api.listTags();
+      if (mountedRef.current) setTags(list);
+    } catch { /* 标签加载失败不阻断会话读取。 */ }
   }, []);
 
   useEffect(() => {
     if (loadedRef.current) return;
     loadedRef.current = true;
     void (async () => {
+      const sequence = loadSequenceRef.current;
       await refreshTags();
       const list = (await refreshConversations()) ?? [];
       const storedId = readStoredConversationId();
+      if (!mountedRef.current || storedId === NEW_CONVERSATION || sequence !== loadSequenceRef.current) return;
       const target = list.find((item) => item.conversation_id === storedId) ?? list[0];
-      if (target) {
-        await loadConversation(target.conversation_id);
-      }
+      if (target) await loadConversation(target.conversation_id);
     })();
   }, [loadConversation, refreshConversations, refreshTags]);
 
-  const createConversation = useCallback(async () => {
+  const createConversation = useCallback(() => {
+    ++loadSequenceRef.current;
+    setActiveConversation(null);
+    setMessages([]);
+    setInput("");
+  }, [setActiveConversation]);
+
+  const deleteConversation = useCallback(async (id: string) => {
     try {
-      const created = await api.createConversation();
-      await refreshConversations();
-      await loadConversation(created.conversation_id);
-    } catch (error) {
-      message.error(`新建对话失败: ${(error as Error).message}`);
-    }
-  }, [loadConversation, refreshConversations]);
-
-  const deleteConversation = useCallback(
-    async (id: string) => {
-      try {
-        await api.deleteConversation(id);
-        const list = (await refreshConversations()) ?? [];
-        if (currentIdRef.current === id) {
-          setMessages([]);
-          const next = list[0];
-          if (next) {
-            await loadConversation(next.conversation_id);
-          } else {
-            setActiveConversation(null);
-          }
-        }
-        message.success("会话已删除");
-      } catch (error) {
-        message.error(`删除失败: ${(error as Error).message}`);
+      await api.deleteConversation(id);
+      const run = requestsRef.current.get(id);
+      if (run) {
+        requestsRef.current.delete(id);
+        run.controller.abort();
       }
-    },
-    [loadConversation, refreshConversations, setActiveConversation],
-  );
-
-  const renameConversation = useCallback(
-    async (id: string, title: string) => {
-      try {
-        await api.renameConversation(id, title.trim());
-        await refreshConversations();
-        message.success("标题已更新");
-        return true;
-      } catch (error) {
-        message.error(`重命名失败: ${(error as Error).message}`);
-        return false;
-      }
-    },
-    [refreshConversations],
-  );
-
-  const lastCompleteId = useCallback(() => {
-    const complete = messages.filter((item) => item.status === "complete");
-    return complete.length ? complete[complete.length - 1].message_id : null;
-  }, [messages]);
-
-  const resyncConversation = useCallback(
-    async (id: string) => {
+      setRuns((previous) => { const next = { ...previous }; delete next[id]; return next; });
+      const list = (await refreshConversations()) ?? [];
       if (currentIdRef.current === id) {
-        await loadConversation(id);
+        if (list[0]) await loadConversation(list[0].conversation_id);
+        else createConversation();
       }
+      message.success("会话已删除");
+    } catch (error) { message.error(`删除失败: ${(error as Error).message}`); }
+  }, [createConversation, loadConversation, refreshConversations]);
+
+  const renameConversation = useCallback(async (id: string, title: string) => {
+    try {
+      await api.renameConversation(id, title.trim());
       await refreshConversations();
-    },
-    [loadConversation, refreshConversations],
-  );
+      message.success("标题已更新");
+      return true;
+    } catch (error) {
+      message.error(`重命名失败: ${(error as Error).message}`);
+      return false;
+    }
+  }, [refreshConversations]);
 
-  const send = useCallback(
-    async (question: string, retryMessage?: ConversationMessage) => {
-      let conversationId = currentIdRef.current;
-      if (!retryMessage) {
-        setPendingQuestion({ conversationId, content: question });
-      }
+  const send = useCallback(async (question: string, retryMessage?: ConversationMessage) => {
+    const startingKey = viewKeyRef.current;
+    if (!question.trim() || requestsRef.current.has(startingKey)) return;
+    let conversationId = currentIdRef.current;
+    const complete = messages.filter((item) => item.status === "complete");
+    const expectedLastId = conversationId && complete.length ? complete[complete.length - 1].message_id : null;
+    const activeTags = [...tagFilter];
+    const run: ActiveRun = {
+      key: startingKey,
+      controller: new AbortController(),
+      state: { requestId: retryMessage?.request_id ?? crypto.randomUUID(), question,
+        streaming: true, text: "", reasoning: "", error: null },
+    };
+    requestsRef.current.set(startingKey, run);
+    ++loadSequenceRef.current;
+    publishRun(run, {});
+    const isOwned = () => mountedRef.current && requestsRef.current.get(run.key) === run;
+    const isVisible = () => isOwned() && viewKeyRef.current === run.key;
+    let receivedDone = false;
+    let protocolError: { code: string; message: string } | null = null;
+
+    try {
       if (!conversationId) {
-        try {
-          const created = await api.createConversation();
-          conversationId = created.conversation_id;
-          setActiveConversation(conversationId);
-          if (!retryMessage) {
-            setPendingQuestion({ conversationId, content: question });
-          }
-          await refreshConversations();
-        } catch (error) {
-          setPendingQuestion(null);
-          message.error(`无法创建会话: ${(error as Error).message}`);
-          return;
-        }
+        const created = await api.createConversation();
+        if (!isOwned()) return;
+        conversationId = created.conversation_id;
+        const draftKey = run.key;
+        requestsRef.current.delete(draftKey);
+        run.key = conversationId;
+        requestsRef.current.set(run.key, run);
+        setRuns((previous) => {
+          const next = { ...previous };
+          delete next[draftKey];
+          next[run.key] = run.state;
+          return next;
+        });
+        // 创建结果属于原来的空白页；用户已切走时只加入列表，不抢回视图。
+        if (viewKeyRef.current === draftKey) setActiveConversation(conversationId);
+        setConversations((previous) => [created, ...previous.filter((item) => item.conversation_id !== conversationId)]);
+        void refreshConversations();
       }
-
-      const controller = new AbortController();
-      const activeTags = [...tagFilter];
-      let protocolError: { code: string; message: string } | null = null;
-      let receivedDone = false;
-      abortRef.current = controller;
-      const requestId = retryMessage ? retryMessage.request_id : crypto.randomUUID();
-      setStreamingRequestId(requestId);
-      setStreaming(true);
-      setStreamingText("");
-      setStreamingReasoning("");
-      setStreamingError(null);
-
-      try {
-        const result = await streamChat(
-          {
-            question,
-            conversation_id: conversationId,
-            request_id: requestId,
-            expected_last_message_id: retryMessage ? undefined : lastCompleteId(),
-            retry_failed: Boolean(retryMessage),
-            tags: activeTags,
-          },
-          {
-            onDelta: (event) => {
-              if (currentIdRef.current === conversationId) {
-                setStreamingText((previous) => previous + event.text);
-              }
-            },
-            onReasoningDelta: (event) => {
-              if (currentIdRef.current === conversationId) {
-                setStreamingReasoning((previous) => previous + event.text);
-              }
-            },
-            onDone: () => { receivedDone = true; },
-            onError: (event) => {
-              protocolError = { code: event.code, message: event.message };
-              if (currentIdRef.current === conversationId) setStreamingError(event.message);
-            },
-          },
-          controller.signal,
-        );
-
-        if (result.aborted && currentIdRef.current === conversationId) {
-          setStreamingError("已停止生成，本次内容未保存，可重试。");
-        } else if (!receivedDone && !protocolError && currentIdRef.current === conversationId) {
-          setStreamingError("连接已结束，但未收到回答完成确认，请检查会话或重试。");
-        }
-
-        if (protocolError) {
-          const failure = protocolError as { code: string; message: string };
-          if (RESYNC_CODES.includes(failure.code)) {
-            await resyncConversation(conversationId);
-            message.warning("会话已在服务端更新，已自动刷新；请重新发送问题。");
-          } else {
-            message.error(failure.message || "回答失败");
-          }
-        }
-      } catch (error) {
-        const failure = error as {
-          status?: number;
-          code?: string;
-          message?: string;
-        };
-        if (currentIdRef.current === conversationId) {
-          setStreamingError(failure.message || "问答失败，请重试");
-        }
+      if (!isOwned()) return;
+      if (run.controller.signal.aborted) {
+        publishRun(run, { error: "已停止生成，本次内容未保存，可重试。" });
+        return;
+      }
+      const result = await streamChat({ question, conversation_id: conversationId,
+        request_id: run.state.requestId, expected_last_message_id: retryMessage ? undefined : expectedLastId,
+        retry_failed: Boolean(retryMessage), tags: activeTags }, {
+        onDelta: (event) => publishRun(run, { text: run.state.text + event.text }),
+        onReasoningDelta: (event) => publishRun(run, { reasoning: run.state.reasoning + event.text }),
+        onDone: () => { receivedDone = true; },
+        onError: (event) => {
+          protocolError = { code: event.code, message: event.message };
+          publishRun(run, { error: event.message });
+        },
+      }, run.controller.signal);
+      if (!isOwned()) return;
+      if (result.aborted) publishRun(run, { error: "已停止生成，本次内容未保存，可重试。" });
+      else if (!receivedDone && !protocolError) {
+        publishRun(run, { error: "连接已结束，但未收到回答完成确认，请检查会话或重试。" });
+      }
+      if (protocolError && isVisible()) {
+        const failure = protocolError as { code: string; message: string };
+        if (RESYNC_CODES.includes(failure.code)) {
+          message.warning("会话已在服务端更新，已自动刷新；请重新发送问题。");
+        } else message.error(failure.message || "回答失败");
+      }
+    } catch (error) {
+      if (!isOwned()) return;
+      const failure = error as { status?: number; code?: string; message?: string };
+      publishRun(run, { error: failure.message || "问答失败，请重试" });
+      if (isVisible()) {
+        if (!conversationId) setInput(question);
         if (failure.code && RESYNC_CODES.includes(failure.code)) {
-          await resyncConversation(conversationId);
           message.warning("会话已在服务端更新，已自动刷新；请重新发送问题。");
         } else if (failure.status === 404) {
           message.error("会话不存在，请新建会话后重试");
-          setMessages([]);
-          setActiveConversation(null);
-        } else {
-          message.error(failure.message || "问答失败，请重试");
-        }
-      } finally {
-        abortRef.current = null;
-        if (currentIdRef.current === conversationId) {
-          await loadConversation(conversationId);
-        }
-        setStreaming(false);
-        await refreshConversations();
-        setPendingQuestion(null);
+          createConversation();
+        } else message.error(failure.message || "问答失败，请重试");
       }
-    },
-    [
-      lastCompleteId,
-      loadConversation,
-      refreshConversations,
-      resyncConversation,
-      setActiveConversation,
-      tagFilter,
-    ],
-  );
+    } finally {
+      // 导航只切换可见会话，不取消网络请求；后台完成后按原会话正常落库。
+      if (isVisible() && conversationId) await loadConversation(conversationId, true);
+      retireRun(run);
+      if (mountedRef.current) await refreshConversations();
+    }
+  }, [createConversation, loadConversation, messages, publishRun, refreshConversations, retireRun, setActiveConversation, tagFilter]);
 
   const stopStreaming = useCallback(() => {
-    abortRef.current?.abort();
+    const run = requestsRef.current.get(viewKeyRef.current);
+    if (!run) return;
+    run.controller.abort();
     message.info("已停止生成（本次回答按失败处理，可重试）");
   }, []);
 
   const submitInput = useCallback(() => {
     const question = input.trim();
-    if (!question || streaming) return;
+    if (!question || requestsRef.current.has(viewKeyRef.current)) return;
     setInput("");
     void send(question);
-  }, [input, send, streaming]);
+  }, [input, send]);
 
+  const activeRun = runs[viewKey];
   return {
-    conversations,
-    currentId,
-    messages,
-    tags,
-    tagFilter,
-    setTagFilter,
-    input,
-    setInput,
-    streaming,
-    streamingText,
-    streamingReasoning,
-    streamingRequestId,
-    streamingError,
-    pendingQuestion:
-      pendingQuestion?.conversationId === currentId
-        ? pendingQuestion.content
-        : null,
-    loadConversation,
-    createConversation,
-    deleteConversation,
-    renameConversation,
-    send,
-    stopStreaming,
-    submitInput,
+    conversations, currentId, messages, tags, tagFilter, setTagFilter, input, setInput,
+    streaming: activeRun?.streaming ?? false,
+    streamingText: activeRun?.text ?? "",
+    streamingReasoning: activeRun?.reasoning ?? "",
+    streamingRequestId: activeRun?.requestId ?? "",
+    streamingError: activeRun?.error ?? null,
+    pendingQuestion: activeRun?.question ?? null,
+    loadConversation, createConversation, deleteConversation, renameConversation, send, stopStreaming, submitInput,
   };
 }

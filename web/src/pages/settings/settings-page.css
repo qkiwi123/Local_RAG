@@ -189,6 +189,9 @@
 }
 
 @media (max-width: 760px) {
+  .settings-sidebar nav { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); overflow: visible; }
+  .settings-sidebar nav button { min-width: 0; padding: 8px 4px; white-space: nowrap; }
+  .settings-anchor-section { scroll-margin-top: 176px; }
   .settings-overview { grid-template-columns: 1fr; gap: 16px; padding: 18px; }
   .settings-sidebar { top: 56px; }
   .settings-sidebar nav button { font-size: 12px; gap: 6px; padding: 9px 10px; }
