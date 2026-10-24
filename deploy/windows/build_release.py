@@ -96,15 +96,16 @@ def build_frontend(work: Path) -> Path:
     return work
 
 
-def license_inventory(stage: Path, frontend: Path):
+def license_inventory(stage: Path, frontend: Path, relocated: dict):
     records = []
     for dist in sorted(importlib.metadata.distributions(path=[str(stage / "runtime/Lib/site-packages")]),
                        key=lambda d: d.metadata.get("Name", "").lower()):
         files = [str(p).replace("\\", "/") for p in (dist.files or [])
                  if any(t in str(p).lower() for t in ("license", "notice", "copying"))]
+        license_paths = [relocated.get("runtime/Lib/site-packages/" + p, "runtime/Lib/site-packages/" + p) for p in files]
         records.append({"name": dist.metadata["Name"], "version": dist.version,
                         "license": dist.metadata.get("License-Expression") or dist.metadata.get("License") or "unresolved",
-                        "license_files_in_runtime": files})
+                        "license_files_in_package": [p for p in license_paths if (stage / p).is_file()]})
     frontend_records = []
     lock = json.loads((frontend / "package-lock.json").read_text("utf-8"))
     for relative, info in sorted(lock.get("packages", {}).items()):
@@ -128,6 +129,16 @@ def license_inventory(stage: Path, frontend: Path):
         "pending_gates": PUBLIC_GATES})
 
 
+def package_path(relative: str, ordinal: int) -> str:
+    # Preserve deep third-party license bytes without requiring Windows global
+    # long-path settings. Executable/import resource paths are never relocated.
+    if len(relative) > 150 and "/licenses/" in relative.lower():
+        return f"licenses/relocated/{ordinal:05d}-{Path(relative).name}"
+    if len(relative) > 150:
+        raise ValueError("Runtime path exceeds portable layout budget: " + relative)
+    return relative
+
+
 def assemble(donor: Path, stage: Path, frontend: Path, *, source_commit: str):
     donor = donor.resolve()
     if not donor.is_relative_to((REPO / "build").resolve()):
@@ -146,10 +157,19 @@ def assemble(donor: Path, stage: Path, frontend: Path, *, source_commit: str):
     print("W4: verifying immutable runtime/model input...", flush=True)
     with ThreadPoolExecutor(max_workers=8) as executor:
         list(executor.map(verify, entries))
-    for index, entry in enumerate(entries, 1):
-        copy_file(safe_path(donor, entry["path"]), stage, entry["path"])
-        if index % 10000 == 0:
-            print(f"W4: copied {index}/{len(entries)} runtime/model files", flush=True)
+    copies = [(entry, package_path(entry["path"], index)) for index, entry in enumerate(entries, 1)]
+    relocated = {entry["path"]: relative for entry, relative in copies if relative != entry["path"]}
+    # Pre-create shared parents serially, then copy independent files in parallel.
+    parents = {Path(relative).parent.as_posix() for _, relative in copies}
+    for parent in sorted(parents, key=lambda p: (len(Path(p).parts), p)):
+        safe_path(stage, parent).mkdir(parents=True, exist_ok=True)
+    def copy(item):
+        entry, relative = item
+        copy_file(safe_path(donor, entry["path"]), stage, relative)
+    with ThreadPoolExecutor(max_workers=8) as executor:
+        for index, _ in enumerate(executor.map(copy, copies), 1):
+            if index % 10000 == 0:
+                print(f"W4: copied {index}/{len(entries)} runtime/model files", flush=True)
     for folder, pattern in (("backend", "*.py"), ("launcher", "*.py")):
         for path in sorted((REPO / folder).rglob(pattern)):
             if "__pycache__" not in path.parts:
@@ -163,7 +183,9 @@ def assemble(donor: Path, stage: Path, frontend: Path, *, source_commit: str):
         text = (REPO / "deploy/windows" / name).read_text("utf-8")
         (stage / name).write_bytes(text.replace("\r\n", "\n").replace("\n", "\r\n").encode("utf-8"))
     (stage / "使用说明.txt").write_text(GUIDE, encoding="utf-8-sig")
-    license_inventory(stage, frontend)
+    dump(stage / "licenses/RELOCATED_PATHS.json", {"scope": "Only deeply nested license texts; bytes unchanged",
+         "files": [{"original_path": old, "package_path": new, "sha256": digest(stage / new)} for old, new in relocated.items()]})
+    license_inventory(stage, frontend, relocated)
     dump(stage / "release-manifest.json", {
         "format": 1, "stage": "W4 internal preview", "public_release_approved": False,
         "source_commit": source_commit, "runtime_lock_sha256": digest(stage / "locks/w1-lock.json"),
@@ -250,7 +272,7 @@ def main():
     output = output_directory / (name + ".zip")
     if output.exists() or output.with_suffix(".zip.json").exists():
         parser.error("Existing export is preserved; choose a new --name")
-    stage = new_stage(REPO / "build/windows-release" / name)
+    stage = new_stage(REPO / "build/windows-release" / name / "RAG")
     frontend = build_frontend(REPO / "build/windows-release" / (name + "-frontend"))
     assemble(args.runtime_bundle, stage, frontend, source_commit=commit)
     print(json.dumps(export_zip(stage, output), ensure_ascii=False), flush=True)

@@ -20,6 +20,14 @@ def test_public_release_gate_rejects_before_git_or_writes(monkeypatch, capsys):
     assert "Public release blocked" in capsys.readouterr().err
 
 
+def test_deep_license_is_relocated_but_executable_path_is_not():
+    long_license = "runtime/Lib/site-packages/torch.dist-info/licenses/" + "third_party/" * 13 + "LICENSE.txt"
+    assert build.package_path(long_license, 42) == "licenses/relocated/00042-LICENSE.txt"
+    assert build.package_path("runtime/Lib/site-packages/torch/__init__.py", 42).endswith("torch/__init__.py")
+    with pytest.raises(ValueError, match="layout budget"):
+        build.package_path("runtime/" + "module/" * 30 + "__init__.py", 42)
+
+
 @pytest.fixture
 def payload(tmp_path):
     stage = tmp_path / "LocalRAG-preview"

@@ -62,7 +62,8 @@ def worker(args):
         from backend.services import bm25s_store
         original = bm25s_store.activate_generation
         def activate(root, generation_id, **kwargs):
-            pause({"generation_id": generation_id})
+            if (marker.parent / "w4-rebuild.armed").exists():
+                pause({"generation_id": generation_id})
             return original(root, generation_id, **kwargs)
         bm25s_store.activate_generation = activate
     from launcher.common import load_assets
@@ -117,6 +118,9 @@ def exercise(root):
         owned.append(child)
         wait_for(ready)
         assert same_process(root, read_record(root))
+        if phase == "rebuild":
+            wait_for(sparse_ready)
+            (root / "temp/w4-rebuild.armed").write_text("armed")
         return child
     with socket.socket() as listener:
         listener.bind(("127.0.0.1", 0))
