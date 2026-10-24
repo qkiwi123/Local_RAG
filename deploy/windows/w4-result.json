@@ -1,0 +1,87 @@
+{
+  "schema": 1,
+  "date": "2026-10-24",
+  "status": "W4 internal preview build and local recovery acceptance passed; public release gates remain open",
+  "branch": "codex/windows-portable",
+  "baseline_commit": "536fe2b",
+  "package_source_commit": "f83fb2359d1ca016868b586240791349368acb47",
+  "artifact": {
+    "name": "LocalRAG-win64-preview-f83fb235.zip",
+    "destination": "User-specified directory from ignored build/windows-release/output-preference.json",
+    "zip_bytes": 5403048281,
+    "zip_sha256": "a525575044b95492e62567324fba7a7dc552e68bfac98e0c4f189ad1f2a83d15",
+    "zip_files": 34508,
+    "portable_manifest_sha256": "463f1b20fe536d145ab681324fa4a6ee0fe4def98a175a3d85505876c5944ef7",
+    "asset_bytes_excluding_portable_manifest": 7218627361,
+    "total_uncompressed_zip_bytes": 7225770036,
+    "zip_crc_verified": true,
+    "fresh_extraction_all_asset_hashes_and_private_file_exclusion": "passed",
+    "package_root": "RAG",
+    "maximum_relative_asset_path_length": 147,
+    "deep_license_files_relocated_with_original_path_and_sha256": 9,
+    "original_w3_test_data_or_fault_probe_in_zip": false
+  },
+  "build": {
+    "entry": "scripts/build_windows_release.ps1 -InternalPreview",
+    "frontend": "Two independent npm ci/build runs yielded identical hashes for all 5 dist files",
+    "node": "v24.19.0",
+    "npm": "11.17.0",
+    "runtime": "Fixed W1 RECORD-vendored runtime and models reused; user needs no npm/pip/model download",
+    "python_license_inventory_packages": 134,
+    "frontend_build_and_runtime_inventory_packages": 348,
+    "reproducibility_boundary": "ZIP repeatability verified with a small fixture and fixed entry metadata; the full large ZIP was not built twice for byte comparison",
+    "first_attempt": "Windows path length failure in nested PyTorch license texts; failed tree preserved, fixed by short ZIP root and lossless license relocation"
+  },
+  "tests": {
+    "extended_regression_files": 10,
+    "extended_passed": 170,
+    "extended_skipped": 3,
+    "skip_reason": "Windows symlink privilege unavailable",
+    "final_w4_specific_passed": 16,
+    "count_boundary": "Overlapping runs; do not add these counts together"
+  },
+  "acceptance": {
+    "directory": "build/windows-release/accept-f83fb235/RAG",
+    "status": "passed",
+    "models_transport": "Real bundled GPU models, real Chroma/Sparse and loopback HTTP; synthetic data only",
+    "fault_barriers": "External validation worker pauses after actual upload vector writes or after actual Sparse generation build; no application test hook shipped",
+    "reports": [
+      {"path": "reports/w4-recovery.json", "sha256": "65ab858a5bcafee795d5fefbef2b013482ac9be07f9f8a93926d7807487bf4b4"},
+      {"path": "reports/w4-upload-bytes.json", "sha256": "e0d68c55f443b55b1da9fd511af27ab4df6ae973c265f778f533c66d634cb415"},
+      {"path": "reports/w4-cmd.json", "sha256": "0229f668b8b7a4d865f64a41144bdad40a6e57d8f9455cc77978409519244548"}
+    ],
+    "checks": [
+      "Forced upload stop: processing becomes failed before retrieval opens; partial Chroma chunks removed, completed baseline retained",
+      "Interrupted synthetic upload preserves all 131 bytes with expected SHA-256",
+      "Forced Sparse build stop: restart returns ready and retrieval sources",
+      "Normal stop waits for paused upload; restart retains successful document",
+      "SQLite integrity_check returns ok",
+      "CPU startup CMD from actual extracted ZIP retains Hybrid sources",
+      "Stop CMD from actual extracted ZIP ends its own service"
+    ],
+    "all_test_services_stopped": true,
+    "remote_generation_or_ocr_api_calls": 0
+  },
+  "documentation_validation": {
+    "status": "passed",
+    "markdown_files": 62,
+    "core_documents": 52,
+    "links_checked": 2232,
+    "directed_core_relations": 438,
+    "self_tests_passed": 11
+  },
+  "provenance_audit": {
+    "locked_packages": 134,
+    "pip_http_cache_bodies_scanned": 755,
+    "version_matched_cached_wheel_candidates": 89,
+    "scope": "Version matches are candidates only, not original URL/hash/payload authentication; complete reconstruction pending"
+  },
+  "remaining_gates": [
+    "Original wheel provenance and licensed VC Redist source/terms/final NOTICE review; default public build intentionally refuses",
+    "No-NVIDIA/no-driver or clean Windows without developer tools still unavailable",
+    "W5 manual browser/double-click, full native/system write trace, move/backup/delete and production-scale quality/performance acceptance",
+    "Selected controlled fault points do not prove recovery from every interruption point, sudden power loss or disk damage",
+    "Browser local/session storage, cache/history and OS/driver records may live outside package; no zero-external-write claim",
+    "Encrypted API keys use the current Windows user; another machine/account may require re-entry"
+  ]
+}

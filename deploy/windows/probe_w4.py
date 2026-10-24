@@ -150,7 +150,8 @@ def exercise(root):
             assert db.execute("PRAGMA integrity_check").fetchone() == ("ok",)
             assert db.execute("SELECT status FROM documents WHERE document_id=?", (interrupted,)).fetchone() == ("failed",)
             assert db.execute("SELECT status FROM documents WHERE document_id=?", (baseline["document_id"],)).fetchone() == ("ready",)
-        assert (root / f"data/uploads/.{interrupted}.uploading.txt").is_file()
+        expected_bytes = "interrupted：备份知识库前停止后台，再复制完整目录。上传文件、向量、元数据、索引随目录保留。".encode()
+        assert (root / f"data/uploads/.{interrupted}.uploading.txt").read_bytes() == expected_bytes
         cli("stop")
         inspected = subprocess.run([str(root / "runtime/python.exe"), str(Path(__file__).resolve()), "worker", "--root", str(root),
                                     "--phase", "inspect", "--document-id", interrupted], cwd=root, capture_output=True, timeout=60, check=True)
