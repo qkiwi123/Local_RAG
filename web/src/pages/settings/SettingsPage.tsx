@@ -10,7 +10,7 @@ import {
   Typography,
   message,
 } from "antd";
-import { ReloadOutlined } from "@ant-design/icons";
+import { ApiOutlined, DatabaseOutlined, EyeOutlined, FilterOutlined, ReloadOutlined } from "@ant-design/icons";
 import { api, ApiError } from "../../api/client";
 import type {
   LlmSettingsPatch,
@@ -188,6 +188,7 @@ export default function SettingsPage() {
   const [conflict, setConflict] = useState(false);
   const [feedback, setFeedback] = useState<SettingsPatchResponse | null>(null);
   const [connectionResult, setConnectionResult] = useState<string | null>(null);
+  const [activeSection, setActiveSection] = useState("retrieval");
   const loadedRef = useRef(false);
 
   const applyServerSettings = useCallback(
@@ -553,9 +554,10 @@ export default function SettingsPage() {
     <main className="settings-page">
       <header className="settings-page-header">
         <div>
+          <span className="page-eyebrow">工作空间 / 配置中心</span>
           <Typography.Title level={2}>设置</Typography.Title>
           <Typography.Paragraph type="secondary">
-            管理问答模型、视觉解析与检索参数。视觉设置对下次文档上传生效，已入库文档不会自动更新。
+            调整检索策略，连接模型，让知识库按你的方式工作。
           </Typography.Paragraph>
         </div>
         <Space orientation="vertical" align="end" size={0}>
@@ -567,13 +569,11 @@ export default function SettingsPage() {
           </Typography.Text>
         </Space>
       </header>
-
-      <Alert
-        type="warning"
-        showIcon
-        title="可信本地工作空间设置"
-        description="当前没有账号或权限体系，请勿把设置接口直接暴露到不受信任网络。设备、模型文件、存储路径和 chunk 策略仍为只读启动配置。"
-      />
+      <div className="settings-overview" aria-label="已保存的配置概览">
+        <div><FilterOutlined /><span>检索方式<strong>{{ dense: "语义检索", bm25: "关键词检索", hybrid: "混合检索" }[settings.retrieval.mode]}</strong></span></div>
+        <div><ApiOutlined /><span>问答模型<strong>{settings.llm.enabled ? settings.llm.model : "仅检索，不生成回答"}</strong></span></div>
+        <div><EyeOutlined /><span>视觉解析<strong>{settings.vision.enabled ? "已启用" : "未启用"}</strong></span></div>
+      </div>
       {conflict && (
         <Alert
           type="error"
@@ -619,6 +619,29 @@ export default function SettingsPage() {
         />
       )}
 
+      <div className="settings-layout">
+        <aside className="settings-sidebar">
+          <span className="settings-nav-label">配置导航</span>
+          <nav aria-label="设置分区">
+            {[
+              { id: "retrieval", title: "检索设置", detail: "召回、排序与回答依据", icon: <FilterOutlined /> },
+              { id: "model", title: "问答模型", detail: "连接与生成参数", icon: <ApiOutlined /> },
+              { id: "vision", title: "视觉解析", detail: "图片识别与扫描文档", icon: <EyeOutlined /> },
+              { id: "runtime", title: "运行状态", detail: "本地模型与索引", icon: <DatabaseOutlined /> },
+            ].map((section) => (
+              <button key={section.id} type="button" aria-current={activeSection === section.id ? "location" : undefined}
+                onClick={() => {
+                  setActiveSection(section.id);
+                  document.getElementById(`settings-${section.id}`)?.scrollIntoView?.({ behavior: "smooth", block: "start" });
+                }}>
+                {section.icon}<span><strong>{section.title}</strong><small>{section.detail}</small></span>
+              </button>
+            ))}
+          </nav>
+          <div className="settings-sidebar-note"><strong>更改何时生效？</strong><p>保存后，问答和检索设置用于下一次提问；视觉设置用于下一次上传。</p></div>
+          <details className="settings-workspace-note"><summary>本地工作空间说明</summary><p>当前没有账号或权限体系，请勿把设置接口暴露到不受信任网络。设备、模型文件、存储路径和片段切分策略是只读启动配置。</p></details>
+        </aside>
+        <div className="settings-panels">
       <Form<SettingsFormValues>
         form={form}
         layout="vertical"
@@ -629,6 +652,10 @@ export default function SettingsPage() {
           setConflict(false);
         }}
       >
+        <section id="settings-retrieval" className="settings-anchor-section">
+          <RetrievalSettingsCard form={form} settings={settings} />
+        </section>
+        <section id="settings-model" className="settings-anchor-section">
         <ModelSettingsCard
           form={form}
           settings={settings}
@@ -637,6 +664,8 @@ export default function SettingsPage() {
           onApiKeyIntentChange={setLlmApiKeyIntentState}
           onTestConnection={() => void handleTestConnection()}
         />
+        </section>
+        <section id="settings-vision" className="settings-anchor-section">
         <VisionSettingsCard
           form={form}
           settings={settings}
@@ -649,15 +678,18 @@ export default function SettingsPage() {
           onApiKeyIntentChange={setVisionApiKeyIntentState}
           onTestConnection={(task) => void handleTestVisionConnection(task)}
         />
-        <RetrievalSettingsCard form={form} settings={settings} />
+        </section>
       </Form>
-
+      <section id="settings-runtime" className="settings-anchor-section">
       <RuntimeStatusCard
         status={status}
         loading={statusLoading}
         error={statusError}
         onRefresh={() => void refreshStatus()}
       />
+      </section>
+        </div>
+      </div>
 
       <SettingsApplyBar
         revision={settings.revision}

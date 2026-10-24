@@ -28,25 +28,6 @@ vi.mock("../api/stream", () => ({
   streamChat: mocks.streamChat,
 }));
 
-vi.mock("../components/TagTreeSelect", () => ({
-  TagTreeSelect: ({
-    value,
-    onChange,
-  }: {
-    value: string[];
-    onChange: (value: string[]) => void;
-  }) => (
-    <div aria-label="检索范围选择器">
-      <button type="button" onClick={() => onChange(["pit"])}>
-        选择 pit
-      </button>
-      <button type="button" onClick={() => onChange([])} disabled={!value.length}>
-        清除标签
-      </button>
-    </div>
-  ),
-}));
-
 const conversation = {
   conversation_id: "conversation-1",
   title: "测试会话",
@@ -105,18 +86,21 @@ describe("ChatPage 检索范围", () => {
     vi.unstubAllGlobals();
   });
 
-  it("未选择标签时明确显示全部知识库，而不是只依赖选择器占位文案", async () => {
+  it("未选择标签时输入区直接显示全部资料", async () => {
     render(<ChatPage />);
 
     await waitFor(() => expect(mocks.getConversation).toHaveBeenCalled());
-    expect(screen.getByText("全部知识库")).toBeVisible();
+    expect(screen.getByRole("button", { name: "选择检索资料，当前全部资料" })).toBeVisible();
   });
 
   it("把当前选中的标签作为下一次聊天请求的检索范围", async () => {
     render(<ChatPage />);
 
     await waitFor(() => expect(mocks.getConversation).toHaveBeenCalled());
-    fireEvent.click(screen.getByRole("button", { name: "选择 pit" }));
+    fireEvent.click(screen.getByRole("button", { name: "选择检索资料，当前全部资料" }));
+    fireEvent.click(await screen.findByRole("button", { name: "pit，2 份文档" }));
+    expect(screen.queryByRole("button", { name: "完成" })).not.toBeInTheDocument();
+    fireEvent.keyDown(screen.getByLabelText("搜索检索范围标签"), { key: "Escape" });
     fireEvent.change(screen.getByPlaceholderText("请输入您的问题..."), {
       target: { value: "第三轮手动测试反馈了什么？" },
     });
@@ -128,6 +112,28 @@ describe("ChatPage 检索范围", () => {
       question: "第三轮手动测试反馈了什么？",
       tags: ["pit"],
     });
+  });
+
+  it("空白对话在输入草稿时保持欢迎布局，空白问题不触发布局或请求", async () => {
+    render(<ChatPage />);
+    await waitFor(() => expect(mocks.getConversation).toHaveBeenCalled());
+    const input = screen.getByLabelText("问题输入框");
+    fireEvent.change(input, { target: { value: "还没写完的问题" } });
+    expect(input.closest(".chat-main")).toHaveClass("chat-main--welcome");
+    fireEvent.change(input, { target: { value: "   " } });
+    fireEvent.keyDown(input, { key: "Enter", code: "Enter", charCode: 13 });
+    expect(input.closest(".chat-main")).toHaveClass("chat-main--welcome");
+    expect(mocks.streamChat).not.toHaveBeenCalled();
+  });
+
+  it("打开已有消息的会话直接使用底部输入布局", async () => {
+    mocks.getConversation.mockResolvedValueOnce({ ...conversation, messages: [
+      { message_id: "old-u", request_id: "old-r", sequence: 0, role: "user", content: "以前的问题", status: "complete", citations: [], created_at: "" },
+    ] });
+    render(<ChatPage />);
+    expect(await screen.findByText("以前的问题")).toBeVisible();
+    expect(screen.getByLabelText("问题输入框").closest(".chat-main")).toHaveClass("chat-main--conversation");
+    expect(screen.queryByText("今天想从知识库里了解什么？")).not.toBeInTheDocument();
   });
 
   it("请求尚未返回时立即显示用户问题，再显示模型思考状态", async () => {
@@ -147,6 +153,8 @@ describe("ChatPage 检索范围", () => {
     render(<ChatPage />);
 
     await waitFor(() => expect(mocks.getConversation).toHaveBeenCalledTimes(1));
+    const input = screen.getByLabelText("问题输入框");
+    expect(input.closest(".chat-main")).toHaveClass("chat-main--welcome");
     fireEvent.change(screen.getByLabelText("问题输入框"), {
       target: { value: "这条问题应该立即出现" },
     });
@@ -154,22 +162,25 @@ describe("ChatPage 检索范围", () => {
 
     expect(await screen.findByText("这条问题应该立即出现")).toBeVisible();
     expect(screen.getByText("正在检索并生成回答…")).toBeVisible();
+    expect(input.closest(".chat-main")).toHaveClass("chat-main--conversation");
+    expect(screen.getByLabelText("问题输入框")).toBe(input);
+    expect(screen.queryByText("今天想从知识库里了解什么？")).not.toBeInTheDocument();
     expect(mocks.getConversation).toHaveBeenCalledTimes(1);
 
     await act(async () => finishStream?.());
     await waitFor(() => expect(mocks.getConversation).toHaveBeenCalledTimes(2));
   });
 
-  it("检索范围紧邻输入框上方，桌面会话栏提供宽度调节边界", async () => {
+  it("检索范围成为输入框内部工具，桌面会话栏仍可调宽", async () => {
     render(<ChatPage />);
 
     await waitFor(() => expect(mocks.getConversation).toHaveBeenCalled());
     const timeline = screen.getByLabelText("消息记录");
-    const scope = screen.getByRole("region", { name: "检索范围" });
+    const scope = screen.getByRole("button", { name: "选择检索资料，当前全部资料" });
     const composer = screen.getByLabelText("问题输入框").closest(".chat-composer");
 
     expect(timeline.compareDocumentPosition(scope) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-    expect(scope.compareDocumentPosition(composer!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(composer).toContainElement(scope);
     const separator = screen.getByRole("separator", {
       name: "调整会话栏宽度",
     });
@@ -213,8 +224,10 @@ describe("ChatPage 检索范围", () => {
     render(<ChatPage />);
 
     await waitFor(() => expect(mocks.getConversation).toHaveBeenCalled());
-    fireEvent.click(screen.getByRole("button", { name: "选择 pit" }));
-    fireEvent.click(screen.getByRole("button", { name: "清除标签" }));
+    fireEvent.click(screen.getByRole("button", { name: "选择检索资料，当前全部资料" }));
+    fireEvent.click(await screen.findByRole("button", { name: "pit，2 份文档" }));
+    fireEvent.keyDown(screen.getByLabelText("搜索检索范围标签"), { key: "Escape" });
+    fireEvent.click(screen.getByRole("button", { name: "清除检索范围" }));
     fireEvent.change(screen.getByPlaceholderText("请输入您的问题..."), {
       target: { value: "全库问题" },
     });

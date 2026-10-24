@@ -1,7 +1,8 @@
-import { Button, Tag } from "antd";
-import { CloseOutlined, DatabaseOutlined } from "@ant-design/icons";
+import { useRef, useState } from "react";
+import { Button, Popover } from "antd";
+import { CloseOutlined, DownOutlined, ReadOutlined } from "@ant-design/icons";
 import type { TagInfo } from "../../api/types";
-import { TagTreeSelect } from "../../components/TagTreeSelect";
+import { RetrievalScopePicker } from "./RetrievalScopePicker";
 
 interface RetrievalScopeBarProps {
   tags: TagInfo[];
@@ -9,66 +10,27 @@ interface RetrievalScopeBarProps {
   onChange: (value: string[]) => void;
 }
 
-export function RetrievalScopeBar({
-  tags,
-  value,
-  onChange,
-}: RetrievalScopeBarProps) {
-  const allDocuments = value.length === 0;
+// A composer tool: selecting a source takes effect immediately for the next send.
+export function RetrievalScopeBar({ tags, value, onChange }: RetrievalScopeBarProps) {
+  const [open, setOpen] = useState(false);
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const label = value.length === 0 ? "全部资料" : value.length === 1
+    ? (tags.find((tag) => tag.tag_path === value[0])?.name ?? value[0].split("/").at(-1))
+    : `${value.length} 个资料范围`;
+  const dismiss = () => { setOpen(false); triggerRef.current?.focus(); };
 
   return (
-    <section className="retrieval-scope" aria-labelledby="retrieval-scope-title">
-      <div className="retrieval-scope__heading">
-        <div className="retrieval-scope__label-row">
-          <DatabaseOutlined aria-hidden="true" />
-          <h2 id="retrieval-scope-title" className="retrieval-scope__title">
-            检索范围
-          </h2>
-          <Tag color={allDocuments ? "blue" : "geekblue"} className="retrieval-scope__mode">
-            {allDocuments ? "全部知识库" : `已选 ${value.length} 个标签`}
-          </Tag>
-        </div>
-        <p className="retrieval-scope__hint">
-          {allDocuments
-            ? "下一次提问将检索全部已入库文档"
-            : "父级包含子标签，多标签取并集；范围用于下一次提问"}
-        </p>
-      </div>
-
-      <div className="retrieval-scope__controls">
-        <div className="retrieval-scope__select">
-          <TagTreeSelect
-            tags={tags}
-            value={value}
-            onChange={onChange}
-            ariaLabel="会话检索范围标签"
-            placeholder="选择标签以缩小检索范围"
-          />
-        </div>
-        {!allDocuments && (
-          <Button
-            className="retrieval-scope__clear"
-            icon={<CloseOutlined />}
-            onClick={() => onChange([])}
-          >
-            清除
-          </Button>
-        )}
-      </div>
-
-      {!allDocuments && (
-        <div className="retrieval-scope__tags" aria-label="当前检索标签">
-          {value.map((tag) => (
-            <Tag
-              key={tag}
-              closable
-              onClose={() => onChange(value.filter((item) => item !== tag))}
-            >
-              {tag}
-            </Tag>
-          ))}
-        </div>
-      )}
-    </section>
+    <div className={`scope-tool${value.length ? " scope-tool--filtered" : ""}`}>
+      <Popover trigger="click" placement="topLeft" arrow={false} open={open} onOpenChange={setOpen}
+        destroyOnHidden content={<RetrievalScopePicker tags={tags} value={value} onChange={onChange} onDismiss={dismiss} />}>
+        <Button ref={triggerRef} type="text" size="small" className="scope-tool__trigger" icon={<ReadOutlined />}
+          aria-label={`选择检索资料，当前${label}`} aria-expanded={open} aria-haspopup="dialog"
+          title={value.length ? `仅检索：${value.join("、")}（含子标签）` : "从全部已入库资料中查找"}>
+          <span className="scope-tool__label">{label}</span><DownOutlined className="scope-tool__chevron" />
+        </Button>
+      </Popover>
+      {value.length > 0 && <Button size="small" type="text" className="scope-tool__reset" icon={<CloseOutlined />}
+        aria-label="清除检索范围" title="恢复全部资料" onClick={() => onChange([])} />}
+    </div>
   );
 }

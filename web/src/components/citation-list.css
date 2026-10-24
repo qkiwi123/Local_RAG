@@ -1,0 +1,68 @@
+.citation-list {
+  min-width: 0;
+  max-width: 100%;
+  margin-top: 24px;
+  padding-top: 16px;
+  border-top: 1px solid var(--app-border);
+}
+
+.citation-list .ant-list,
+.citation-list .ant-list-items {
+  min-width: 0;
+  max-width: 100%;
+}
+
+/* Keep long source text inside the reading column, with a separate preview column. */
+.citation-list .citation-item {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: start;
+  gap: 12px;
+  padding: 12px 0;
+}
+
+.citation-item__content {
+  min-width: 0;
+}
+
+.citation-item__title.ant-typography,
+.citation-item__location.ant-typography {
+  display: block;
+  overflow-wrap: anywhere;
+  white-space: normal;
+  line-height: 1.6;
+}
+
+.citation-item__location.ant-typography {
+  margin-top: 3px;
+  font-size: 12px;
+}
+
+.citation-item__excerpt.ant-typography {
+  display: -webkit-box;
+  max-width: 100%;
+  margin-top: 5px;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+  white-space: normal;
+  font-size: 13px;
+  line-height: 1.65;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+.citation-item__preview.ant-btn {
+  margin-top: 1px;
+  white-space: nowrap;
+}
+
+@media (max-width: 620px) {
+  .citation-list .citation-item {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 8px;
+  }
+
+  .citation-item__preview.ant-btn {
+    justify-self: end;
+  }
+}

@@ -55,6 +55,9 @@ export default function ChatPage() {
   const [traceOpen, setTraceOpen] = useState<ConversationMessage | null>(null);
   const [renameTarget, setRenameTarget] = useState<ConversationSummary | null>(null);
   const [renameValue, setRenameValue] = useState("");
+  const hasConversation = Boolean(
+    chat.messages.length || chat.pendingQuestion || chat.streaming || chat.streamingError,
+  );
 
   const currentConversation = useMemo(
     () =>
@@ -117,7 +120,7 @@ export default function ChatPage() {
         </div>
       )}
 
-      <main className="chat-main">
+      <main className={`chat-main chat-main--${hasConversation ? "conversation" : "welcome"}`}>
         <header className="chat-context-bar">
           {narrow && (
             <Button
@@ -129,7 +132,6 @@ export default function ChatPage() {
             </Button>
           )}
           <div className="chat-context-bar__copy">
-            <span className="chat-context-bar__eyebrow">当前会话</span>
             <h1 className="chat-context-bar__title">
               {currentConversation?.title ?? "新对话"}
             </h1>
@@ -148,19 +150,20 @@ export default function ChatPage() {
           onOpenTrace={setTraceOpen}
         />
 
-        <RetrievalScopeBar
-          tags={chat.tags}
-          value={chat.tagFilter}
-          onChange={chat.setTagFilter}
-        />
-
-        <ChatComposer
-          value={chat.input}
-          streaming={chat.streaming}
-          onChange={chat.setInput}
-          onSubmit={chat.submitInput}
-          onStop={chat.stopStreaming}
-        />
+        <div className="chat-compose-dock">
+          <div className="chat-content-column">
+            <ChatComposer
+              value={chat.input}
+              streaming={chat.streaming}
+              onChange={chat.setInput}
+              onSubmit={chat.submitInput}
+              onStop={chat.stopStreaming}
+              scopeControl={<RetrievalScopeBar tags={chat.tags} value={chat.tagFilter} onChange={chat.setTagFilter} />}
+            />
+            <p className="chat-compose-dock__hint">回答基于你的资料，请结合引用核对。<a href="/knowledge">管理资料</a></p>
+          </div>
+        </div>
+        <div className="chat-welcome-spacer" aria-hidden="true" />
       </main>
 
       <Drawer

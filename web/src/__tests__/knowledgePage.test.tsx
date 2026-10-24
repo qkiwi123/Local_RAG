@@ -1,5 +1,6 @@
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import "@testing-library/jest-dom/vitest";
+import { message } from "antd";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { DocumentItem, DocumentPreview, TagInfo } from "../api/types";
 import KnowledgePage from "../pages/knowledge/KnowledgePage";
@@ -140,6 +141,7 @@ describe("KnowledgePage 关键工作流", () => {
 
   afterEach(() => {
     cleanup();
+    message.destroy();
     vi.clearAllMocks();
     vi.unstubAllGlobals();
   });
@@ -152,7 +154,7 @@ describe("KnowledgePage 关键工作流", () => {
     expect(screen.queryByText("选择文件")).not.toBeInTheDocument();
 
     await openUploadDrawer();
-    expect(screen.getByText("确认上传队列")).toBeVisible();
+    expect(screen.getByText("上传队列")).toBeVisible();
     expect(
       document.querySelector(
         ".knowledge-task-drawer.ant-drawer-open .app-drawer-resizer",
@@ -168,9 +170,9 @@ describe("KnowledgePage 关键工作流", () => {
     render(<KnowledgePage />);
 
     expect(await screen.findByLabelText("文档列表")).toBeVisible();
+    expect(await screen.findByText("2.0 KB · 3 个片段")).toBeVisible();
     expect(document.querySelector(".knowledge-document-card")).toBeInTheDocument();
     expect(document.querySelector(".knowledge-documents__table")).toBeNull();
-    expect(screen.getByText("2.0 KB · 3 个片段")).toBeVisible();
   });
 
   it("选择文件时只暂存，点击确认后才逐个提交", async () => {
@@ -187,7 +189,95 @@ describe("KnowledgePage 关键工作流", () => {
       await screen.findByRole("button", { name: /确认上传（1 个文件）/ }),
     );
     await waitFor(() => expect(mocks.uploadDocument).toHaveBeenCalledTimes(1));
-    expect(await screen.findByText(/已入库（3 chunks）/)).toBeVisible();
+    expect(await screen.findByText("上传完成：1 个成功")).toBeVisible();
+    expect(document.querySelectorAll(".knowledge-upload-item")).toHaveLength(0);
+    expect(screen.getByRole("button", { name: "请选择文件后确认上传" })).toBeDisabled();
+  });
+
+  it("一次多选整批只入队一次，不误报重复且确认后每个文件只上传一次", async () => {
+    render(<KnowledgePage />);
+    await openUploadDrawer();
+    const files = Array.from({ length: 5 }, (_, index) =>
+      new File([`content ${index}`], `多选文档-${index}.md`),
+    );
+
+    selectFiles(files);
+
+    const confirm = await screen.findByRole("button", {
+      name: "确认上传（5 个文件）",
+    });
+    expect(document.querySelectorAll(".knowledge-upload-item")).toHaveLength(5);
+    expect(document.querySelectorAll(".ant-message-notice")).toHaveLength(0);
+    expect(screen.queryByText(/已在上传队列中/)).not.toBeInTheDocument();
+    expect(mocks.uploadDocument).not.toHaveBeenCalled();
+
+    fireEvent.click(confirm);
+    await waitFor(() => expect(mocks.uploadDocument).toHaveBeenCalledTimes(5));
+    expect(mocks.uploadDocument.mock.calls.map(([file]) => file)).toEqual(files);
+  });
+
+  it("大量重复文件只显示一条可展开的批次汇总，继续选新文件会清除旧提示", async () => {
+    render(<KnowledgePage />);
+    await openUploadDrawer();
+    const files = Array.from({ length: 30 }, (_, index) =>
+      new File([`content ${index}`], `重复文档-${index}.md`, { lastModified: 1000 }),
+    );
+    selectFiles(files);
+    await screen.findByRole("button", { name: "确认上传（30 个文件）" });
+
+    selectFiles([...files, new File(["new"], "新增文档.md")]);
+
+    expect(await screen.findByText("已加入 1 个文件，30 个文件未加入队列")).toBeVisible();
+    expect(document.querySelectorAll(".knowledge-upload-selection-warning")).toHaveLength(1);
+    expect(document.querySelectorAll(".ant-message-notice")).toHaveLength(0);
+    const details = screen.getByText("查看未加入原因").closest("details");
+    expect(details).not.toHaveAttribute("open");
+    fireEvent.click(screen.getByText("查看未加入原因"));
+    expect(details).toHaveAttribute("open");
+    expect(screen.getByLabelText("未加入队列的文件").children).toHaveLength(30);
+    expect(document.querySelectorAll(".knowledge-upload-item")).toHaveLength(31);
+    expect(mocks.uploadDocument).not.toHaveBeenCalled();
+
+    selectFiles([new File(["another"], "另一份新文档.md")]);
+    await screen.findByRole("button", { name: "确认上传（32 个文件）" });
+    expect(screen.queryByText("查看未加入原因")).not.toBeInTheDocument();
+  });
+
+  it("同批格式和大小校验保留原因，合法文件仍可入队", async () => {
+    render(<KnowledgePage />);
+    await openUploadDrawer();
+    const oversized = new File(["large"], "超大文档.pdf");
+    Object.defineProperty(oversized, "size", { value: 50 * 1024 * 1024 + 1 });
+
+    selectFiles([
+      new File(["valid"], "合法文档.md"),
+      new File(["invalid"], "不支持.exe"),
+      oversized,
+    ]);
+
+    expect(await screen.findByText("已加入 1 个文件，2 个文件未加入队列")).toBeVisible();
+    expect(screen.getByText("不支持.exe：不支持该文件格式")).toBeInTheDocument();
+    expect(screen.getByText("超大文档.pdf：超过 50 MB 限制")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "确认上传（1 个文件）" })).toBeEnabled();
+    expect(document.querySelectorAll(".ant-message-notice")).toHaveLength(0);
+    expect(mocks.uploadDocument).not.toHaveBeenCalled();
+  });
+
+  it("拖拽一批文件同样只入队一次，不产生重复提示", async () => {
+    render(<KnowledgePage />);
+    await openUploadDrawer();
+    const files = Array.from({ length: 4 }, (_, index) =>
+      new File([`content ${index}`], `拖拽文档-${index}.txt`),
+    );
+    fireEvent.drop(document.querySelector(".ant-upload-drag-container")!, {
+      dataTransfer: { files, types: ["Files"] },
+    });
+
+    await screen.findByRole("button", { name: "确认上传（4 个文件）" });
+    expect(document.querySelectorAll(".knowledge-upload-item")).toHaveLength(4);
+    expect(document.querySelectorAll(".ant-message-notice")).toHaveLength(0);
+    expect(screen.queryByText(/已在上传队列中/)).not.toBeInTheDocument();
+    expect(mocks.uploadDocument).not.toHaveBeenCalled();
   });
 
   it("移除暂存文件不会发起上传请求", async () => {
@@ -207,6 +297,52 @@ describe("KnowledgePage 关键工作流", () => {
     expect(
       screen.getByRole("button", { name: "请选择文件后确认上传" }),
     ).toBeDisabled();
+  });
+
+  it("一键清空多份暂存文件，不上传也不删除已入库文档", async () => {
+    render(<KnowledgePage />);
+    await openUploadDrawer();
+    selectFiles(Array.from({ length: 12 }, (_, i) => new File(["draft"], `待清空-${i}.md`)));
+    await screen.findByRole("button", { name: "确认上传（12 个文件）" });
+    fireEvent.click(screen.getByRole("button", { name: "清空待上传文件" }));
+    expect(document.querySelectorAll(".knowledge-upload-item")).toHaveLength(0);
+    expect(screen.getByRole("button", { name: "清空待上传文件" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "请选择文件后确认上传" })).toBeDisabled();
+    expect(mocks.uploadDocument).not.toHaveBeenCalled();
+    expect(mocks.deleteDocument).not.toHaveBeenCalled();
+  });
+
+  it("上传中不能清空，完成后只移除本批成功项并保留新添加文件", async () => {
+    let completeUpload: (() => void) | undefined;
+    mocks.uploadDocument.mockImplementationOnce(() => new Promise((resolve) => {
+      completeUpload = () => resolve({ message: "ok", document_id: "doc-a", document_name: "本批.md", chunk_count: 1, status: "ready", warnings: [] });
+    }));
+    render(<KnowledgePage />);
+    await openUploadDrawer();
+    selectFiles([new File(["first"], "本批.md")]);
+    fireEvent.click(await screen.findByRole("button", { name: "确认上传（1 个文件）" }));
+    await waitFor(() => expect(mocks.uploadDocument).toHaveBeenCalledTimes(1));
+    selectFiles([new File(["next"], "下一批.md")]);
+    expect(screen.getByRole("button", { name: "清空待上传文件" })).toBeDisabled();
+    await act(async () => completeUpload?.());
+    await screen.findByText("上传完成：1 个成功");
+    expect(screen.queryByRole("button", { name: "移除上传文件 本批.md" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "移除上传文件 下一批.md" })).toBeVisible();
+    expect(screen.getByRole("button", { name: "确认上传（1 个文件）" })).toBeEnabled();
+    expect(mocks.uploadDocument).toHaveBeenCalledTimes(1);
+  });
+
+  it("失败项重试成功后也自动清空队列", async () => {
+    mocks.uploadDocument.mockRejectedValueOnce(new Error("暂时失败")).mockResolvedValueOnce({ message: "ok", document_id: "doc-retry", document_name: "可重试.md", chunk_count: 1, status: "ready", warnings: [] });
+    render(<KnowledgePage />);
+    await openUploadDrawer();
+    selectFiles([new File(["content"], "可重试.md")]);
+    fireEvent.click(await screen.findByRole("button", { name: "确认上传（1 个文件）" }));
+    await screen.findByText("暂时失败");
+    fireEvent.click(screen.getByRole("button", { name: "重试失败文件" }));
+    await screen.findByText("上传完成：1 个成功");
+    expect(document.querySelectorAll(".knowledge-upload-item")).toHaveLength(0);
+    expect(mocks.uploadDocument).toHaveBeenCalledTimes(2);
   });
 
   it("关闭上传抽屉后仍保留暂存队列", async () => {

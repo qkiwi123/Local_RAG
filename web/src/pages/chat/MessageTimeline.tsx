@@ -68,13 +68,13 @@ export function MessageTimeline({
       aria-label="消息记录"
       aria-live="polite"
     >
+      <div className="chat-content-column">
       {rows.length === 0 ? (
-        <Alert
-          type="info"
-          title="欢迎使用企业知识库问答系统"
-          description="先选择或新建会话，再在输入框上方确认检索范围。选择标签可以缩小知识库范围。"
-          className="chat-empty-state"
-        />
+        <section className="chat-empty-state">
+          <span className="chat-empty-state__eyebrow">让资料成为线索</span>
+          <h2>今天想从知识库里了解什么？</h2>
+          <p>提出问题，找到答案，也找到出处。</p>
+        </section>
       ) : (
         rows.map(({ item, live, pending }) => (
           <div
@@ -83,11 +83,9 @@ export function MessageTimeline({
             className={`chat-message-row chat-message-row--${item.role}`}
           >
             <div
-              className={`chat-message-bubble chat-message-bubble--${item.role}${
+              className={item.role === "assistant" ? "chat-answer" : `chat-message-bubble chat-message-bubble--user${
                 item.status === "failed" ? " chat-message-bubble--failed" : ""
-              }${
-                pending ? " chat-message-bubble--pending" : live ? " chat-message-bubble--streaming" : ""
-              }`}
+              }${pending ? " chat-message-bubble--pending" : ""}`}
             >
               {item.role === "assistant" && (
                 <ReasoningPanel
@@ -140,6 +138,7 @@ export function MessageTimeline({
           </div>
         ))
       )}
+      </div>
     </div>
   );
 }

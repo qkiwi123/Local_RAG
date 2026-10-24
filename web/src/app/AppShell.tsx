@@ -1,11 +1,14 @@
 import { useEffect, useState, type ReactNode } from "react";
-import { Alert, Layout, Menu } from "antd";
+import { Alert, Button, Layout, Menu, Tooltip } from "antd";
 import {
   CommentOutlined,
   DatabaseOutlined,
   SettingOutlined,
+  MoonOutlined,
+  SunOutlined,
 } from "@ant-design/icons";
 import { Link, useLocation } from "react-router-dom";
+import { useAppTheme } from "./ThemeContext";
 
 const { Header, Content } = Layout;
 
@@ -15,6 +18,7 @@ interface AppShellProps {
 
 export function AppShell({ children }: AppShellProps) {
   const location = useLocation();
+  const { mode, toggle } = useAppTheme();
   const selected = location.pathname.startsWith("/knowledge")
     ? "knowledge"
     : location.pathname.startsWith("/settings")
@@ -68,7 +72,7 @@ export function AppShell({ children }: AppShellProps) {
                 {
                   key: "knowledge",
                   icon: <DatabaseOutlined />,
-                  label: <Link to="/knowledge">知识库管理</Link>,
+                  label: <Link to="/knowledge" aria-label="知识库管理"><span className="app-nav-full-label">知识库管理</span><span className="app-nav-short-label">知识库</span></Link>,
                 },
                 {
                   key: "settings",
@@ -80,19 +84,25 @@ export function AppShell({ children }: AppShellProps) {
           </nav>
 
           <div className="app-header-meta">
+            <Tooltip title={mode === "dark" ? "切换到日间模式" : "切换到夜间模式"}>
+              <Button className="app-theme-toggle" type="text"
+                aria-label={mode === "dark" ? "切换到日间模式" : "切换到夜间模式"}
+                icon={mode === "dark" ? <SunOutlined /> : <MoonOutlined />} onClick={toggle} />
+            </Tooltip>
             <span className="app-workspace-label">知识工作台</span>
             <span
               className={`app-health app-health-${
                 !healthChecked ? "checking" : backendDown ? "down" : "up"
               }`}
               aria-live="polite"
+              aria-label={!healthChecked ? "检查后端" : backendDown ? "后端离线" : "后端在线"}
             >
               <span className="app-health-dot" aria-hidden="true" />
-              {!healthChecked
+              <span className="app-health-label">{!healthChecked
                 ? "检查后端"
                 : backendDown
                   ? "后端离线"
-                  : "后端在线"}
+                  : "后端在线"}</span>
             </span>
           </div>
         </div>
@@ -108,7 +118,7 @@ export function AppShell({ children }: AppShellProps) {
         />
       )}
 
-      <Content className="app-content">
+      <Content className={`app-content${selected === "settings" ? " app-content--settings" : ""}`}>
         <div className="app-content-inner">{children}</div>
       </Content>
     </Layout>

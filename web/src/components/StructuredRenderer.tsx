@@ -291,14 +291,14 @@ export function StructuredRenderer({
 }
 
 const quoteStyle: React.CSSProperties = {
-  borderLeft: "3px solid #d9d9d9",
+  borderLeft: "3px solid var(--app-border)",
   paddingLeft: 12,
-  color: "#595959",
+  color: "var(--app-muted)",
   margin: "4px 0",
 };
 
 const codeStyle: React.CSSProperties = {
-  background: "#f6f6f6",
+  background: "var(--app-surface-subtle)",
   padding: 8,
   borderRadius: 4,
   overflowX: "auto",
@@ -310,12 +310,12 @@ const tableStyle: React.CSSProperties = {
 };
 
 const cellStyle: React.CSSProperties = {
-  border: "1px solid #d9d9d9",
+  border: "1px solid var(--app-border)",
   padding: "4px 8px",
 };
 
 const headCellStyle: React.CSSProperties = {
   ...cellStyle,
-  background: "#fafafa",
+  background: "var(--app-surface-subtle)",
   fontWeight: 600,
 };

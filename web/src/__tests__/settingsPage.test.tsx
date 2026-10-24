@@ -389,6 +389,52 @@ describe("SettingsPage", () => {
     await waitFor(() => expect(screen.getByLabelText("视觉 API Key")).toHaveValue(""));
   }, 15000);
 
+  it("BM25 召回数量默认可见，独立保存后读取服务端返回值", async () => {
+    mocks.updateSettings.mockResolvedValue(response({
+      ...settings,
+      revision: 4,
+      retrieval: { ...settings.retrieval, bm25_top_k: 27 },
+    }));
+    render(<SettingsPage />);
+
+    const bm25 = await screen.findByLabelText("BM25 召回 Top K");
+    expect(bm25).toBeVisible();
+    expect(bm25).toHaveValue("15");
+    expect(bm25).toHaveAttribute("aria-valuemin", "1");
+    expect(bm25).toHaveAttribute("aria-valuemax", "100");
+    fireEvent.change(bm25, { target: { value: "27" } });
+    await waitFor(() => expect(screen.getByLabelText("当前表单的检索流程")).toHaveTextContent("BM25 27 条"));
+    fireEvent.click(screen.getByRole("button", { name: /保存并应用/ }));
+
+    await waitFor(() => expect(mocks.updateSettings).toHaveBeenCalledWith({
+      expected_revision: 3,
+      retrieval: { bm25_top_k: 27 },
+    }));
+    await screen.findByText(/设置已应用到 revision 4/);
+    expect(bm25).toHaveValue("27");
+    expect(screen.getByRole("button", { name: /保存并应用/ })).toBeDisabled();
+  });
+
+  it("BM25 召回数小于最终 Top K 时阻止保存", async () => {
+    render(<SettingsPage />);
+    fireEvent.change(await screen.findByLabelText("BM25 召回 Top K"), { target: { value: "4" } });
+    fireEvent.click(screen.getByRole("button", { name: /保存并应用/ }));
+    await waitFor(() => expect(screen.getByText("不能小于最终 Top K")).toBeVisible());
+    expect(mocks.updateSettings).not.toHaveBeenCalled();
+  });
+
+  it("切换设置分区保留草稿，放弃修改恢复已保存的召回数量", async () => {
+    render(<SettingsPage />);
+    const bm25 = await screen.findByLabelText("BM25 召回 Top K");
+    fireEvent.change(bm25, { target: { value: "28" } });
+    fireEvent.click(screen.getByRole("button", { name: /问答模型.*连接与生成参数/ }));
+    expect(bm25).toHaveValue("28");
+    expect(screen.getByRole("button", { name: /保存并应用/ })).toBeEnabled();
+    fireEvent.click(screen.getByRole("button", { name: /放弃修改/ }));
+    expect(bm25).toHaveValue("15");
+    expect(mocks.updateSettings).not.toHaveBeenCalled();
+  });
+
   it("字段关系非法时不发送保存请求", async () => {
     render(<SettingsPage />);
     const finalTopK = await screen.findByLabelText("最终 Top K");

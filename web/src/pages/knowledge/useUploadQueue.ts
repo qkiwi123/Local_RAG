@@ -20,6 +20,12 @@ export interface UploadQueueAddResult {
   rejected: string[];
 }
 
+export interface UploadBatchResult {
+  succeeded: number;
+  failed: number;
+  warnings: { fileName: string; warnings: UploadWarning[] }[];
+}
+
 interface UseUploadQueueOptions {
   onUploaded?: () => void | Promise<void>;
 }
@@ -34,6 +40,7 @@ function extensionOf(fileName: string): string {
 export function useUploadQueue({ onUploaded }: UseUploadQueueOptions = {}) {
   const [items, setItems] = useState<UploadQueueItem[]>([]);
   const [uploading, setUploading] = useState(false);
+  const [lastBatch, setLastBatch] = useState<UploadBatchResult | null>(null);
   const itemsRef = useRef<UploadQueueItem[]>([]);
   const sequenceRef = useRef(0);
   const runningRef = useRef(false);
@@ -44,17 +51,16 @@ export function useUploadQueue({ onUploaded }: UseUploadQueueOptions = {}) {
         | UploadQueueItem[]
         | ((previous: UploadQueueItem[]) => UploadQueueItem[]),
     ) => {
-      setItems((previous) => {
-        const next = typeof update === "function" ? update(previous) : update;
-        itemsRef.current = next;
-        return next;
-      });
+      const next = typeof update === "function" ? update(itemsRef.current) : update;
+      itemsRef.current = next;
+      setItems(next);
     },
     [],
   );
 
   const addFiles = useCallback(
     (files: File[]): UploadQueueAddResult => {
+      if (files.length) setLastBatch(null);
       const rejected: string[] = [];
       const known = new Set(
         itemsRef.current.map(
@@ -104,6 +110,7 @@ export function useUploadQueue({ onUploaded }: UseUploadQueueOptions = {}) {
       if (!targets.length) return;
 
       runningRef.current = true;
+      setLastBatch(null);
       setUploading(true);
       const targetIds = new Set(targets.map((item) => item.id));
       commitItems((previous) =>
@@ -119,12 +126,13 @@ export function useUploadQueue({ onUploaded }: UseUploadQueueOptions = {}) {
         ),
       );
 
-      let succeeded = false;
+      const result: UploadBatchResult = { succeeded: 0, failed: 0, warnings: [] };
       try {
         for (const item of targets) {
           try {
             const response = await api.uploadDocument(item.file, tags);
-            succeeded = true;
+            result.succeeded += 1;
+            if (response.warnings?.length) result.warnings.push({ fileName: item.file.name, warnings: response.warnings });
             commitItems((previous) =>
               previous.map((current) =>
                 current.id === item.id
@@ -138,6 +146,7 @@ export function useUploadQueue({ onUploaded }: UseUploadQueueOptions = {}) {
               ),
             );
           } catch (error) {
+            result.failed += 1;
             commitItems((previous) =>
               previous.map((current) =>
                 current.id === item.id
@@ -153,7 +162,9 @@ export function useUploadQueue({ onUploaded }: UseUploadQueueOptions = {}) {
             );
           }
         }
-        if (succeeded) {
+        commitItems((previous) => previous.filter((item) => !targetIds.has(item.id) || item.status !== "success"));
+        setLastBatch(result);
+        if (result.succeeded) {
           await onUploaded?.();
         }
       } finally {
@@ -175,10 +186,12 @@ export function useUploadQueue({ onUploaded }: UseUploadQueueOptions = {}) {
     [commitItems],
   );
 
-  const clearCompleted = useCallback(() => {
+  const clearPending = useCallback(() => {
+    if (runningRef.current) return;
     commitItems((previous) =>
-      previous.filter((item) => item.status !== "success"),
+      previous.filter((item) => item.status === "uploading"),
     );
+    setLastBatch(null);
   }, [commitItems]);
 
   const counts = useMemo(
@@ -195,9 +208,10 @@ export function useUploadQueue({ onUploaded }: UseUploadQueueOptions = {}) {
     items,
     counts,
     uploading,
+    lastBatch,
     addFiles,
     removeItem,
-    clearCompleted,
+    clearPending,
     uploadStaged: (tags: string[]) => uploadMatching("staged", tags),
     retryFailed: (tags: string[]) => uploadMatching("failed", tags),
   };

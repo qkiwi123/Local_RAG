@@ -33,11 +33,11 @@ export function FieldMeta({
 }: FieldMetaProps) {
   return (
     <Space size={[4, 4]} wrap className="settings-field-meta">
-      {source && <Tag>{sourceLabels[source]}</Tag>}
+      {source && <span className="settings-field-source">{sourceLabels[source]}</span>}
       {activation && (
-        <Tag color={activation === "unavailable" ? "default" : "blue"}>
+        <span className="settings-field-activation">
           {activationLabels[activation]}
-        </Tag>
+        </span>
       )}
       {inactive && <Tag>当前模式不使用</Tag>}
       {note && <Typography.Text type="secondary">{note}</Typography.Text>}

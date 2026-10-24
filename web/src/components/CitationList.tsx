@@ -4,6 +4,7 @@ import { api } from "../api/client";
 import type { Citation, CitationPreviewPayload } from "../api/types";
 import { centerCitationTarget } from "./citationScroll";
 import { StructuredRenderer } from "./StructuredRenderer";
+import "./citation-list.css";
 
 const { Text } = Typography;
 
@@ -130,7 +131,7 @@ function CitationPreviewModal({
               <section
                 key={unit.unit_id}
                 data-citation-preview-target={isTarget ? "true" : undefined}
-                style={{ marginBottom: 16, padding: 12, border: "1px solid #f0f0f0", borderRadius: 8 }}
+                style={{ marginBottom: 16, padding: 12, border: "1px solid var(--app-border)", borderRadius: 8 }}
               >
                 <Typography.Title level={5}>
                   {isTarget ? "🎯 " : ""}
@@ -165,7 +166,7 @@ export function CitationList({ citations }: { citations: Citation[] }) {
   ];
 
   return (
-    <section aria-label="本轮检索来源">
+    <section className="citation-list" aria-label="本轮检索来源">
       <Text strong>📎 本轮检索来源</Text>
       <div>
         <Text type="secondary">按正文中的来源编号分组，可查看原文自行核对。</Text>
@@ -179,33 +180,23 @@ export function CitationList({ citations }: { citations: Citation[] }) {
             locale={{ emptyText: "无" }}
             dataSource={items}
             renderItem={(citation) => (
-              <List.Item
-                actions={
-                  citation.preview_available
-                    ? [
-                        <Button
-                          key="preview"
-                          size="small"
-                          onClick={() => setOpenCitation(citation)}
-                        >
-                          🔍 查看原文
-                        </Button>,
-                      ]
-                    : []
-                }
-              >
-                <div>
-                  <Text strong>
+              <List.Item className="citation-item">
+                <div className="citation-item__content">
+                  <Text strong className="citation-item__title">
                     【来源{citation.source_id}】《{citation.document_name}》
-                    {citation.location_label || "位置未知"}
                   </Text>
-                  <br />
+                  <Text type="secondary" className="citation-item__location">{citation.location_label || "位置未知"}</Text>
                   {citation.excerpt ? (
-                    <Text type="secondary" ellipsis style={{ maxWidth: 640 }}>
+                    <Text type="secondary" className="citation-item__excerpt">
                       {citation.excerpt}
                     </Text>
                   ) : null}
                 </div>
+                {citation.preview_available && (
+                  <Button size="small" className="citation-item__preview" onClick={() => setOpenCitation(citation)}>
+                    🔍 查看原文
+                  </Button>
+                )}
               </List.Item>
             )}
           />

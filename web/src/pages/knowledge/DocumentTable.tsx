@@ -16,7 +16,11 @@ import {
   DeleteOutlined,
   EditOutlined,
   EyeOutlined,
-  FolderOpenOutlined,
+  FileOutlined,
+  FilePdfOutlined,
+  FilePptOutlined,
+  FileTextOutlined,
+  FileWordOutlined,
   ReloadOutlined,
   TagsOutlined,
   UploadOutlined,
@@ -52,6 +56,15 @@ function formatBytes(bytes: number): string {
 
 function formatTime(value: string): string {
   return value.replace("T", " ").slice(0, 19);
+}
+
+function DocumentIcon({ name }: { name: string }) {
+  const extension = name.split(".").pop()?.toLowerCase() ?? "";
+  const icon = extension === "pdf" ? <FilePdfOutlined />
+    : extension === "docx" ? <FileWordOutlined />
+    : extension === "pptx" ? <FilePptOutlined />
+    : ["md", "txt"].includes(extension) ? <FileTextOutlined /> : <FileOutlined />;
+  return <span className={`knowledge-document-icon knowledge-document-icon--${extension}`} aria-hidden="true">{icon}</span>;
 }
 
 interface DocumentActionsProps {
@@ -159,7 +172,7 @@ export function DocumentTable({
     >
       <div className="knowledge-documents__hero">
         <div className="knowledge-documents__heading">
-          <Text className="knowledge-page__eyebrow">知识库管理</Text>
+          <Text className="knowledge-page__eyebrow">工作空间 / 资料管理</Text>
           <div className="knowledge-documents__title-row">
             <Title
               level={2}
@@ -171,7 +184,7 @@ export function DocumentTable({
             <Tag color="blue">{documents.length} 个</Tag>
           </div>
           <Text type="secondary">
-            按标签筛选文档，并在当前工作区完成预览、分类与维护。
+            整理你的资料，让每一次回答都有据可查。
           </Text>
         </div>
         <div className="knowledge-documents__actions">
@@ -193,7 +206,16 @@ export function DocumentTable({
         </div>
       </div>
 
+      <div className="knowledge-library-summary" aria-label="当前文档列表概览">
+        <span><strong>{documents.length}</strong> 份文档</span>
+        <span><strong>{documents.reduce((sum, doc) => sum + doc.chunk_count, 0).toLocaleString()}</strong> 个知识片段</span>
+        <span><strong>{formatBytes(documents.reduce((sum, doc) => sum + doc.size_bytes, 0))}</strong> 原始资料</span>
+        <span className="knowledge-library-summary__scope">{filter.length || searchValue ? "当前筛选结果" : "全部资料"}</span>
+      </div>
+
       <div className="knowledge-documents__toolbar">
+        <div className="knowledge-documents__search-field">
+        <Text className="knowledge-field__label" type="secondary">搜索资料</Text>
         <Input.Search
           value={searchValue}
           onChange={(event) => onSearchChange(event.target.value)}
@@ -202,6 +224,7 @@ export function DocumentTable({
           placeholder="按文档名称搜索"
           className="knowledge-documents__search"
         />
+        </div>
         <div className="knowledge-documents__filter">
           <Text className="knowledge-field__label" type="secondary">
             标签筛选
@@ -217,6 +240,7 @@ export function DocumentTable({
         <Button icon={<ReloadOutlined />} aria-label="刷新文档" onClick={onRefresh}>
           刷新
         </Button>
+        {(filter.length > 0 || searchValue) && <Button type="text" onClick={() => { onFilterChange([]); onSearchChange(""); }}>清除筛选</Button>}
       </div>
 
       {compactDocuments ? (
@@ -230,11 +254,9 @@ export function DocumentTable({
                     key={document.document_id}
                   >
                     <div className="knowledge-document-card__heading">
-                      <span className="knowledge-document-icon">
-                        <FolderOpenOutlined />
-                      </span>
+                      <DocumentIcon name={document.original_name} />
                       <div className="knowledge-document-card__title">
-                        <Text strong>{document.original_name}</Text>
+                        <button type="button" className="knowledge-document-open" aria-label={`打开文档 ${document.original_name}`} onClick={() => onPreview(document)}>{document.original_name}</button>
                         <Text type="secondary">
                           {formatBytes(document.size_bytes)} · {document.chunk_count} 个片段
                         </Text>
@@ -290,7 +312,7 @@ export function DocumentTable({
           loading={loading}
           size="middle"
           dataSource={documents}
-          pagination={{ pageSize: 10, hideOnSinglePage: true }}
+          pagination={{ defaultPageSize: 10, hideOnSinglePage: true, showTotal: (total) => `共 ${total} 份资料` }}
           locale={{
             emptyText: (
               <Empty
@@ -309,14 +331,10 @@ export function DocumentTable({
               dataIndex: "original_name",
               minWidth: 220,
               ellipsis: true,
-              render: (name: string) => (
+              render: (name: string, document: DocumentItem) => (
                 <Space size={10}>
-                  <span className="knowledge-document-icon">
-                    <FolderOpenOutlined />
-                  </span>
-                  <Text strong ellipsis={{ tooltip: name }}>
-                    {name}
-                  </Text>
+                  <DocumentIcon name={name} />
+                  <button type="button" className="knowledge-document-open" title={name} aria-label={`打开文档 ${name}`} onClick={() => onPreview(document)}>{name}</button>
                 </Space>
               ),
             },

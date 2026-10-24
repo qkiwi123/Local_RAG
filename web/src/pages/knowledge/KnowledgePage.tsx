@@ -255,11 +255,12 @@ export default function KnowledgePage() {
         items={uploadQueue.items}
         counts={uploadQueue.counts}
         uploading={uploadQueue.uploading}
+        lastBatch={uploadQueue.lastBatch}
         onClose={() => setTaskDrawer(null)}
         onSelectedTagsChange={setUploadTags}
         onAddFiles={uploadQueue.addFiles}
         onRemoveItem={uploadQueue.removeItem}
-        onClearCompleted={uploadQueue.clearCompleted}
+        onClearPending={uploadQueue.clearPending}
         onUpload={() => void uploadQueue.uploadStaged(uploadTags)}
         onRetryFailed={() => void uploadQueue.retryFailed(uploadTags)}
         onCreateAndSelectTag={(tagPath) => createTag(tagPath, true)}
