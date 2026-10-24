@@ -433,7 +433,11 @@ def build_generation(
                 "metadata_sha256": _rows_digest(rows, "metadata"),
             },
             "compatibility": {
-                "p1_gate": "120q-k1-k5-k15-k50-ordered-and-score-exact",
+                "p1_gate": (
+                    "portable-snapshot-k1-k5-k15-k50-ordered-and-score-exact"
+                    if (source.get("oracle") or {}).get("policy") == "portable-snapshot-v1"
+                    else "120q-k1-k5-k15-k50-ordered-and-score-exact"
+                ),
                 "average_raw_robertson_idf": average_idf,
                 "oracle": oracle_result,
             },

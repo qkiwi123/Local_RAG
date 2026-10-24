@@ -1,0 +1,76 @@
+{
+  "schema": 1,
+  "date": "2026-10-24",
+  "status": "W3 local scope complete",
+  "scope": "Portable CMD entry points, lifecycle, instance ownership, local HTTP restrictions and conservative maintenance; internal prototype, not final release",
+  "artifact_directory": "build/windows-w3/便携 启停验证-20261024",
+  "manifest": {
+    "path": "portable-manifest.json",
+    "sha256": "fc63334d83d04790edfe08c3869632522a4685a9a7bd8e435d0236b4108e6149",
+    "files": 34158,
+    "bytes": 7217838536,
+    "frontend_build_id": "f93130aa544cdfe03d8a7e56f240d34589b8be376f9624c4b369513d36caa642",
+    "integrity_scope": "Local payload SHA-256 checks with cached unchanged files; not a signed release authenticity guarantee"
+  },
+  "tests": {
+    "files": 14,
+    "passed": 237,
+    "skipped": 3,
+    "w3_passed": 44,
+    "w3_skipped": 1,
+    "skip_reason": "Windows account lacks symlink creation permission",
+    "scope": "Targeted portable, model/config, Sparse, settings and warmup regressions; not the entire project test suite"
+  },
+  "acceptance": {
+    "report": "reports/w3-lifecycle.json",
+    "sha256": "d54afff10905ba78bd8a10e3df72b54da31d31c1d840fff1b33c3add792adbe8",
+    "status": "passed",
+    "transport": "Real loopback HTTP, Windows CMD and isolated backend processes",
+    "data": "Synthetic TXT in a fresh prototype data directory; real bundled Embedding/Reranker",
+    "gpu_device": "cuda:0",
+    "cpu_restart": "Explicit CPU CMD retains uploaded document and preview",
+    "checks": [
+      "CMD and direct concurrent start reuse one owned instance",
+      "React settings route and JavaScript MIME",
+      "Generation/OCR disabled and inherited fake key ignored before chat",
+      "Host/Origin checks including cross-site simple POST",
+      "Actual HTTP upload, persistent Sparse ready and Hybrid retrieval sources",
+      "Foreign HTTP-200 port remains alive and unclaimed",
+      "Stale PID is not killed",
+      "Stop during initialization cancels and drains the owned instance",
+      "Normal stop via CMD",
+      "Explicit force stop of the owned idle synthetic instance",
+      "CPU CMD restart retains document",
+      "Maintenance refuses cache cleanup while running",
+      "Maintenance removal preparation stops service and preserves data/models/unknown files",
+      "Cache cleanup removes only known tokenizer and integrity-cache files"
+    ],
+    "all_test_services_stopped": true,
+    "application_assets_match_manifest": true,
+    "remote_llm_and_ocr_calls": 0,
+    "browser_scope": "Browser URL asserted by unit tests; real HTTP frontend assets checked with --no-browser, no manual desktop acceptance"
+  },
+  "documentation_validation": {
+    "status": "passed",
+    "markdown_files": 62,
+    "core_documents": 52,
+    "links_checked": 2206,
+    "directed_core_relations": 438,
+    "self_tests_passed": 11,
+    "scope": "Static documentation checks only"
+  },
+  "future_zip": {
+    "exported": false,
+    "destination_preference": "User-specified external directory recorded only in ignored build/windows-release/output-preference.json",
+    "existing_output_overwrite": false
+  },
+  "limitations": [
+    "No-NVIDIA/no-driver clean Windows remains unavailable and untested",
+    "GPU-unavailable and OOM retry policies have unit coverage; this run did not disable drivers or exhaust VRAM",
+    "W4 repeatable React build, original wheel provenance, licensed VC Redist/NOTICE review and clean ZIP assembly remain pending",
+    "W5 manual browser/double-click, production-scale quality/performance, full native/system write tracing and move/backup/removal acceptance remain pending",
+    "Do not ZIP this synthetic acceptance directory: a release must be assembled from an empty whitelist tree without data/state/logs/reports",
+    "Source stop.ps1 creation-time checks now use absolute differences; syntax checked, not run against production",
+    "No production .env/data, GPU drivers, registry, service, startup or firewall settings changed; no Git commit or push in this stage"
+  ]
+}

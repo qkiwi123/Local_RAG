@@ -1,0 +1,245 @@
+{
+  "schema": 1,
+  "date": "2026-10-24",
+  "status": "W2 local scope complete",
+  "scope": "Portable configuration, workspace compatibility preflight and first Sparse generation; not a final release",
+  "artifact_directory": "build/windows-w2/便携 应用验证-20261024-r2",
+  "runtime_lock_sha256": "1a50999b9a9a1e6a9983f5bcede8caae505f79efa27fd5e8fbc7cb5ae86bbdb6",
+  "manifest_sha256": "f02936e261cd0f33092d4f4f4983aa2382bc64098b7c30cddc7f6d3169991896",
+  "tests": {
+    "passed": 187,
+    "skipped": 2,
+    "reason": "Windows account lacks symlink creation permission",
+    "files": 12,
+    "new_w2_passed": 25,
+    "new_w2_skipped": 1,
+    "source_initial_generation_gate_and_120q_oracle": "preserved; covered by regression"
+  },
+  "acceptance": {
+    "transport": "In-process ASGI, actual FastAPI routes; no application TCP server/browser",
+    "fixture": "6 public synthetic TXT documents uploaded, settings persisted, 1 document deleted, 5 retained",
+    "models": "real bundled Embedding/Reranker, not mocked",
+    "gpu": "cuda:0 / reranker float16, first-run lifecycle",
+    "cpu": "cpu / reranker float32, fresh-process restart retains settings/documents/index",
+    "remote_llm_and_ocr": "disabled, zero authorized remote calls made",
+    "environment_pollution": [
+      "invalid PYTHONHOME",
+      "external PYTHONPATH",
+      "invalid HF_HOME",
+      "fake DEEPSEEK_API_KEY",
+      "LLM_ENABLED=true",
+      "outside UPLOAD_DIR"
+    ],
+    "guard": "Python covered network/external-write events prohibited after internal Windows event-loop initialization; native DLL/registry tracing not complete"
+  },
+  "reports": [
+    {
+      "path": "reports/gpu-first-r2.json",
+      "sha256": "3144d96670e1ed284986cc95c51198bf256e1eeef2a508b70af824765fc493e1",
+      "result": {
+        "status": "passed",
+        "scope": "W2 real application routes, local synthetic data; not W3-W5",
+        "payload": {
+          "files": 34144,
+          "bytes": 7216392830,
+          "sha256_verified": true
+        },
+        "application": {
+          "phase": "first",
+          "device": "cuda:0",
+          "reranker_dtype": "torch.float16",
+          "settings_without_key": "passed",
+          "hybrid_chat_with_sources": "passed",
+          "citation_count": 5,
+          "chunk_count": 5,
+          "index": {
+            "sparse_backend": "bm25s_mmap",
+            "sparse_index_generation": "auto-20261024T135451-f24947b7",
+            "sparse_manifest_hash": "5a08108822fe895f7ec93185f1f4e3e5cf56b3d444138b2c346532753e4c2591",
+            "sparse_index_status": "ready",
+            "sparse_fallback_reason": null,
+            "sparse_index_load_ms": 0,
+            "sparse_contract_version": "bm25s-rank-bm25-compat-v1"
+          },
+          "oracle": {
+            "executed": true,
+            "passed": true,
+            "question_count": 8,
+            "k_values": [
+              1,
+              5,
+              15,
+              50
+            ],
+            "exact_order_questions": {
+              "1": 8,
+              "5": 8,
+              "15": 8,
+              "50": 8
+            },
+            "max_absolute_score_delta": 0,
+            "wall_s": 0.0017564999870955944
+          },
+          "oracle_source": {
+            "policy": "portable-snapshot-v1",
+            "count": 8,
+            "sha256": "27817ef35a14d8b13eb1210f390e7b8404ff77578ad066855b17f3cce89c0160"
+          },
+          "workspace": {
+            "format": 1,
+            "workspace_id": "bdc56c9e-9759-4322-a6b5-6648679ca76e",
+            "corpus_id": "portable-bdc56c9e-9759-4322-a6b5-6648679ca76e",
+            "contract": {
+              "storage_schema": 5,
+              "runtime_lock_sha256": "1a50999b9a9a1e6a9983f5bcede8caae505f79efa27fd5e8fbc7cb5ae86bbdb6",
+              "models": {
+                "embedding": {
+                  "id": "BAAI/bge-large-zh-v1.5",
+                  "revision": "79e7739b6ab944e86d6171e44d24c997fc1e0116"
+                },
+                "reranker": {
+                  "id": "BAAI/bge-reranker-v2-m3",
+                  "revision": "953dc6f6f85a1b2dbfca4c34a2796e7dde08d41e"
+                }
+              }
+            },
+            "sparse_initialized": true,
+            "sparse_publication_pending": false,
+            "initial_generation": "auto-20261024T135451-36edfcfc"
+          },
+          "warmup": {
+            "status": "ready",
+            "component": null,
+            "error_type": null,
+            "detail": null
+          },
+          "restart_retains_settings_and_documents": false
+        },
+        "bundled_modules": 6004,
+        "native_runtime_paths": {
+          "vcruntime140.dll": "runtime/vcruntime140.dll",
+          "vcruntime140_1.dll": "runtime/vcruntime140_1.dll",
+          "msvcp140-a4c2229bdc2a2a630acdc095b4d86008.dll": "runtime/Lib/site-packages/numpy.libs/msvcp140-a4c2229bdc2a2a630acdc095b4d86008.dll",
+          "msvcp140.dll": "runtime/Lib/site-packages/sklearn/.libs/msvcp140.dll",
+          "msvcp140_atomic_wait.dll": "runtime/msvcp140_atomic_wait.dll",
+          "msvcp140-d448dcabdad98c14abc6ff2741df95cd.dll": "runtime/Lib/site-packages/pyarrow.libs/msvcp140-d448dcabdad98c14abc6ff2741df95cd.dll",
+          "msvcp140_atomic_wait-4bec1bd7c3f445519c6c93c879884a89.dll": "runtime/Lib/site-packages/pyarrow.libs/msvcp140_atomic_wait-4bec1bd7c3f445519c6c93c879884a89.dll"
+        },
+        "guard_events": []
+      }
+    },
+    {
+      "path": "reports/cpu-restart.json",
+      "sha256": "95d57be3383c0b8ce3c4e6acde3d809936c33101e35d2f7c364ce798ae4a9f44",
+      "result": {
+        "status": "passed",
+        "scope": "W2 real application routes, local synthetic data; not W3-W5",
+        "payload": {
+          "files": 34144,
+          "bytes": 7216392830,
+          "sha256_verified": true
+        },
+        "application": {
+          "phase": "restart",
+          "device": "cpu",
+          "reranker_dtype": "torch.float32",
+          "settings_without_key": "passed",
+          "hybrid_chat_with_sources": "passed",
+          "citation_count": 5,
+          "chunk_count": 5,
+          "index": {
+            "sparse_backend": "bm25s_mmap",
+            "sparse_index_generation": "auto-20261024T135451-f24947b7",
+            "sparse_manifest_hash": "5a08108822fe895f7ec93185f1f4e3e5cf56b3d444138b2c346532753e4c2591",
+            "sparse_index_status": "ready",
+            "sparse_fallback_reason": null,
+            "sparse_index_load_ms": 0,
+            "sparse_contract_version": "bm25s-rank-bm25-compat-v1"
+          },
+          "oracle": {
+            "executed": true,
+            "passed": true,
+            "question_count": 8,
+            "k_values": [
+              1,
+              5,
+              15,
+              50
+            ],
+            "exact_order_questions": {
+              "1": 8,
+              "5": 8,
+              "15": 8,
+              "50": 8
+            },
+            "max_absolute_score_delta": 0,
+            "wall_s": 0.0017564999870955944
+          },
+          "oracle_source": {
+            "policy": "portable-snapshot-v1",
+            "count": 8,
+            "sha256": "27817ef35a14d8b13eb1210f390e7b8404ff77578ad066855b17f3cce89c0160"
+          },
+          "workspace": {
+            "format": 1,
+            "workspace_id": "bdc56c9e-9759-4322-a6b5-6648679ca76e",
+            "corpus_id": "portable-bdc56c9e-9759-4322-a6b5-6648679ca76e",
+            "contract": {
+              "storage_schema": 5,
+              "runtime_lock_sha256": "1a50999b9a9a1e6a9983f5bcede8caae505f79efa27fd5e8fbc7cb5ae86bbdb6",
+              "models": {
+                "embedding": {
+                  "id": "BAAI/bge-large-zh-v1.5",
+                  "revision": "79e7739b6ab944e86d6171e44d24c997fc1e0116"
+                },
+                "reranker": {
+                  "id": "BAAI/bge-reranker-v2-m3",
+                  "revision": "953dc6f6f85a1b2dbfca4c34a2796e7dde08d41e"
+                }
+              }
+            },
+            "sparse_initialized": true,
+            "sparse_publication_pending": false,
+            "initial_generation": "auto-20261024T135451-36edfcfc"
+          },
+          "warmup": {
+            "status": "ready",
+            "component": null,
+            "error_type": null,
+            "detail": null
+          },
+          "restart_retains_settings_and_documents": true
+        },
+        "bundled_modules": 6004,
+        "native_runtime_paths": {
+          "vcruntime140.dll": "runtime/vcruntime140.dll",
+          "vcruntime140_1.dll": "runtime/vcruntime140_1.dll",
+          "msvcp140-a4c2229bdc2a2a630acdc095b4d86008.dll": "runtime/Lib/site-packages/numpy.libs/msvcp140-a4c2229bdc2a2a630acdc095b4d86008.dll",
+          "msvcp140.dll": "runtime/Lib/site-packages/sklearn/.libs/msvcp140.dll",
+          "msvcp140_atomic_wait.dll": "runtime/msvcp140_atomic_wait.dll",
+          "msvcp140-d448dcabdad98c14abc6ff2741df95cd.dll": "runtime/Lib/site-packages/pyarrow.libs/msvcp140-d448dcabdad98c14abc6ff2741df95cd.dll",
+          "msvcp140_atomic_wait-4bec1bd7c3f445519c6c93c879884a89.dll": "runtime/Lib/site-packages/pyarrow.libs/msvcp140_atomic_wait-4bec1bd7c3f445519c6c93c879884a89.dll"
+        },
+        "guard_events": []
+      }
+    }
+  ],
+  "documentation_validation": {
+    "status": "passed",
+    "markdown_files": 62,
+    "core_documents": 52,
+    "links_checked": 2179,
+    "directed_core_relations": 438,
+    "self_tests_passed": 11
+  },
+  "limitations": [
+    "No-NVIDIA/no-driver or clean Windows without developer tools still untested",
+    "W3 launcher/single-instance/Host-Origin/maintenance not implemented",
+    "W4 final React ZIP, original wheel provenance and licensed VC Redist/NOTICE review pending",
+    "W5 browser/production-size performance and answer quality/full-system-write trace/backup-removal acceptance pending",
+    "Initial-publication journal resumes only the recorded candidate if source and contract match; changed source or damaged candidate fails closed",
+    "Public checks use short synthetic documents; 8 local oracle queries are implementation equality checks, not a 120-question quality evaluation",
+    "Workspace compatibility conservatively requires identical runtime lock/schema/model revisions; no arbitrary migration",
+    "No production .env/data or source start/stop changes; existing unrelated work preserved"
+  ]
+}

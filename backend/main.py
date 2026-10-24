@@ -13,6 +13,9 @@ import mimetypes
 from datetime import datetime, timezone
 from pathlib import Path
 
+# Portable preflight/cache setup must precede router/Chroma/model imports.
+from backend.config import settings
+
 from fastapi import FastAPI, Request
 from fastapi.exception_handlers import request_validation_exception_handler
 from fastapi.exceptions import RequestValidationError
@@ -33,13 +36,18 @@ app = FastAPI(
 
 # CORS 中间件：允许前端跨域访问
 # 开发阶段 allow_origins=["*"]，正式部署再收紧
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+if settings.DISTRIBUTION_MODE == "portable":
+    from backend.services.portable_runtime import LocalOnlyMiddleware
+
+    app.add_middleware(LocalOnlyMiddleware, port_provider=lambda: getattr(app.state, "portable_port", 8000))
+else:
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=["*"],
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
 
 
 def _is_sensitive_validation_location(location) -> bool:
@@ -112,11 +120,21 @@ async def health():
     """存活与模型预热状态（不依赖 SPA 构建产物）。"""
     from backend.services.warmup import get_warmup_status
 
-    return {
+    result = {
         "status": "ok",
         "version": "0.1.0",
         "model_warmup": get_warmup_status(),
     }
+    instance = getattr(app.state, "portable_instance", None)
+    if settings.DISTRIBUTION_MODE == "portable" and instance is not None:
+        result["portable"] = dict(instance)
+        from backend.services import sparse_retriever
+
+        runtime = app.state.runtime_settings_manager.snapshot()
+        result["retrieval"] = sparse_retriever.get_runtime_status(
+            k1=runtime.retrieval.bm25_k1, b=runtime.retrieval.bm25_b
+        )
+    return result
 
 
 class _SpaStaticFiles(StaticFiles):
@@ -159,7 +177,7 @@ async def startup_event():
     )
     app.state.runtime_settings_manager = RuntimeSettingsManager()
     recover_interrupted_requests()
-    start_background_warmup()
+    app.state.model_warmup_thread = start_background_warmup()
     # P6-A：Sparse后台重建协调。仅bm25s_mmap部署生效；启动时识别
     # dirty/错配指针并自愈重建，重启不会把持久化dirty悄悄恢复成ready。
     try:
@@ -194,6 +212,18 @@ async def shutdown_event():
     try:
         from backend.services import sparse_rebuild
 
-        sparse_rebuild.stop_worker(timeout=5.0)
+        if settings.DISTRIBUTION_MODE == "portable":
+            import asyncio
+
+            while not (await asyncio.to_thread(sparse_rebuild.stop_worker, timeout=1.0))["stopped"]:
+                await asyncio.sleep(0.1)
+            from backend.services import sparse_retriever
+
+            sparse_retriever.clear_cache()
+            warmup_thread = getattr(app.state, "model_warmup_thread", None)
+            while warmup_thread is not None and warmup_thread.is_alive():
+                await asyncio.to_thread(warmup_thread.join, 1.0)
+        else:
+            sparse_rebuild.stop_worker(timeout=5.0)
     except Exception:  # noqa: BLE001
         pass

@@ -166,7 +166,7 @@ def start_worker(*, recovery: bool = True) -> dict[str, Any]:
 def _recover_existing_pointer() -> None:
     """启动期识别异常指针：dirty或一致性错配时自愈重建。
 
-    无活动指针时不做引导构建——首个生产generation必须走受控构建入口。
+    源码部署无活动指针时仍必须走受控入口；新便携空间可恢复首发。
     """
     from backend.services import bm25s_store, sparse_lifecycle
 
@@ -179,6 +179,11 @@ def _recover_existing_pointer() -> None:
         # 重启校验完整摘要，计数相同不能证明正文或metadata相同。
         sparse_lifecycle.mark_corpus_changing("startup_verification")
         request_rebuild("startup_recovery:" + status)
+    elif status is None:
+        from backend.portable import may_bootstrap, pending_publication
+
+        if may_bootstrap(settings) or pending_publication(settings):
+            request_rebuild("portable_startup")
 
 
 def stop_worker(*, timeout: float = 10.0) -> dict[str, Any]:
@@ -253,7 +258,7 @@ def _worker_loop() -> None:
                 _pending = True
         else:
             _last_result = {**outcome, "attempt": _attempt}
-            if outcome.get("outcome") in {"published", "already_fresh", "empty"}:
+            if outcome.get("outcome") in {"published", "already_fresh", "empty", "awaiting_upload"}:
                 with _cv:
                     _attempt = 0
                     _retry_at = None
@@ -302,17 +307,46 @@ def _run_cycle() -> dict[str, Any]:
         reason = ";".join(_pending_reasons) or "unspecified"
         _pending_reasons.clear()
     with sparse_lifecycle.corpus_lock:
-        # 首次引导必须走受控CLI，上传事件不能绕过影子代验收。
-        if bm25s_store.read_active_payload(root) is None:
+        from backend.portable import (
+            may_bootstrap, record_sparse_publication, pending_publication,
+            complete_sparse_publication,
+        )
+
+        initial = bm25s_store.read_active_payload(root) is None
+        pending_initial = pending_publication(settings) if initial else None
+        # 只有显式便携模式且工作空间从未发布过索引时可以引导首代。
+        # 源码/生产门禁以及已有便携库丢失指针的行为不放宽。
+        if initial and not pending_initial and not may_bootstrap(settings):
             return {"outcome": "needs_initial_generation", "at": time.time()}
         bound_revision = _vector_revision()
         chunks = _chunks_provider()
         contract = _contract()
         if not chunks:
             sparse_lifecycle.mark_corpus_changing("empty_corpus", root=root)
-            return {"outcome": "empty", "at": time.time(), "reason": reason}
+            return {"outcome": "awaiting_upload" if initial else "empty", "at": time.time(), "reason": reason}
         digest = bm25s_store.corpus_content_digest(chunks)
         metadata_digest = bm25s_store.corpus_metadata_digest(chunks)
+        if pending_initial:
+            # Resume ONLY the journaled first publication, never rebuild a lost
+            # initialized pointer. Validate immutable files and current source.
+            generation_id = bm25s_store._safe_generation_id(pending_initial)
+            candidate = bm25s_store.load_generation(
+                root / "generations" / generation_id, expected_contract=contract
+            )
+            try:
+                corpus = candidate.manifest["corpus"]
+                if corpus["content_sha256"] != digest or corpus["metadata_sha256"] != metadata_digest:
+                    raise RuntimeError("首发提交中断后语料已变化，保留故障并拒绝恢复旧索引")
+            finally:
+                candidate.close()
+            with _cv:
+                if _stop or not _enabled():
+                    return {"outcome": "stopped", "at": time.time()}
+                bm25s_store.activate_generation(root, generation_id)
+                complete_sparse_publication(settings)
+                sparse_retriever.bind_process_revision(bound_revision)
+            return {"outcome": "published", "at": time.time(), "generation_id": generation_id,
+                    "reason": "resumed_initial_publication"}
         fresh_generation = _fresh_active_generation(root, contract, digest, metadata_digest)
         if fresh_generation is not None:
             with _cv:
@@ -322,7 +356,9 @@ def _run_cycle() -> dict[str, Any]:
                 if _vector_revision() != bound_revision or _contract() != contract:
                     _pending = True
                     return {"outcome": "superseded", "at": time.time()}
+                record_sparse_publication(settings, fresh_generation)
                 bm25s_store.activate_generation(root, fresh_generation, allow_replace=True)
+                complete_sparse_publication(settings)
                 sparse_retriever.bind_process_revision(bound_revision)
             return {
                 "outcome": "already_fresh", "at": time.time(),
@@ -333,6 +369,12 @@ def _run_cycle() -> dict[str, Any]:
     import uuid
 
     generation_id = f"auto-{time.strftime('%Y%m%dT%H%M%S')}-{uuid.uuid4().hex[:8]}"
+    if getattr(settings, "DISTRIBUTION_MODE", "source") == "portable":
+        from backend.portable import snapshot_oracle
+
+        questions, oracle_source = snapshot_oracle(chunks)
+    else:
+        questions, oracle_source = _oracle_questions(), {"policy": "repository-120q"}
     build = bm25s_store.build_generation(
         chunks=chunks,
         target_root=root,
@@ -344,12 +386,13 @@ def _run_cycle() -> dict[str, Any]:
             "chroma_collection": "knowledge_base",
             "rebuild_reason": reason,
             "bound_revision": bound_revision,
+            "oracle": oracle_source,
         },
         k1=contract["bm25"]["k1"],
         b=contract["bm25"]["b"],
         generation_id=generation_id,
         publish=False,
-        oracle_questions=_oracle_questions(),
+        oracle_questions=questions,
     )
 
     # 复核、发布和进程绑定是同一个临界区，写入不能插在两者之间。
@@ -382,7 +425,9 @@ def _run_cycle() -> dict[str, Any]:
                 }
             candidate = bm25s_store.load_generation(build["generation_dir"], expected_contract=contract)
             candidate.close()
+            record_sparse_publication(settings, build["generation_id"])
             bm25s_store.activate_generation(root, build["generation_id"], allow_replace=True)
+            complete_sparse_publication(settings)
             sparse_retriever.bind_process_revision(bound_revision)
     logger.info(
         "Sparse后台重建已发布 generation=%s chunks=%s",

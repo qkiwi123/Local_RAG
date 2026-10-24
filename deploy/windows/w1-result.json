@@ -1,0 +1,463 @@
+{
+  "schema": 1,
+  "date": "2026-10-03",
+  "scope": "W1 local feasibility only; not application release",
+  "status": "local_scope_complete_external_windows_gate_pending",
+  "artifact_directory": "build/windows-w1/中文 空格 验证包",
+  "environment": {
+    "os": "Windows 11 build 26200",
+    "python": "3.14.0",
+    "torch": "2.13.0+cu130",
+    "cuda_runtime": "13.0",
+    "gpu": "NVIDIA GeForce RTX 4060 Laptop GPU",
+    "nvidia_driver": "616.56"
+  },
+  "dependency_packages": 134,
+  "payload": {
+    "files": 34078,
+    "bytes": 7215859317,
+    "sha256_verified": true,
+    "manifest_sha256": "90721b0d731c172626a6775643d0c7c6ad733af835b740b7974ec9de7da7f58f",
+    "excludes": "manifest itself, generated cache, temp files and reports; not compressed ZIP size"
+  },
+  "lock": {
+    "path": "deploy/windows/w1-lock.json",
+    "sha256": "1a50999b9a9a1e6a9983f5bcede8caae505f79efa27fd5e8fbc7cb5ae86bbdb6",
+    "provenance": "installed RECORD-verified resources, not original wheel URL/hash attestation"
+  },
+  "models": {
+    "embedding": {
+      "id": "BAAI/bge-large-zh-v1.5",
+      "bytes": 1302801800,
+      "revision": "79e7739b6ab944e86d6171e44d24c997fc1e0116",
+      "license": "MIT"
+    },
+    "reranker": {
+      "id": "BAAI/bge-reranker-v2-m3",
+      "bytes": 2293259337,
+      "revision": "953dc6f6f85a1b2dbfca4c34a2796e7dde08d41e",
+      "license": "Apache-2.0"
+    }
+  },
+  "relocation": {
+    "old_root_exists": false,
+    "source": "build/windows-w1/bundle",
+    "destination": "build/windows-w1/中文 空格 验证包",
+    "poisoned_environment": [
+      "invalid PYTHONHOME",
+      "external venv PYTHONPATH",
+      "invalid HF_HOME"
+    ],
+    "native_path_check": "Windows module handles and GetModuleFileNameW; not stale memory-map filenames"
+  },
+  "reports": [
+    {
+      "file": "gpu-r3.json",
+      "sha256": "055ec2fa3ceb1a143fd592ef98b492ba019233c7c7156cb3922ff1526e36639e",
+      "status": "passed",
+      "payload": {
+        "files": 34078,
+        "bytes": 7215857756,
+        "sha256_verified": true
+      },
+      "driver": {
+        "nvcuda_loadable": true,
+        "cuInit": 0,
+        "cuDeviceGetCount": 0,
+        "device_count": 1
+      },
+      "dependencies": {
+        "imports": "passed",
+        "bm25s_mmap": "passed",
+        "chroma": "passed",
+        "note": "Dependency-only synthetic smoke; not backend Hybrid/first-generation/UI acceptance"
+      },
+      "models": {
+        "torch": "2.13.0+cu130",
+        "cuda_runtime": "13.0",
+        "cuda_available": true,
+        "device": "cuda:0",
+        "gpu": "NVIDIA GeForce RTX 4060 Laptop GPU",
+        "gpu_capability": [
+          8,
+          9
+        ],
+        "torch_cuda_arch_list": [
+          "sm_75",
+          "sm_80",
+          "sm_86",
+          "sm_90",
+          "sm_100",
+          "sm_120"
+        ],
+        "embedding": {
+          "dimension": 1024,
+          "dtype": "torch.float32",
+          "device": "cuda:0",
+          "load_s": 1.4423807999119163,
+          "cold_s": 0.27420720004010946,
+          "warm_s": 0.023366100038401783,
+          "similarity": [
+            0.6632985472679138,
+            0.1829562485218048,
+            0.3287827968597412
+          ]
+        },
+        "reranker": {
+          "device": "cuda:0",
+          "dtype": "torch.float16",
+          "candidate_k": 15,
+          "top_k": 5,
+          "load_s": 0.6507834999356419,
+          "cold_s": 1.5805072999792174,
+          "warm_s": 0.0689428000478074,
+          "scores": [
+            3.525390625,
+            -10.96875,
+            -9.828125,
+            3.525390625,
+            -10.96875,
+            -9.828125,
+            3.525390625,
+            -10.96875,
+            -9.828125,
+            3.525390625,
+            -10.96875,
+            -9.828125,
+            3.525390625,
+            -10.96875,
+            -9.828125
+          ]
+        },
+        "peak_cuda_allocated_bytes": 2454417408
+      },
+      "bundled_modules": 5991,
+      "isolated": true,
+      "native_runtime_paths": {
+        "msvcp140-d448dcabdad98c14abc6ff2741df95cd.dll": "runtime/Lib/site-packages/pyarrow.libs/msvcp140-d448dcabdad98c14abc6ff2741df95cd.dll",
+        "msvcp140_atomic_wait-4bec1bd7c3f445519c6c93c879884a89.dll": "runtime/Lib/site-packages/pyarrow.libs/msvcp140_atomic_wait-4bec1bd7c3f445519c6c93c879884a89.dll",
+        "msvcp140.dll": "runtime/msvcp140.dll",
+        "msvcp140_atomic_wait.dll": "runtime/msvcp140_atomic_wait.dll",
+        "msvcp140-a4c2229bdc2a2a630acdc095b4d86008.dll": "runtime/Lib/site-packages/numpy.libs/msvcp140-a4c2229bdc2a2a630acdc095b4d86008.dll",
+        "vcruntime140_1.dll": "runtime/vcruntime140_1.dll",
+        "vcruntime140.dll": "runtime/vcruntime140.dll",
+        "msvcp140_1.dll": "runtime/msvcp140_1.dll"
+      },
+      "peak_working_set_bytes": 5249757184,
+      "guard_events": [],
+      "report_path": "reports/gpu-r3.json"
+    },
+    {
+      "file": "cpu-on-gpu-host.json",
+      "sha256": "ca408f191ab596dbdaa24b8f4fd6c6383c1417e5c21e4998e58ee7dcab0eae4c",
+      "status": "passed",
+      "payload": {
+        "files": 34078,
+        "bytes": 7215857756,
+        "sha256_verified": true
+      },
+      "driver": {
+        "nvcuda_loadable": true,
+        "cuInit": 0,
+        "cuDeviceGetCount": 0,
+        "device_count": 1
+      },
+      "dependencies": {
+        "imports": "passed",
+        "bm25s_mmap": "passed",
+        "chroma": "passed",
+        "note": "Dependency-only synthetic smoke; not backend Hybrid/first-generation/UI acceptance"
+      },
+      "models": {
+        "torch": "2.13.0+cu130",
+        "cuda_runtime": "13.0",
+        "cuda_available": true,
+        "device": "cpu",
+        "gpu": "NVIDIA GeForce RTX 4060 Laptop GPU",
+        "gpu_capability": [
+          8,
+          9
+        ],
+        "torch_cuda_arch_list": [
+          "sm_75",
+          "sm_80",
+          "sm_86",
+          "sm_90",
+          "sm_100",
+          "sm_120"
+        ],
+        "embedding": {
+          "dimension": 1024,
+          "dtype": "torch.float32",
+          "device": "cpu",
+          "load_s": 0.18449979997240007,
+          "cold_s": 2.081311200046912,
+          "warm_s": 0.3269226999254897,
+          "similarity": [
+            0.6632983684539795,
+            0.18295612931251526,
+            0.32878273725509644
+          ]
+        },
+        "reranker": {
+          "device": "cpu",
+          "dtype": "torch.float32",
+          "candidate_k": 15,
+          "top_k": 5,
+          "load_s": 0.7021745999809355,
+          "cold_s": 3.3581578000448644,
+          "warm_s": 1.6297336999559775,
+          "scores": [
+            3.5263922214508057,
+            -10.971871376037598,
+            -9.830755233764648,
+            3.5263922214508057,
+            -10.971871376037598,
+            -9.830755233764648,
+            3.5263922214508057,
+            -10.971871376037598,
+            -9.830755233764648,
+            3.5263922214508057,
+            -10.971871376037598,
+            -9.830755233764648,
+            3.5263922214508057,
+            -10.971871376037598,
+            -9.830755233764648
+          ]
+        },
+        "peak_cuda_allocated_bytes": 0
+      },
+      "bundled_modules": 5991,
+      "isolated": true,
+      "native_runtime_paths": {
+        "msvcp140-d448dcabdad98c14abc6ff2741df95cd.dll": "runtime/Lib/site-packages/pyarrow.libs/msvcp140-d448dcabdad98c14abc6ff2741df95cd.dll",
+        "msvcp140_atomic_wait-4bec1bd7c3f445519c6c93c879884a89.dll": "runtime/Lib/site-packages/pyarrow.libs/msvcp140_atomic_wait-4bec1bd7c3f445519c6c93c879884a89.dll",
+        "msvcp140.dll": "runtime/msvcp140.dll",
+        "msvcp140_atomic_wait.dll": "runtime/msvcp140_atomic_wait.dll",
+        "msvcp140-a4c2229bdc2a2a630acdc095b4d86008.dll": "runtime/Lib/site-packages/numpy.libs/msvcp140-a4c2229bdc2a2a630acdc095b4d86008.dll",
+        "msvcp140_1.dll": "runtime/msvcp140_1.dll",
+        "vcruntime140_1.dll": "runtime/vcruntime140_1.dll",
+        "vcruntime140.dll": "runtime/vcruntime140.dll"
+      },
+      "peak_working_set_bytes": 3786682368,
+      "guard_events": [],
+      "report_path": "reports/cpu-on-gpu-host.json"
+    },
+    {
+      "file": "relocated-gpu-r2.json",
+      "sha256": "94fdaab28089aa7ce0b0eee1237f7aeca776c930e9c6c01b45a1e758abed23c2",
+      "status": "passed",
+      "payload": {
+        "files": 34078,
+        "bytes": 7215859317,
+        "sha256_verified": true
+      },
+      "driver": {
+        "nvcuda_loadable": true,
+        "cuInit": 0,
+        "cuDeviceGetCount": 0,
+        "device_count": 1
+      },
+      "dependencies": {
+        "imports": "passed",
+        "bm25s_mmap": "passed",
+        "chroma": "passed",
+        "note": "Dependency-only synthetic smoke; not backend Hybrid/first-generation/UI acceptance"
+      },
+      "models": {
+        "torch": "2.13.0+cu130",
+        "cuda_runtime": "13.0",
+        "cuda_available": true,
+        "device": "cuda:0",
+        "gpu": "NVIDIA GeForce RTX 4060 Laptop GPU",
+        "gpu_capability": [
+          8,
+          9
+        ],
+        "torch_cuda_arch_list": [
+          "sm_75",
+          "sm_80",
+          "sm_86",
+          "sm_90",
+          "sm_100",
+          "sm_120"
+        ],
+        "embedding": {
+          "dimension": 1024,
+          "dtype": "torch.float32",
+          "device": "cuda:0",
+          "load_s": 1.4906561999814585,
+          "cold_s": 0.2760963999899104,
+          "warm_s": 0.025732900016009808,
+          "similarity": [
+            0.6632985472679138,
+            0.1829562485218048,
+            0.3287827968597412
+          ]
+        },
+        "reranker": {
+          "device": "cuda:0",
+          "dtype": "torch.float16",
+          "candidate_k": 15,
+          "top_k": 5,
+          "load_s": 0.7267756999935955,
+          "cold_s": 1.6936583000933751,
+          "warm_s": 0.06845299992710352,
+          "scores": [
+            3.525390625,
+            -10.96875,
+            -9.828125,
+            3.525390625,
+            -10.96875,
+            -9.828125,
+            3.525390625,
+            -10.96875,
+            -9.828125,
+            3.525390625,
+            -10.96875,
+            -9.828125,
+            3.525390625,
+            -10.96875,
+            -9.828125
+          ]
+        },
+        "peak_cuda_allocated_bytes": 2454417408
+      },
+      "bundled_modules": 5991,
+      "isolated": true,
+      "native_runtime_paths": {
+        "vcruntime140.dll": "runtime/vcruntime140.dll",
+        "vcruntime140_1.dll": "runtime/vcruntime140_1.dll",
+        "msvcp140_1.dll": "runtime/msvcp140_1.dll",
+        "msvcp140.dll": "runtime/Lib/site-packages/sklearn/.libs/msvcp140.dll",
+        "msvcp140-a4c2229bdc2a2a630acdc095b4d86008.dll": "runtime/Lib/site-packages/numpy.libs/msvcp140-a4c2229bdc2a2a630acdc095b4d86008.dll",
+        "msvcp140_atomic_wait.dll": "runtime/msvcp140_atomic_wait.dll",
+        "msvcp140-d448dcabdad98c14abc6ff2741df95cd.dll": "runtime/Lib/site-packages/pyarrow.libs/msvcp140-d448dcabdad98c14abc6ff2741df95cd.dll",
+        "msvcp140_atomic_wait-4bec1bd7c3f445519c6c93c879884a89.dll": "runtime/Lib/site-packages/pyarrow.libs/msvcp140_atomic_wait-4bec1bd7c3f445519c6c93c879884a89.dll"
+      },
+      "peak_working_set_bytes": 5252431872,
+      "guard_events": [],
+      "report_path": "reports/relocated-gpu-r2.json"
+    },
+    {
+      "file": "relocated-cpu.json",
+      "sha256": "c6082c2f5a1507d3a1bbde94f57b55dcaca9876070734a32763cb9aa893a6726",
+      "status": "passed",
+      "payload": {
+        "files": 34078,
+        "bytes": 7215859317,
+        "sha256_verified": true
+      },
+      "driver": {
+        "nvcuda_loadable": true,
+        "cuInit": 0,
+        "cuDeviceGetCount": 0,
+        "device_count": 1
+      },
+      "dependencies": {
+        "imports": "passed",
+        "bm25s_mmap": "passed",
+        "chroma": "passed",
+        "note": "Dependency-only synthetic smoke; not backend Hybrid/first-generation/UI acceptance"
+      },
+      "models": {
+        "torch": "2.13.0+cu130",
+        "cuda_runtime": "13.0",
+        "cuda_available": true,
+        "device": "cpu",
+        "gpu": "NVIDIA GeForce RTX 4060 Laptop GPU",
+        "gpu_capability": [
+          8,
+          9
+        ],
+        "torch_cuda_arch_list": [
+          "sm_75",
+          "sm_80",
+          "sm_86",
+          "sm_90",
+          "sm_100",
+          "sm_120"
+        ],
+        "embedding": {
+          "dimension": 1024,
+          "dtype": "torch.float32",
+          "device": "cpu",
+          "load_s": 0.3274891000473872,
+          "cold_s": 2.5036463999422267,
+          "warm_s": 0.4191249000141397,
+          "similarity": [
+            0.6632983684539795,
+            0.18295612931251526,
+            0.32878273725509644
+          ]
+        },
+        "reranker": {
+          "device": "cpu",
+          "dtype": "torch.float32",
+          "candidate_k": 15,
+          "top_k": 5,
+          "load_s": 0.7798810999374837,
+          "cold_s": 5.204680799972266,
+          "warm_s": 1.7850706999888644,
+          "scores": [
+            3.5263922214508057,
+            -10.971871376037598,
+            -9.830755233764648,
+            3.5263922214508057,
+            -10.971871376037598,
+            -9.830755233764648,
+            3.5263922214508057,
+            -10.971871376037598,
+            -9.830755233764648,
+            3.5263922214508057,
+            -10.971871376037598,
+            -9.830755233764648,
+            3.5263922214508057,
+            -10.971871376037598,
+            -9.830755233764648
+          ]
+        },
+        "peak_cuda_allocated_bytes": 0
+      },
+      "bundled_modules": 5991,
+      "isolated": true,
+      "native_runtime_paths": {
+        "vcruntime140.dll": "runtime/vcruntime140.dll",
+        "vcruntime140_1.dll": "runtime/vcruntime140_1.dll",
+        "msvcp140_1.dll": "runtime/msvcp140_1.dll",
+        "msvcp140.dll": "runtime/Lib/site-packages/sklearn/.libs/msvcp140.dll",
+        "msvcp140-a4c2229bdc2a2a630acdc095b4d86008.dll": "runtime/Lib/site-packages/numpy.libs/msvcp140-a4c2229bdc2a2a630acdc095b4d86008.dll",
+        "msvcp140_atomic_wait.dll": "runtime/msvcp140_atomic_wait.dll",
+        "msvcp140-d448dcabdad98c14abc6ff2741df95cd.dll": "runtime/Lib/site-packages/pyarrow.libs/msvcp140-d448dcabdad98c14abc6ff2741df95cd.dll",
+        "msvcp140_atomic_wait-4bec1bd7c3f445519c6c93c879884a89.dll": "runtime/Lib/site-packages/pyarrow.libs/msvcp140_atomic_wait-4bec1bd7c3f445519c6c93c879884a89.dll"
+      },
+      "peak_working_set_bytes": 3794743296,
+      "guard_events": [],
+      "report_path": "reports/relocated-cpu.json"
+    }
+  ],
+  "tests": {
+    "passed": 28,
+    "skipped": 1,
+    "skip_reason": "Windows account cannot create symlinks",
+    "command": "python -B -m pytest tests/test_windows_w1.py tests/test_torch_device.py tests/test_model_cache.py -q -p no:cacheprovider"
+  },
+  "documentation_validation": {
+    "status": "passed",
+    "markdown_files": 62,
+    "core_documents": 52,
+    "links_checked": 2083,
+    "directed_core_relations": 438,
+    "self_tests_passed": 11
+  },
+  "limitations": [
+    "No NVIDIA/no-driver Windows and clean machine without developer tools not tested; host CPU is not a substitute",
+    "W2-W5 not implemented and formal ZIP not built",
+    "Public distribution requires W4 original wheel/source and licensed VC++ Redist/NOTICE review",
+    "Three short synthetic Chinese documents repeated for 15 rerank candidates; not end-to-end Hybrid or quality acceptance",
+    "top_k=5 is recorded contract, not application context selector acceptance",
+    "Hash validation warms OS cache; cold_s means first inference in the process, not OS-cold boot",
+    "Python audit events cover network and selected writes, not every native DLL or registry write",
+    "No remote model API, backend/.env/production data access, driver changes or service restart"
+  ]
+}

@@ -2,6 +2,12 @@
 
 
 def resolve_cached_snapshot(model_id: str) -> str:
+    from backend.config import settings
+
+    if getattr(settings, "DISTRIBUTION_MODE", "source") == "portable":
+        from backend.portable import model_path
+
+        return str(model_path(settings.BASE_DIR, model_id))
     from huggingface_hub import snapshot_download
     from huggingface_hub.errors import LocalEntryNotFoundError
 

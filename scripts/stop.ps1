@@ -112,7 +112,7 @@ foreach ($record in $records) {
 
     $isMatch = $false
     try {
-        $isMatch = ($process.StartTime - $record.StartTime).TotalSeconds -lt 2
+        $isMatch = [Math]::Abs(($process.StartTime - $record.StartTime).TotalSeconds) -lt 2
     }
     catch {
         $isMatch = $false
@@ -164,7 +164,7 @@ foreach ($record in $records) {
         try {
             $isWorkerMatch = (
                 $workerProcess.ProcessName -eq "python" -and
-                ($workerProcess.StartTime - $workerRecord.StartTime).TotalSeconds -lt 2
+                [Math]::Abs(($workerProcess.StartTime - $workerRecord.StartTime).TotalSeconds) -lt 2
             )
         }
         catch {

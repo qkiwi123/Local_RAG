@@ -9,17 +9,30 @@ import os
 import re
 from pathlib import Path
 from urllib.parse import urlsplit
-from dotenv import load_dotenv
 
 # 加载项目根目录下的 .env 文件
 # __file__ 是 backend/config.py，向上两级到项目根目录
 BASE_DIR = Path(__file__).resolve().parent.parent
-load_dotenv(BASE_DIR / ".env")
+DISTRIBUTION_MODE = os.getenv("RAG_DISTRIBUTION_MODE", "source").strip().lower()
+if DISTRIBUTION_MODE == "portable":
+    from backend.portable import prepare_environment
+
+    _getenv = prepare_environment(
+        BASE_DIR, os.getenv("RAG_PORTABLE_DEVICE", "cuda:0"),
+        os.getenv("RAG_PORTABLE_BATCH_PROFILE", "normal"),
+    ).get
+elif DISTRIBUTION_MODE == "source":
+    from dotenv import load_dotenv
+
+    load_dotenv(BASE_DIR / ".env")
+    _getenv = os.getenv
+else:
+    raise ValueError("RAG_DISTRIBUTION_MODE仅支持source或portable")
 
 
 def _env_bool(name: str, default: bool = False) -> bool:
     """Parse a strict boolean environment variable."""
-    raw = os.getenv(name)
+    raw = _getenv(name)
     if raw is None:
         return default
     normalized = raw.strip().lower()
@@ -38,96 +51,99 @@ def _is_supported_torch_device(device: str) -> bool:
 class Settings:
     """应用全局配置类，所有配置项通过实例属性访问。"""
 
+    BASE_DIR: Path = BASE_DIR
+    DISTRIBUTION_MODE: str = DISTRIBUTION_MODE
+
     # ─── 必填项（缺一不可） ──────────────────────────────
-    DEEPSEEK_API_KEY: str = os.getenv("DEEPSEEK_API_KEY", "")
-    DEEPSEEK_BASE_URL: str = os.getenv("DEEPSEEK_BASE_URL", "https://api.deepseek.com")
-    DEEPSEEK_MODEL: str = os.getenv("DEEPSEEK_MODEL", "deepseek-flash")
+    DEEPSEEK_API_KEY: str = _getenv("DEEPSEEK_API_KEY", "")
+    DEEPSEEK_BASE_URL: str = _getenv("DEEPSEEK_BASE_URL", "https://api.deepseek.com")
+    DEEPSEEK_MODEL: str = _getenv("DEEPSEEK_MODEL", "deepseek-flash")
     # S1 先解析运行时设置可覆盖的部署默认；实际业务链路在 S3/S4 接入。
     LLM_ENABLED: bool = _env_bool("LLM_ENABLED", True)
-    LLM_PROVIDER: str = os.getenv("LLM_PROVIDER", "deepseek").strip().lower()
-    LLM_TEMPERATURE: float = float(os.getenv("LLM_TEMPERATURE", "0.3"))
-    LLM_MAX_TOKENS: int = int(os.getenv("LLM_MAX_TOKENS", "2000"))
-    LLM_TIMEOUT_SECONDS: float = float(os.getenv("LLM_TIMEOUT_SECONDS", "120"))
-    LLM_ANSWER_THINKING_MODE: str = os.getenv(
+    LLM_PROVIDER: str = _getenv("LLM_PROVIDER", "deepseek").strip().lower()
+    LLM_TEMPERATURE: float = float(_getenv("LLM_TEMPERATURE", "0.3"))
+    LLM_MAX_TOKENS: int = int(_getenv("LLM_MAX_TOKENS", "2000"))
+    LLM_TIMEOUT_SECONDS: float = float(_getenv("LLM_TIMEOUT_SECONDS", "120"))
+    LLM_ANSWER_THINKING_MODE: str = _getenv(
         "LLM_ANSWER_THINKING_MODE", "disabled"
     ).strip().lower()
-    LLM_ANSWER_REASONING_EFFORT: str = os.getenv(
+    LLM_ANSWER_REASONING_EFFORT: str = _getenv(
         "LLM_ANSWER_REASONING_EFFORT", "provider_default"
     ).strip().lower()
     LLM_REWRITE_ENABLED: bool = _env_bool("LLM_REWRITE_ENABLED", True)
-    LLM_REWRITE_THINKING_MODE: str = os.getenv(
+    LLM_REWRITE_THINKING_MODE: str = _getenv(
         "LLM_REWRITE_THINKING_MODE", "disabled"
     ).strip().lower()
-    LLM_REWRITE_REASONING_EFFORT: str = os.getenv(
+    LLM_REWRITE_REASONING_EFFORT: str = _getenv(
         "LLM_REWRITE_REASONING_EFFORT", "provider_default"
     ).strip().lower()
     LLM_REWRITE_TEMPERATURE: float = float(
-        os.getenv("LLM_REWRITE_TEMPERATURE", "0")
+        _getenv("LLM_REWRITE_TEMPERATURE", "0")
     )
     LLM_REWRITE_MAX_TOKENS: int = int(
-        os.getenv("LLM_REWRITE_MAX_TOKENS", "200")
+        _getenv("LLM_REWRITE_MAX_TOKENS", "200")
     )
     LLM_REWRITE_TIMEOUT_SECONDS: float = float(
-        os.getenv("LLM_REWRITE_TIMEOUT_SECONDS", "30")
+        _getenv("LLM_REWRITE_TIMEOUT_SECONDS", "30")
     )
 
     # ─── 文件存储 ──────────────────────────────────────
     # 相对路径统一基于项目根目录（即 backend/ 的上一级）
-    UPLOAD_DIR: str = os.getenv("UPLOAD_DIR", str(BASE_DIR / "data" / "uploads"))
-    METADATA_DB_PATH: str = os.getenv(
+    UPLOAD_DIR: str = _getenv("UPLOAD_DIR", str(BASE_DIR / "data" / "uploads"))
+    METADATA_DB_PATH: str = _getenv(
         "METADATA_DB_PATH", str(BASE_DIR / "data" / "metadata.db")
     )
 
     # ─── Chroma 向量数据库 ─────────────────────────────
-    CHROMA_PERSIST_DIR: str = os.getenv(
+    CHROMA_PERSIST_DIR: str = _getenv(
         "CHROMA_PERSIST_DIR", str(BASE_DIR / "data" / "chroma_db")
     )
 
     # ─── 文本切分参数 ─────────────────────────────────
-    CHUNK_SIZE: int = int(os.getenv("CHUNK_SIZE", "500"))
-    CHUNK_OVERLAP: int = int(os.getenv("CHUNK_OVERLAP", "50"))
+    CHUNK_SIZE: int = int(_getenv("CHUNK_SIZE", "500"))
+    CHUNK_OVERLAP: int = int(_getenv("CHUNK_OVERLAP", "50"))
     # 缺失显式配置时保守回退 fixed；已迁移环境通过 .env 启用 recursive。
-    CHUNK_STRATEGY: str = os.getenv("CHUNK_STRATEGY", "fixed").strip().lower()
+    CHUNK_STRATEGY: str = _getenv("CHUNK_STRATEGY", "fixed").strip().lower()
     # BGE 最大 512 token；预留 32 token 给特殊标记及后续扩展。
-    CHUNK_MAX_TOKENS: int = int(os.getenv("CHUNK_MAX_TOKENS", "480"))
+    CHUNK_MAX_TOKENS: int = int(_getenv("CHUNK_MAX_TOKENS", "480"))
 
     # ─── 检索参数 ─────────────────────────────────────
-    RETRIEVAL_TOP_K: int = int(os.getenv("RETRIEVAL_TOP_K", "5"))
-    _DENSE_CANDIDATE_K_RAW = (os.getenv("DENSE_CANDIDATE_K") or "").strip()
+    RETRIEVAL_TOP_K: int = int(_getenv("RETRIEVAL_TOP_K", "5"))
+    _DENSE_CANDIDATE_K_RAW = (_getenv("DENSE_CANDIDATE_K") or "").strip()
     DENSE_CANDIDATE_K: int | None = (
         int(_DENSE_CANDIDATE_K_RAW)
         if _DENSE_CANDIDATE_K_RAW
         else None
     )
     MAX_CHUNKS_PER_DOCUMENT: int = int(
-        os.getenv(
+        _getenv(
             "MAX_CHUNKS_PER_DOCUMENT",
             str(min(3, RETRIEVAL_TOP_K)),
         )
     )
     # Chroma cosine distance 越小越相似；P1-4 在真实评测集上校准为 0.67。
     RETRIEVAL_DISTANCE_THRESHOLD: float = float(
-        os.getenv("RETRIEVAL_DISTANCE_THRESHOLD", "0.67")
+        _getenv("RETRIEVAL_DISTANCE_THRESHOLD", "0.67")
     )
     # P2-1 安全默认仍为 Dense；混合检索只有通过消融门槛后才切生产配置。
-    RETRIEVAL_MODE: str = os.getenv("RETRIEVAL_MODE", "dense").strip().lower()
-    BM25_TOP_K: int = int(os.getenv("BM25_TOP_K", "15"))
-    BM25_K1: float = float(os.getenv("BM25_K1", "1.5"))
-    BM25_B: float = float(os.getenv("BM25_B", "0.75"))
+    RETRIEVAL_MODE: str = _getenv("RETRIEVAL_MODE", "dense").strip().lower()
+    BM25_TOP_K: int = int(_getenv("BM25_TOP_K", "15"))
+    BM25_K1: float = float(_getenv("BM25_K1", "1.5"))
+    BM25_B: float = float(_getenv("BM25_B", "0.75"))
     # P6-C生产默认使用已验收的持久化Sparse索引；仍可显式切回旧实现。
-    SPARSE_BACKEND: str = os.getenv(
+    SPARSE_BACKEND: str = _getenv(
         "SPARSE_BACKEND", "bm25s_mmap"
     ).strip().lower()
-    SPARSE_INDEX_ROOT: str = os.getenv(
+    SPARSE_INDEX_ROOT: str = _getenv(
         "SPARSE_INDEX_ROOT", str(BASE_DIR / "data" / "sparse_index")
     ).strip()
-    SPARSE_INDEX_CORPUS_ID: str = os.getenv(
+    SPARSE_INDEX_CORPUS_ID: str = _getenv(
         "SPARSE_INDEX_CORPUS_ID", "production-rag-20260908"
     ).strip()
     # P6-A后台重建协调：文档增删后自动重建持久化Sparse索引；仅在
     # SPARSE_BACKEND=bm25s_mmap时生效。评测/排查可显式关闭。
     SPARSE_AUTO_REBUILD: bool = _env_bool("SPARSE_AUTO_REBUILD", True)
-    RRF_K: int = int(os.getenv("RRF_K", "60"))
+    RRF_K: int = int(_getenv("RRF_K", "60"))
     # P2-3 Trace 会返回未入选候选的完整原文，仅在可信调试环境显式开启。
     RETRIEVAL_TRACE_ENABLED: bool = _env_bool(
         "RETRIEVAL_TRACE_ENABLED", False
@@ -137,61 +153,61 @@ class Settings:
         "CITATION_PREVIEW_ENABLED", False
     )
     CITATION_PREVIEW_MAX_PAGE_CHARS: int = int(
-        os.getenv("CITATION_PREVIEW_MAX_PAGE_CHARS", "200000")
+        _getenv("CITATION_PREVIEW_MAX_PAGE_CHARS", "200000")
     )
     CITATION_PREVIEW_MAX_DOCUMENT_CHARS: int = int(
-        os.getenv("CITATION_PREVIEW_MAX_DOCUMENT_CHARS", "500000")
+        _getenv("CITATION_PREVIEW_MAX_DOCUMENT_CHARS", "500000")
     )
 
     # ─── 持久化对话 ──────────────────────────────────
     CONVERSATION_HISTORY_MESSAGES: int = int(
-        os.getenv("CONVERSATION_HISTORY_MESSAGES", "12")
+        _getenv("CONVERSATION_HISTORY_MESSAGES", "12")
     )
     CONVERSATION_HISTORY_MAX_TOKENS: int = int(
-        os.getenv("CONVERSATION_HISTORY_MAX_TOKENS", "1500")
+        _getenv("CONVERSATION_HISTORY_MAX_TOKENS", "1500")
     )
     CONVERSATION_MESSAGE_MAX_CHARS: int = int(
-        os.getenv("CONVERSATION_MESSAGE_MAX_CHARS", "8000")
+        _getenv("CONVERSATION_MESSAGE_MAX_CHARS", "8000")
     )
     CONVERSATION_MAX_MESSAGES: int = int(
-        os.getenv("CONVERSATION_MAX_MESSAGES", "200")
+        _getenv("CONVERSATION_MAX_MESSAGES", "200")
     )
     CONVERSATION_PENDING_TIMEOUT_SECONDS: int = int(
-        os.getenv("CONVERSATION_PENDING_TIMEOUT_SECONDS", "300")
+        _getenv("CONVERSATION_PENDING_TIMEOUT_SECONDS", "300")
     )
 
     # ─── Reranker ────────────────────────────────────
     # 安全默认关闭，生产环境通过 .env 显式启用高质量模式。
     RERANKER_ENABLED: bool = _env_bool("RERANKER_ENABLED", False)
-    RERANKER_MODEL: str = os.getenv(
+    RERANKER_MODEL: str = _getenv(
         "RERANKER_MODEL", "BAAI/bge-reranker-v2-m3"
     )
     # P1-5 的 k=15/20/30 扫描质量持平，选择延迟最低的 k=15。
-    RERANKER_CANDIDATE_K: int = int(os.getenv("RERANKER_CANDIDATE_K", "15"))
-    RERANKER_DEVICE: str = os.getenv("RERANKER_DEVICE", "cpu").strip().lower()
+    RERANKER_CANDIDATE_K: int = int(_getenv("RERANKER_CANDIDATE_K", "15"))
+    RERANKER_DEVICE: str = _getenv("RERANKER_DEVICE", "cpu").strip().lower()
     RERANKER_USE_FP16: bool = _env_bool("RERANKER_USE_FP16", False)
-    RERANKER_BATCH_SIZE: int = int(os.getenv("RERANKER_BATCH_SIZE", "8"))
-    RERANKER_MAX_LENGTH: int = int(os.getenv("RERANKER_MAX_LENGTH", "512"))
+    RERANKER_BATCH_SIZE: int = int(_getenv("RERANKER_BATCH_SIZE", "8"))
+    RERANKER_MAX_LENGTH: int = int(_getenv("RERANKER_MAX_LENGTH", "512"))
 
     # ─── Embedding 模型 ───────────────────────────────
     # P1-1 实验选择 BAAI/bge-large-zh-v1.5（中文检索，1024 维）。
     # query instruction A/B 中 noinst 的 MRR 与检索延迟更优，因此默认留空。
-    EMBEDDING_MODEL: str = os.getenv(
+    EMBEDDING_MODEL: str = _getenv(
         "EMBEDDING_MODEL", "BAAI/bge-large-zh-v1.5"
     )
-    EMBEDDING_QUERY_INSTRUCTION: str = os.getenv(
+    EMBEDDING_QUERY_INSTRUCTION: str = _getenv(
         "EMBEDDING_QUERY_INSTRUCTION", ""
     )
-    EMBEDDING_DEVICE: str = os.getenv("EMBEDDING_DEVICE", "cpu").strip().lower()
-    EMBEDDING_BATCH_SIZE: int = int(os.getenv("EMBEDDING_BATCH_SIZE", "32"))
+    EMBEDDING_DEVICE: str = _getenv("EMBEDDING_DEVICE", "cpu").strip().lower()
+    EMBEDDING_BATCH_SIZE: int = int(_getenv("EMBEDDING_BATCH_SIZE", "32"))
 
     # ─── 视觉 / OCR（多模态模型 API，独立于问答 LLM） ───
     # 默认跟随问答连接；VISION_* 保留为自定义连接的部署默认值。
-    VISION_SOURCE: str = os.getenv("VISION_SOURCE", "follow_llm")
-    VISION_PROVIDER: str = os.getenv("VISION_PROVIDER", "openai_compatible")
-    VISION_API_KEY: str = os.getenv("VISION_API_KEY", "")
-    VISION_BASE_URL: str = os.getenv("VISION_BASE_URL", "")
-    VISION_MODEL: str = os.getenv("VISION_MODEL", "glm-4.6v-flash")
+    VISION_SOURCE: str = _getenv("VISION_SOURCE", "follow_llm")
+    VISION_PROVIDER: str = _getenv("VISION_PROVIDER", "openai_compatible")
+    VISION_API_KEY: str = _getenv("VISION_API_KEY", "")
+    VISION_BASE_URL: str = _getenv("VISION_BASE_URL", "")
+    VISION_MODEL: str = _getenv("VISION_MODEL", "glm-4.6v-flash")
     OCR_ENABLED: bool = _env_bool("OCR_ENABLED", False)
     # A 层：无文本 PDF 页整页 OCR。
     OCR_PDF_SCANNED: bool = _env_bool("OCR_PDF_SCANNED", False)
@@ -199,15 +215,15 @@ class Settings:
     OCR_PDF_PAGE_IMAGES: bool = _env_bool("OCR_PDF_PAGE_IMAGES", False)
     # C 层：DOCX/PPTX 内嵌图片识别。
     OCR_EMBEDDED_IMAGES: bool = _env_bool("OCR_EMBEDDED_IMAGES", False)
-    OCR_MAX_IMAGE_EDGE: int = int(os.getenv("OCR_MAX_IMAGE_EDGE", "1600"))
-    OCR_MAX_PER_DOCUMENT: int = int(os.getenv("OCR_MAX_PER_DOCUMENT", "20"))
-    OCR_TIMEOUT_SECONDS: float = float(os.getenv("OCR_TIMEOUT_SECONDS", "60"))
-    VISION_CACHE_DIR: str = os.getenv(
+    OCR_MAX_IMAGE_EDGE: int = int(_getenv("OCR_MAX_IMAGE_EDGE", "1600"))
+    OCR_MAX_PER_DOCUMENT: int = int(_getenv("OCR_MAX_PER_DOCUMENT", "20"))
+    OCR_TIMEOUT_SECONDS: float = float(_getenv("OCR_TIMEOUT_SECONDS", "60"))
+    VISION_CACHE_DIR: str = _getenv(
         "VISION_CACHE_DIR", str(BASE_DIR / "data" / "vision_cache")
     )
     # OCR 原图对照预览：入库时保存 OCR 使用的图片，供文档/引用预览对照展示。
     OCR_IMAGE_PREVIEW_ENABLED: bool = _env_bool("OCR_IMAGE_PREVIEW_ENABLED", True)
-    OCR_IMAGE_DIR: str = os.getenv(
+    OCR_IMAGE_DIR: str = _getenv(
         "OCR_IMAGE_DIR", str(BASE_DIR / "data" / "ocr_images")
     )
 
@@ -215,7 +231,7 @@ class Settings:
     # Trace 仅在 RETRIEVAL_TRACE_ENABLED=true 时计算并持久化；总量超过
     # 上限时按创建时间淘汰最旧记录（LRU）。会话删除时级联清理。
     TRACE_STORAGE_MAX_BYTES: int = int(
-        os.getenv("TRACE_STORAGE_MAX_BYTES", str(50 * 1024 * 1024))
+        _getenv("TRACE_STORAGE_MAX_BYTES", str(50 * 1024 * 1024))
     )
     # 服务启动后后台预热 Embedding/Reranker，把冷启动成本挪到启动期。
     PREWARM_MODELS: bool = _env_bool("PREWARM_MODELS", True)
