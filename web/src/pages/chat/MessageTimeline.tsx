@@ -1,5 +1,6 @@
 import { useEffect, useRef } from "react";
 import { Alert, Button, Spin, Tag, Typography } from "antd";
+import { EditOutlined, ReloadOutlined } from "@ant-design/icons";
 import type { ConversationMessage } from "../../api/types";
 import { CitationList } from "../../components/CitationList";
 import { ReasoningPanel } from "./ReasoningPanel";
@@ -14,6 +15,10 @@ interface MessageTimelineProps {
   streamingReasoning?: string;
   streamingRequestId?: string;
   streamingError?: string | null;
+  replacingMessageId?: string;
+  pendingTags?: string[];
+  onEdit?: (message: ConversationMessage) => void;
+  supportsMessageEdit?: boolean;
   onRetry: (message: ConversationMessage) => void;
   onOpenTrace: (message: ConversationMessage) => void;
 }
@@ -26,6 +31,10 @@ export function MessageTimeline({
   streamingReasoning = "",
   streamingRequestId = "streaming",
   streamingError = null,
+  replacingMessageId,
+  pendingTags = [],
+  onEdit,
+  supportsMessageEdit = true,
   onRetry,
   onOpenTrace,
 }: MessageTimelineProps) {
@@ -38,21 +47,25 @@ export function MessageTimeline({
     }
   }, [messages, pendingQuestion, streaming, streamingText, streamingReasoning]);
 
-  const rows = messages.map((item) => ({ item, live: false, pending: false }));
+  const target = messages.find((item) => item.message_id === replacingMessageId);
   // 请求完成后以相同 request_id 的历史消息替换临时消息，保留折叠面板状态。
   const hasSavedAnswer = messages.some((item) =>
     item.role === "assistant" && item.request_id === streamingRequestId,
   );
-  if (pendingQuestion && !messages.some((item) =>
+  const replacing = Boolean(target && streaming && !hasSavedAnswer);
+  const replacementFailed = Boolean(target && !streaming && streamingError && !hasSavedAnswer);
+  const visibleMessages = replacing ? messages.filter((item) => item.sequence < target!.sequence) : messages;
+  const rows = visibleMessages.map((item) => ({ item, live: false, pending: false }));
+  if (pendingQuestion && !replacementFailed && !visibleMessages.some((item) =>
     item.role === "user" && item.request_id === streamingRequestId,
   )) {
     rows.push({
       item: { message_id: "pending", request_id: streamingRequestId, sequence: 0,
-        role: "user", content: pendingQuestion, status: "pending", citations: [], created_at: "" },
+        role: "user", content: pendingQuestion, status: "pending", retrieval_tags: pendingTags, citations: [], created_at: "" },
       live: false, pending: true,
     });
   }
-  if ((streaming || streamingError) && !hasSavedAnswer) {
+  if ((streaming || streamingError) && !hasSavedAnswer && !replacementFailed) {
     rows.push({
       item: { message_id: "streaming", request_id: streamingRequestId, sequence: 0,
         role: "assistant", content: streamingText, reasoning_content: streamingReasoning,
@@ -114,11 +127,6 @@ export function MessageTimeline({
               {item.status === "failed" && (
                 <div className="chat-message-status">
                   <Tag color="red">处理失败</Tag>
-                  {item.role === "user" && (
-                    <Button size="small" onClick={() => onRetry(item)}>
-                      重试该消息
-                    </Button>
-                  )}
                 </div>
               )}
               {item.role === "assistant" && item.citations.length > 0 && (
@@ -135,9 +143,27 @@ export function MessageTimeline({
                 </Button>
               )}
             </div>
+            {item.role === "user" && <div className="chat-message-tools">
+              <span className="chat-message-scope" title={item.retrieval_tags?.join("、") || undefined}>
+                {item.retrieval_tags == null ? "检索范围未记录" : item.retrieval_tags.length
+                  ? `检索范围：${item.retrieval_tags.join("、")}` : "检索范围：全部资料"}
+              </span>
+              {!pending && item.status !== "pending" && <span className="chat-message-tools__actions">
+                {onEdit && <Button type="text" size="small" icon={<EditOutlined />}
+                  aria-label={`编辑问题：${item.content}`} onClick={() => onEdit(item)} disabled={streaming || !supportsMessageEdit}>编辑</Button>}
+                <Button type="text" size="small" icon={<ReloadOutlined />} disabled={streaming || !supportsMessageEdit}
+                  aria-label={`重试问题：${item.content}`} onClick={() => onRetry(item)}>
+                  {item.status === "failed" ? "重试该消息" : "重试"}</Button>
+              </span>}
+            </div>}
           </div>
         ))
       )}
+      {replacing && <p className="chat-regenerate-notice" role="status">正在重新生成，成功后替换记录；失败或停止时原记录保留。</p>}
+      {replacementFailed && <Alert className="chat-regenerate-notice" type="warning" showIcon
+        title="重新生成未完成，原记录已保留。" description={streamingError} />}
+      {!supportsMessageEdit && messages.length > 0 && <Alert type="info" className="chat-regenerate-notice"
+        title="请重启更新后的后端服务，以启用消息编辑、重试及范围保存。" />}
       </div>
     </div>
   );

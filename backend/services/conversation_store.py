@@ -52,6 +52,8 @@ def _decode_message(row) -> dict:
         [Citation.model_validate(value).model_dump() for value in json.loads(raw)]
         if raw else []
     )
+    raw_tags = item.pop("retrieval_tags_json", None)
+    item["retrieval_tags"] = json.loads(raw_tags) if raw_tags is not None else None
     item.pop("conversation_id", None)
     return item
 
@@ -220,6 +222,8 @@ def begin_chat(
     question: str,
     expected_last_message_id: str | None,
     retry_failed: bool,
+    tags: list[str] | None = None,
+    replace_message_id: str | None = None,
     db_path=None,
 ) -> dict:
     """原子校验会话尾部、幂等状态并预留 user sequence。"""
@@ -240,10 +244,24 @@ def begin_chat(
         if existing:
             if existing["conversation_id"] != conversation_id:
                 raise ConversationError("request_id_conflict", "request_id 已被其他会话使用")
+            replacement = connection.execute(
+                "SELECT * FROM chat_replacements WHERE request_id = ?", (request_id,)
+            ).fetchone()
+            saved_user = connection.execute(
+                "SELECT * FROM messages WHERE request_id = ? AND role = 'user'", (request_id,)
+            ).fetchone()
+            saved_question = replacement["question"] if replacement else saved_user["content"] if saved_user else None
+            saved_tags = replacement["retrieval_tags_json"] if replacement else saved_user["retrieval_tags_json"] if saved_user else None
+            if (saved_question != question
+                    or (replacement["target_message_id"] if replacement else None) != replace_message_id
+                    or (tags is not None and saved_tags is not None and json.loads(saved_tags) != tags)):
+                raise ConversationError("request_id_conflict", "同一请求的内容和检索范围不能变化")
             if existing["status"] == "complete":
                 return {"replay": _saved_response(connection, request_id)}
             if existing["status"] == "pending":
                 raise ConversationError("request_in_progress", "请求正在处理中")
+            if replacement:
+                raise ConversationError("stale_retry", "请使用新的请求重新生成，原记录已保留")
             if not retry_failed:
                 raise ConversationError("retry_required", "失败请求必须显式重试")
             user = connection.execute(
@@ -261,6 +279,11 @@ def begin_chat(
             ).fetchone()
             if later:
                 raise ConversationError("stale_retry", "失败请求之后已有新消息")
+            if connection.execute(
+                "SELECT 1 FROM chat_requests WHERE conversation_id = ? AND status = 'pending'",
+                (conversation_id,),
+            ).fetchone():
+                raise ConversationError("request_in_progress", "该会话已有请求正在处理中")
             connection.execute(
                 """
                 UPDATE chat_requests
@@ -272,10 +295,11 @@ def begin_chat(
             connection.execute(
                 """
                 UPDATE messages
-                SET status = 'pending', standalone_question = NULL
+                SET status = 'pending', standalone_question = NULL,
+                    retrieval_tags_json = coalesce(retrieval_tags_json, ?)
                 WHERE message_id = ?
                 """,
-                (user["message_id"],),
+                (json.dumps(tags, ensure_ascii=False) if tags is not None else None, user["message_id"]),
             )
             return {"user_message_id": user["message_id"]}
 
@@ -289,6 +313,31 @@ def begin_chat(
         ).fetchone()
         if pending:
             raise ConversationError("request_in_progress", "该会话已有请求正在处理中")
+
+        if replace_message_id:
+            target = connection.execute(
+                "SELECT * FROM messages WHERE message_id = ? AND conversation_id = ? AND role = 'user'",
+                (replace_message_id, conversation_id),
+            ).fetchone()
+            if not target or target["status"] == "pending":
+                raise ConversationError("invalid_replace_target", "该问题不存在或尚未处理完成，请刷新后重试")
+            tail = connection.execute(
+                "SELECT message_id FROM messages WHERE conversation_id = ? ORDER BY sequence DESC LIMIT 1",
+                (conversation_id,),
+            ).fetchone()
+            if not tail or tail["message_id"] != expected_last_message_id:
+                raise ConversationError("conversation_conflict", "会话末尾已变化，请刷新后重试")
+            timestamp = _now()
+            connection.execute(
+                "INSERT INTO chat_requests VALUES (?, ?, ?, 'pending', NULL, ?, ?)",
+                (request_id, conversation_id, expected_last_message_id, timestamp, timestamp),
+            )
+            connection.execute(
+                "INSERT INTO chat_replacements VALUES (?, ?, ?, ?, ?)",
+                (request_id, target["message_id"], target["request_id"], question,
+                 json.dumps(tags or [], ensure_ascii=False)),
+            )
+            return {"user_message_id": target["message_id"], "history_before_sequence": target["sequence"]}
 
         last = connection.execute(
             """
@@ -330,8 +379,8 @@ def begin_chat(
             """
             INSERT INTO messages (
                 message_id, conversation_id, request_id, sequence, role,
-                content, status, standalone_question, citations_json, created_at
-            ) VALUES (?, ?, ?, ?, 'user', ?, 'pending', NULL, NULL, ?)
+                content, status, standalone_question, citations_json, created_at, retrieval_tags_json
+            ) VALUES (?, ?, ?, ?, 'user', ?, 'pending', NULL, NULL, ?, ?)
             """,
             (
                 user_message_id,
@@ -340,6 +389,7 @@ def begin_chat(
                 next_sequence,
                 question,
                 timestamp,
+                json.dumps(tags, ensure_ascii=False) if tags is not None else None,
             ),
         )
         if count == 0 and conversation["title"] == "新对话":
@@ -348,6 +398,39 @@ def begin_chat(
                 (question[:40], timestamp, conversation_id),
             )
     return {"user_message_id": user_message_id}
+
+
+def _commit_replacement(connection, request, replacement) -> None:
+    """在生成成功的同一事务中校验并替换；此前原消息/Trace始终不动。"""
+    target = connection.execute(
+        "SELECT * FROM messages WHERE message_id = ? AND conversation_id = ? AND role = 'user'",
+        (replacement["target_message_id"], request["conversation_id"]),
+    ).fetchone()
+    tail = connection.execute(
+        "SELECT message_id FROM messages WHERE conversation_id = ? ORDER BY sequence DESC LIMIT 1",
+        (request["conversation_id"],),
+    ).fetchone()
+    if (not target or target["request_id"] != replacement["target_request_id"]
+            or not tail or tail["message_id"] != request["expected_last_message_id"]):
+        raise ConversationError("conversation_conflict", "原会话已变化，未覆盖任何记录")
+    # 同时清理被覆盖轮次的请求与失败暂存；保留本次请求用于完成重放。
+    connection.execute(
+        """DELETE FROM chat_requests WHERE conversation_id = ? AND request_id != ? AND (
+            request_id IN (SELECT request_id FROM messages WHERE conversation_id = ? AND sequence >= ?)
+            OR request_id IN (SELECT r.request_id FROM chat_replacements r JOIN messages m
+                ON m.message_id = r.target_message_id WHERE m.conversation_id = ? AND m.sequence >= ?))""",
+        (request["conversation_id"], request["request_id"], request["conversation_id"], target["sequence"],
+         request["conversation_id"], target["sequence"]),
+    )
+    connection.execute(
+        "DELETE FROM messages WHERE conversation_id = ? AND sequence > ?",
+        (request["conversation_id"], target["sequence"]),
+    )
+    connection.execute(
+        """UPDATE messages SET request_id = ?, content = ?, retrieval_tags_json = ?,
+            status = 'pending', standalone_question = NULL WHERE message_id = ?""",
+        (request["request_id"], replacement["question"], replacement["retrieval_tags_json"], target["message_id"]),
+    )
 
 
 def complete_chat(
@@ -361,6 +444,16 @@ def complete_chat(
 ) -> dict:
     with _connection(_db_path(db_path)) as connection:
         connection.execute("BEGIN IMMEDIATE")
+        request = connection.execute(
+            "SELECT * FROM chat_requests WHERE request_id = ?", (request_id,)
+        ).fetchone()
+        if not request or request["status"] != "pending":
+            raise ConversationError("request_not_pending", "请求状态已变化")
+        replacement = connection.execute(
+            "SELECT * FROM chat_replacements WHERE request_id = ?", (request_id,)
+        ).fetchone()
+        if replacement:
+            _commit_replacement(connection, request, replacement)
         user = connection.execute(
             "SELECT * FROM messages WHERE request_id = ? AND role = 'user'",
             (request_id,),
@@ -436,16 +529,16 @@ def fail_chat(request_id: str, error_code: str, *, db_path=None) -> None:
         )
 
 
-def complete_history(conversation_id: str, *, db_path=None) -> list[dict]:
+def complete_history(conversation_id: str, *, before_sequence: int | None = None, db_path=None) -> list[dict]:
     with _connection(_db_path(db_path)) as connection:
         rows = connection.execute(
             """
             SELECT role, content, message_id, sequence
             FROM messages
-            WHERE conversation_id = ? AND status = 'complete'
+            WHERE conversation_id = ? AND status = 'complete' AND (? IS NULL OR sequence < ?)
             ORDER BY sequence
             """,
-            (conversation_id,),
+            (conversation_id, before_sequence, before_sequence),
         ).fetchall()
     return [dict(row) for row in rows]
 

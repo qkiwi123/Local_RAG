@@ -160,6 +160,8 @@ async def chat(request: ChatRequest, http_request: Request):
                 question=question,
                 expected_last_message_id=request.expected_last_message_id,
                 retry_failed=request.retry_failed,
+                tags=tag_filter,
+                replace_message_id=request.replace_message_id,
             )
         except ConversationError as error:
             raise HTTPException(
@@ -174,6 +176,7 @@ async def chat(request: ChatRequest, http_request: Request):
         history_rows = await asyncio.to_thread(
             complete_history,
             request.conversation_id,
+            before_sequence=started.get("history_before_sequence"),
         )
         if history_rows and runtime.llm.enabled and runtime.llm.rewrite_enabled:
             history_text = format_history(bounded_history(history_rows))
@@ -568,6 +571,7 @@ async def _stream_chat_events(
             history_rows = await asyncio.to_thread(
                 complete_history,
                 request.conversation_id,
+                before_sequence=started.get("history_before_sequence"),
             )
             history_text = format_history(bounded_history(history_rows))
             llm_started = perf_counter()
@@ -740,6 +744,8 @@ async def chat_stream(request: ChatRequest, http_request: Request):
                 question=question,
                 expected_last_message_id=request.expected_last_message_id,
                 retry_failed=request.retry_failed,
+                tags=tag_filter,
+                replace_message_id=request.replace_message_id,
             )
         except ConversationError as error:
             raise HTTPException(
@@ -750,6 +756,7 @@ async def chat_stream(request: ChatRequest, http_request: Request):
             history_rows = await asyncio.to_thread(
                 complete_history,
                 request.conversation_id,
+                before_sequence=started.get("history_before_sequence"),
             )
             if (
                 history_rows

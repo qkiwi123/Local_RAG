@@ -20,7 +20,7 @@ from launcher.common import safe_path
 PUBLIC_GATES = ["Original wheel provenance not reconstructed from installed RECORD payloads",
                 "Licensed VC Redist source and final redistribution/NOTICE review pending",
                 "W5 clean Windows, full system-write and complete product acceptance pending"]
-ENTRIES = ("启动.cmd", "CPU启动.cmd", "停止.cmd", "维护.cmd")
+ENTRIES = ("启动.cmd", "CPU启动.cmd", "停止.cmd", "维护.cmd", "更新.cmd")
 GUIDE = """个人 RAG 知识库 · Windows x64 内部验证包
 
 这是本机验证预览，不是已完成跨机和再分发许可审核的公开发行版。
@@ -174,7 +174,7 @@ def assemble(donor: Path, stage: Path, frontend: Path, *, source_commit: str):
         for index, _ in enumerate(executor.map(copy, copies), 1):
             if index % 10000 == 0:
                 print(f"W4: copied {index}/{len(entries)} runtime/model files", flush=True)
-    for folder, pattern in (("backend", "*.py"), ("launcher", "*.py")):
+    for folder, pattern in (("backend", "*.py"), ("launcher", "*.py"), ("launcher", "*.ps1")):
         for path in sorted((REPO / folder).rglob(pattern)):
             if "__pycache__" not in path.parts:
                 copy_file(safe_path(REPO, path.relative_to(REPO).as_posix()), stage, path.relative_to(REPO).as_posix())

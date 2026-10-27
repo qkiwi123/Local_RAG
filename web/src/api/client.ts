@@ -16,6 +16,8 @@ import type {
   VisionConnectionTestRequest,
   VisionConnectionTestResponse,
   VisionSettingsPatch,
+  LocalUpdateJob,
+  LocalUpdateStatus,
 } from "./types";
 
 export class ApiError extends Error {
@@ -70,6 +72,13 @@ function jsonInit(method: string, body: unknown): RequestInit {
 }
 
 export const api = {
+  getLocalUpdateStatus: () => request<LocalUpdateStatus>("/api/local-update/status"),
+  inspectLocalUpdate: (file: File) => {
+    const data = new FormData();
+    data.append("file", file);
+    return request<LocalUpdateJob>("/api/local-update/inspect", { method: "POST", body: data });
+  },
+  applyLocalUpdate: (id: string) => request<LocalUpdateJob>(`/api/local-update/${id}/apply`, jsonInit("POST", {})),
   // 运行时设置
   getSettings: () => request<SettingsReadResponse>("/api/settings"),
   updateSettings: (payload: {

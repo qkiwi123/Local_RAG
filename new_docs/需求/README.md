@@ -1,5 +1,9 @@
 # 需求文档导航
 
+2026-10-27离线更新：[DEV-014](../开发/DEV-014-本地应用更新.md)与[TEST-010](../测试/TEST-010-本地应用更新验收.md)记录本地ZIP/双入口、完整数据备份、中断与失败恢复及真实旧包CPU升级；操作见[OPS-005](../运维/OPS-005-Windows单人本地发布与初始化方案.md#offline-update)。
+
+2026-10-26会话优化：[编辑/重试与范围快照](./REQ-003-会话与知识库交互.md#message-regeneration)同步顺序覆盖、失败保留、旧范围确认及数据库v6；[后端验收](../测试/TEST-003-会话引用与流式协议.md#message-regeneration)与[前端验收](../测试/TEST-004-标签与React交互.md#message-regeneration)区分当前结果和历史证据。
+
 2026-10-24便携入口：[REQ-006](./REQ-006-本地运行与数据安全.md#tray-auto-port)补用户实测后的自动端口/托盘建议，停止仍绑定原实例并确认强制。
 
 2026-10-24回切修正：[REQ-003](./REQ-003-会话与知识库交互.md)明确切换历史/新建后原请求继续，切回恢复进度或保存答案；[DEV-008](../开发/DEV-008-React主前端.md#conversation-return)和[TEST-004](../测试/TEST-004-标签与React交互.md#conversation-return)记录根因与99项回归。

@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Optional
 
 
-SCHEMA_VERSION = 5
+SCHEMA_VERSION = 6
 
 SCHEMA_META = """
 CREATE TABLE schema_meta (
@@ -74,6 +74,7 @@ CREATE TABLE messages (
     citations_json TEXT,
     created_at TEXT NOT NULL,
     reasoning_content TEXT NOT NULL DEFAULT '',
+    retrieval_tags_json TEXT,
     UNIQUE (conversation_id, sequence),
     UNIQUE (request_id, role),
     FOREIGN KEY (conversation_id)
@@ -92,6 +93,18 @@ CREATE TABLE chat_requests (
     updated_at TEXT NOT NULL,
     FOREIGN KEY (conversation_id)
         REFERENCES conversations(conversation_id) ON DELETE CASCADE
+)
+"""
+
+# v6：仅暂存覆盖请求，成功才替换原有顺序历史；不保存会话分支。
+CHAT_REPLACEMENTS_SCHEMA = """
+CREATE TABLE chat_replacements (
+    request_id TEXT PRIMARY KEY,
+    target_message_id TEXT NOT NULL,
+    target_request_id TEXT NOT NULL,
+    question TEXT NOT NULL,
+    retrieval_tags_json TEXT NOT NULL,
+    FOREIGN KEY (request_id) REFERENCES chat_requests(request_id) ON DELETE CASCADE
 )
 """
 
@@ -160,6 +173,7 @@ _SCHEMAS = (
     MESSAGE_TRACES_SCHEMA,
     RUNTIME_SETTINGS_SCHEMA,
     RUNTIME_SETTINGS_HISTORY_SCHEMA,
+    CHAT_REPLACEMENTS_SCHEMA,
 )
 _REQUIRED_TABLES = {
     "schema_meta",
@@ -173,6 +187,7 @@ _REQUIRED_TABLES = {
     "message_traces",
     "runtime_settings",
     "runtime_settings_history",
+    "chat_replacements",
 }
 _V1_REQUIRED_TABLES = {
     "schema_meta",
@@ -243,7 +258,9 @@ def _required_tables_for(version: int) -> set[str]:
         return _V2_REQUIRED_TABLES
     if version == 3:
         return _V3_REQUIRED_TABLES
-    if version in (4, SCHEMA_VERSION):
+    if version in (4, 5):
+        return _REQUIRED_TABLES - {"chat_replacements"}
+    if version == SCHEMA_VERSION:
         return _REQUIRED_TABLES
     raise UnsupportedSchemaError(
         f"不支持的 metadata schema version: {version}"
@@ -278,6 +295,13 @@ def _apply_migration(connection: sqlite3.Connection, from_version: int) -> None:
         )
         connection.execute(
             "UPDATE schema_meta SET schema_version = 5 WHERE schema_version = 4"
+        )
+        return
+    if from_version == 5:
+        connection.execute("ALTER TABLE messages ADD COLUMN retrieval_tags_json TEXT")
+        connection.execute(CHAT_REPLACEMENTS_SCHEMA)
+        connection.execute(
+            "UPDATE schema_meta SET schema_version = 6 WHERE schema_version = 5"
         )
         return
     raise UnsupportedSchemaError(

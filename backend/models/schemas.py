@@ -87,10 +87,19 @@ class ChatRequest(BaseModel):
     request_id: Optional[str] = None
     expected_last_message_id: Optional[str] = None
     retry_failed: bool = False
+    replace_message_id: Optional[str] = Field(
+        default=None, description="编辑或重新生成的用户消息；成功后覆盖该轮及后续消息"
+    )
     tags: list[str] = Field(
         default_factory=list,
         description="按标签筛选检索范围（含子孙标签，多选取并集）；空列表表示全库",
     )
+
+    @model_validator(mode="after")
+    def validate_replacement(self):
+        if self.replace_message_id and (not self.conversation_id or not self.request_id or self.retry_failed):
+            raise ValueError("重新生成必须指定会话和新请求，不能同时使用旧失败重试标记")
+        return self
 
 
 class Citation(BaseModel):
@@ -396,6 +405,9 @@ class ConversationMessage(BaseModel):
     reasoning_content: str = ""
     status: str
     standalone_question: Optional[str] = None
+    retrieval_tags: Optional[list[str]] = Field(
+        default=None, description="本轮发送时选择的标签路径；[]为全库，null为旧记录未保存"
+    )
     citations: list[Citation] = Field(default_factory=list)
     trace: Optional[RetrievalTrace] = Field(
         default=None,
@@ -406,6 +418,7 @@ class ConversationMessage(BaseModel):
 
 class ConversationDetail(ConversationSummary):
     messages: list[ConversationMessage] = Field(default_factory=list)
+    supports_message_edit: bool = True
 
 
 # ─── 多级树形标签接口 ─────────────────────────────────

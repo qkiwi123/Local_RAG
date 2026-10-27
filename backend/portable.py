@@ -1,7 +1,7 @@
 """Explicit portable defaults and workspace guard, before storage/model imports.
 
-Source mode never calls these functions. No installer, migration, download, or
-service management lives here; all paths derive from the bundled backend root.
+Source mode never calls these functions. Only the allowlisted v5-to-v6
+conversation migration runs here; all paths derive from the bundled backend root.
 """
 from __future__ import annotations
 
@@ -19,7 +19,7 @@ MODELS = {
     "reranker": ("BAAI/bge-reranker-v2-m3", "953dc6f6f85a1b2dbfca4c34a2796e7dde08d41e"),
 }
 WORKSPACE_VERSION = 1
-STORAGE_SCHEMA = 5
+STORAGE_SCHEMA = 6
 
 
 def owned_path(root: Path, relative: str) -> Path:
@@ -60,7 +60,9 @@ def _contract(root: Path) -> dict:
 def read_workspace(root: Path) -> dict:
     path = owned_path(root, "data/workspace.json")
     workspace = json.loads(path.read_text(encoding="utf-8"))
-    if workspace.get("format") != WORKSPACE_VERSION or workspace.get("contract") != _contract(root):
+    expected = _contract(root)
+    previous = {**expected, "storage_schema": 5}
+    if workspace.get("format") != WORKSPACE_VERSION or workspace.get("contract") not in (expected, previous):
         raise ValueError("便携工作空间版本不兼容，已拒绝打开；请使用匹配版本和完整备份")
     identifier = str(uuid.UUID(workspace["workspace_id"]))
     if (workspace.get("corpus_id") != "portable-" + identifier
@@ -90,7 +92,7 @@ def _save_workspace(root: Path, workspace: dict, *, initial: bool = False) -> No
         temporary.unlink(missing_ok=True)
 
 
-def _preflight_storage(root: Path) -> None:
+def _preflight_storage(root: Path) -> int | None:
     """Read existing SQLite version before any business imports may migrate it."""
     database = owned_path(root, "data/metadata.db")
     if not database.exists():
@@ -99,10 +101,36 @@ def _preflight_storage(root: Path) -> None:
     try:
         connection.execute("PRAGMA query_only=ON")
         versions = connection.execute("SELECT schema_version FROM schema_meta").fetchall()
-        if versions != [(STORAGE_SCHEMA,)]:
+        if versions not in ([(5,)], [(STORAGE_SCHEMA,)]):
             raise ValueError("便携数据库schema不兼容，拒绝隐式迁移")
+        return versions[0][0]
     finally:
         connection.close()
+
+
+def _upgrade_conversation_storage(root: Path, workspace: dict, version: int | None) -> None:
+    """唯一放行的v5→v6保留性迁移：先SQLite一致性备份，再加列/表。"""
+    if version == 5:
+        database = owned_path(root, "data/metadata.db")
+        directory = owned_path(root, "data/migration-backups")
+        directory.mkdir(exist_ok=True)
+        backup = owned_path(root, f"data/migration-backups/metadata-v5-{uuid.uuid4().hex}.db")
+        with backup.open("xb"):
+            pass
+        source = sqlite3.connect(database.resolve().as_uri() + "?mode=ro", uri=True)
+        destination = sqlite3.connect(backup)
+        try:
+            with destination:
+                source.backup(destination)
+        finally:
+            destination.close()
+            source.close()
+        from backend.services.metadata_schema import bootstrap_structured_database
+
+        bootstrap_structured_database(str(database), created_at="portable-v6-migration")
+    if workspace["contract"] != _contract(root):
+        workspace["contract"] = _contract(root)
+        _save_workspace(root, workspace)
 
 
 def prepare_environment(root: Path, device: str, batch_profile: str = "normal") -> dict[str, str]:
@@ -124,7 +152,8 @@ def prepare_environment(root: Path, device: str, batch_profile: str = "normal") 
     data = root / "data"
     if (data / "workspace.json").exists():
         workspace = read_workspace(root)
-        _preflight_storage(root)
+        version = _preflight_storage(root)
+        _upgrade_conversation_storage(root, workspace, version)
     else:
         if data.exists() and any(data.iterdir()):
             raise ValueError("data已有内容但无便携工作空间标识，拒绝接管或迁移现有知识库")

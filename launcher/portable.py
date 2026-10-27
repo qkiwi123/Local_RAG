@@ -183,10 +183,14 @@ def _start_attempt(root: Path, manifest: dict, asset_id: str, owner: dict, *,
 
 
 def start(root: Path, *, cpu: bool = False, port: int | None = None, no_browser: bool = False, no_tray: bool = False,
-          accept_cpu_fallback: bool = False, timeout: float = 180) -> dict:
+          accept_cpu_fallback: bool = False, timeout: float = 180, update_id: str | None = None) -> dict:
+    from launcher.updater import guard_start
+
+    guard_start(root, update_id)
     load_assets(root)  # Source trees fail before creating state or personal data.
     safe_path(root, "state").mkdir(exist_ok=True)
     with file_lock(root, "command.lock", timeout=480):
+        guard_start(root, update_id)
         old = read_record(root)
         if old and same_process(root, old):
             _, current_asset_id = validate_assets(root)
@@ -256,7 +260,8 @@ def start(root: Path, *, cpu: bool = False, port: int | None = None, no_browser:
             safe_path(root, f"state/cancel-{owner['instance_id']}.json").unlink(missing_ok=True)
 
 
-def stop(root: Path, *, timeout: float = 30, force: bool = False, expected_instance_id: str | None = None) -> dict:
+def stop(root: Path, *, timeout: float = 30, force: bool = False, expected_instance_id: str | None = None,
+         allow_prompt: bool = True) -> dict:
     record = read_record(root)
     if expected_instance_id is not None and (not record or record["instance_id"] != expected_instance_id):
         return {"outcome": "instance_changed"}
@@ -272,6 +277,8 @@ def stop(root: Path, *, timeout: float = 30, force: bool = False, expected_insta
     while same_process(root, record) and time.monotonic() < deadline:
         time.sleep(0.2)
     if same_process(root, record):
+        if not force and not allow_prompt:
+            raise RuntimeError("任务仍在执行，更新未强制结束项目；正常停止后可再次更新")
         if not force and input("服务仍在等待任务结束，是否强制结束本实例？[y/N] ").strip().lower() not in {"y", "yes", "是"}:
             raise RuntimeError("尚未停止；停止请求已保留，不要移动或移除目录")
         import psutil

@@ -15,6 +15,8 @@ interface RunState {
   text: string;
   reasoning: string;
   error: string | null;
+  replaceMessageId?: string;
+  tags: string[];
 }
 
 interface ActiveRun {
@@ -38,6 +40,7 @@ export function useChatController() {
   const [currentId, setCurrentId] = useState<string | null>(null);
   const [viewKey, setViewKey] = useState("draft-0");
   const [messages, setMessages] = useState<ConversationMessage[]>([]);
+  const [supportsMessageEdit, setSupportsMessageEdit] = useState(false);
   const [tags, setTags] = useState<TagInfo[]>([]);
   const [tagFilter, setTagFilter] = useState<string[]>([]);
   const [input, setInput] = useState("");
@@ -114,6 +117,7 @@ export function useChatController() {
       const detail = await api.getConversation(id);
       if (mountedRef.current && sequence === loadSequenceRef.current && currentIdRef.current === id) {
         setMessages(detail.messages);
+        setSupportsMessageEdit(detail.supports_message_edit === true);
       }
     } catch (error) {
       if (mountedRef.current && sequence === loadSequenceRef.current) {
@@ -180,17 +184,24 @@ export function useChatController() {
     }
   }, [refreshConversations]);
 
-  const send = useCallback(async (question: string, retryMessage?: ConversationMessage) => {
+  const send = useCallback(async (question: string, retryMessage?: ConversationMessage, scopeOverride?: string[], expectedTailId?: string, targetConversationId?: string) => {
     const startingKey = viewKeyRef.current;
     if (!question.trim() || requestsRef.current.has(startingKey)) return;
+    if (retryMessage && !supportsMessageEdit) {
+      message.warning("请先重启更新后的后端服务，再编辑或重试消息。");
+      return;
+    }
+    if (retryMessage && (!currentIdRef.current || (targetConversationId && currentIdRef.current !== targetConversationId))) return;
     let conversationId = currentIdRef.current;
     const complete = messages.filter((item) => item.status === "complete");
-    const expectedLastId = conversationId && complete.length ? complete[complete.length - 1].message_id : null;
-    const activeTags = [...tagFilter];
+    const expectedLastId = retryMessage ? (expectedTailId ?? messages.at(-1)?.message_id)
+      : conversationId && complete.length ? complete[complete.length - 1].message_id : null;
+    const activeTags = [...(scopeOverride ?? tagFilter)];
     const run: ActiveRun = {
       key: startingKey,
       controller: new AbortController(),
-      state: { requestId: retryMessage?.request_id ?? crypto.randomUUID(), question,
+      state: { requestId: crypto.randomUUID(), question, tags: activeTags,
+        replaceMessageId: retryMessage?.message_id,
         streaming: true, text: "", reasoning: "", error: null },
     };
     requestsRef.current.set(startingKey, run);
@@ -227,8 +238,9 @@ export function useChatController() {
         return;
       }
       const result = await streamChat({ question, conversation_id: conversationId,
-        request_id: run.state.requestId, expected_last_message_id: retryMessage ? undefined : expectedLastId,
-        retry_failed: Boolean(retryMessage), tags: activeTags }, {
+        request_id: run.state.requestId, expected_last_message_id: expectedLastId,
+        replace_message_id: retryMessage?.message_id,
+        retry_failed: false, tags: activeTags }, {
         onDelta: (event) => publishRun(run, { text: run.state.text + event.text }),
         onReasoningDelta: (event) => publishRun(run, { reasoning: run.state.reasoning + event.text }),
         onDone: () => { receivedDone = true; },
@@ -267,7 +279,7 @@ export function useChatController() {
       retireRun(run);
       if (mountedRef.current) await refreshConversations();
     }
-  }, [createConversation, loadConversation, messages, publishRun, refreshConversations, retireRun, setActiveConversation, tagFilter]);
+  }, [createConversation, loadConversation, messages, publishRun, refreshConversations, retireRun, setActiveConversation, tagFilter, supportsMessageEdit]);
 
   const stopStreaming = useCallback(() => {
     const run = requestsRef.current.get(viewKeyRef.current);
@@ -285,12 +297,14 @@ export function useChatController() {
 
   const activeRun = runs[viewKey];
   return {
-    conversations, currentId, messages, tags, tagFilter, setTagFilter, input, setInput,
+    conversations, currentId, messages, tags, tagFilter, setTagFilter, input, setInput, supportsMessageEdit,
     streaming: activeRun?.streaming ?? false,
     streamingText: activeRun?.text ?? "",
     streamingReasoning: activeRun?.reasoning ?? "",
     streamingRequestId: activeRun?.requestId ?? "",
     streamingError: activeRun?.error ?? null,
+    replacingMessageId: activeRun?.replaceMessageId,
+    pendingTags: activeRun?.tags ?? [],
     pendingQuestion: activeRun?.question ?? null,
     loadConversation, createConversation, deleteConversation, renameConversation, send, stopStreaming, submitInput,
   };

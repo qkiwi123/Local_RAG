@@ -68,6 +68,34 @@ def test_reduced_batch_profile_keeps_models_and_candidate_contract(bundle):
     assert values["EMBEDDING_MODEL"] == portable.MODELS["embedding"][0]
 
 
+def test_v5_conversation_upgrade_backs_up_and_preserves_workspace(bundle):
+    from backend.services import metadata_schema as schema
+    portable.prepare_environment(bundle, "cpu")
+    marker = bundle / "data/workspace.json"
+    old = json.loads(marker.read_text("utf-8"))
+    old["contract"]["storage_schema"] = 5
+    marker.write_text(json.dumps(old), encoding="utf-8")
+    db = bundle / "data/metadata.db"
+    with sqlite3.connect(db) as connection:
+        for ddl in schema._SCHEMAS:
+            if ddl != schema.CHAT_REPLACEMENTS_SCHEMA:
+                connection.execute(ddl.replace("    retrieval_tags_json TEXT,\n", ""))
+        connection.execute("INSERT INTO schema_meta VALUES (5, 'old')")
+        connection.execute("INSERT INTO conversations VALUES ('old','旧会话','old','old')")
+    portable.prepare_environment(bundle, "cpu")
+    portable.prepare_environment(bundle, "cpu")
+    current = portable.read_workspace(bundle)
+    assert current["workspace_id"] == old["workspace_id"]
+    assert current["contract"]["storage_schema"] == 6
+    backups = list((bundle / "data/migration-backups").glob("*.db"))
+    assert len(backups) == 1
+    with sqlite3.connect(backups[0]) as connection:
+        assert connection.execute("SELECT schema_version FROM schema_meta").fetchone()[0] == 5
+    with sqlite3.connect(db) as connection:
+        assert connection.execute("SELECT title FROM conversations").fetchone()[0] == "旧会话"
+        assert connection.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
+
+
 def test_config_import_ignores_dotenv_and_inherited_deployment_values(bundle):
     backend = bundle / "backend"
     backend.mkdir()
@@ -113,7 +141,7 @@ def test_does_not_adopt_unmarked_existing_data(bundle):
     assert not (bundle / "data/workspace.json").exists()
 
 
-@pytest.mark.parametrize("version", [4, 6])
+@pytest.mark.parametrize("version", [4, 7])
 def test_incompatible_database_refused_before_migration_or_schema_write(bundle, version):
     portable.prepare_environment(bundle, "cpu")
     database = bundle / "data/metadata.db"

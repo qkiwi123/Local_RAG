@@ -130,6 +130,79 @@ def _trace():
     )
 
 
+@pytest.mark.parametrize("endpoint", ["/api/chat", "/api/chat/stream"])
+def test_regeneration_retrieves_again_with_saved_scope_and_only_prior_history(client, monkeypatch, endpoint):
+    from backend.services import conversation_store as store
+    from backend.routers import chat as router
+    from backend.models.schemas import RetrievalResponse
+
+    cid = client.post("/api/conversations", json={}).json()["conversation_id"]
+    for n in range(3):
+        messages = store.get_conversation(cid)["messages"]
+        store.begin_chat(conversation_id=cid, request_id=f"seed{n}", question=f"旧问题{n}",
+                         expected_last_message_id=messages[-1]["message_id"] if messages else None,
+                         retry_failed=False, tags=[], )
+        store.complete_chat(request_id=f"seed{n}", standalone_question=f"旧问题{n}", answer=f"旧回答{n}", citations=[])
+    before = store.get_conversation(cid)["messages"]
+    histories, searches = [], []
+
+    def retrieve(question, **kwargs):
+        searches.append((question, kwargs))
+        return RetrievalResponse(results=[_retrieval_row()], trace=None)
+
+    def rewrite(question, history, runtime):
+        histories.append(history)
+        return question
+
+    def answer(question, standalone, context, history, runtime):
+        histories.append(history)
+        return "重新检索的新答案"
+
+    async def stream(question, standalone, context, history, runtime, **kwargs):
+        histories.append(history)
+        yield "重新检索的新答案"
+
+    monkeypatch.setattr(router, "retrieve_with_trace", retrieve)
+    monkeypatch.setattr(router, "rewrite_followup", rewrite)
+    monkeypatch.setattr(router, "ask_with_history", answer)
+    monkeypatch.setattr(router, "ask_with_history_stream_async", stream)
+    payload = {"conversation_id": cid, "request_id": "replace", "question": "新问题",
+               "replace_message_id": before[2]["message_id"], "expected_last_message_id": before[-1]["message_id"], "tags": ["pit"]}
+    response = client.post(endpoint, json=payload)
+    assert response.status_code == 200, response.text
+    if endpoint.endswith("stream"):
+        assert _events(response)[-1]["event"] == "done"
+    else:
+        assert response.json()["answer"] == "重新检索的新答案"
+    assert searches[0][0] == "新问题"
+    assert searches[0][1]["allowed_document_ids"] == []
+    assert histories and all("旧问题0" in h and "旧问题1" not in h and "旧问题2" not in h for h in histories)
+    after = client.get(f"/api/conversations/{cid}").json()["messages"]
+    assert len(after) == 4 and after[2]["retrieval_tags"] == ["pit"]
+    assert after[-1]["content"] == "重新检索的新答案"
+    assert client.post(endpoint, json=payload).status_code == 200
+    assert len(searches) == 1  # 网络重复提交重放，新一轮重试须用新request_id。
+
+
+@pytest.mark.parametrize("endpoint", ["/api/chat", "/api/chat/stream"])
+def test_regeneration_retrieval_failure_preserves_original_history(client, monkeypatch, endpoint):
+    from backend.services import conversation_store as store
+    cid = store.create_conversation()["conversation_id"]
+    store.begin_chat(conversation_id=cid, request_id="original", question="原问题",
+                     expected_last_message_id=None, retry_failed=False, tags=["pit"])
+    store.complete_chat(request_id="original", standalone_question="原问题", answer="原答案", citations=[])
+    before = store.get_conversation(cid)
+    _mock_retrieval(monkeypatch, raise_error=RuntimeError("模拟检索失败"))
+    response = client.post(endpoint, json={"conversation_id": cid, "request_id": "failure", "question": "新问题",
+        "replace_message_id": before["messages"][0]["message_id"],
+        "expected_last_message_id": before["messages"][-1]["message_id"], "tags": []})
+    if endpoint.endswith("stream"):
+        assert _events(response)[-1]["event"] == "error"
+    else:
+        assert response.status_code == 500
+    assert store.get_conversation(cid) == before
+
+
 def test_stream_event_sequence_and_answer_assembly(client, monkeypatch):
     _mock_retrieval(monkeypatch, rows=[_retrieval_row()])
     _mock_stream(monkeypatch, ["员工", "有", "5 天年假。"])
@@ -322,7 +395,7 @@ def test_live_http_stream_is_incremental_and_does_not_block_health(
     received: list[tuple[float, dict]] = []
     reader_errors: list[Exception] = []
 
-    with _live_http_server(app) as base_url:
+    with _live_http_server(app) as base_url, httpx.Client(trust_env=False, timeout=2) as health_client:
         request_started = time.monotonic()
 
         def read_stream():
@@ -332,6 +405,7 @@ def test_live_http_stream_is_incremental_and_does_not_block_health(
                     f"{base_url}/api/chat/stream",
                     json={"question": "流式测试"},
                     timeout=5,
+                    trust_env=False,
                 ) as response:
                     response.raise_for_status()
                     for line in response.iter_lines():
@@ -349,7 +423,8 @@ def test_live_http_stream_is_incremental_and_does_not_block_health(
         fallback_release.start()
         health_started = time.monotonic()
         try:
-            health = httpx.get(f"{base_url}/api/health", timeout=2)
+            # 只测本机请求响应；初始化客户端/系统代理不属于事件循环阻塞。
+            health = health_client.get(f"{base_url}/api/health")
             health_elapsed = time.monotonic() - health_started
         finally:
             release_retrieval.set()

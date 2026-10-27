@@ -498,6 +498,19 @@
   .chat-compose-dock__hint { font-size: 10px; }
 }
 
+.chat-message-row--user { flex-direction: column; align-items: flex-end; gap: 5px; }
+.chat-message-tools { display: flex; align-items: center; justify-content: flex-end; flex-wrap: wrap; gap: 6px 12px; max-width: 100%; }
+.chat-message-scope { color: var(--app-subtle); font-size: 11px; overflow-wrap: anywhere; white-space: normal; }
+.chat-message-tools__actions { display: inline-flex; flex-shrink: 0; gap: 2px; }
+.chat-message-tools__actions .ant-btn { font-size: 12px; color: var(--app-muted); }
+.chat-message-tools__actions .ant-btn:hover { color: var(--app-primary); }
+.chat-message-editor__label { display: block; margin: 20px 0 9px; font-weight: 600; }
+.chat-message-editor__scope { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px; margin: 26px 0 16px; padding: 14px; border: 1px solid var(--app-border); border-radius: 12px; }
+.chat-message-editor__scope p { margin: 5px 0 0; font-size: 12px; color: var(--app-muted); }
+.chat-message-editor__notice { color: var(--app-muted); font-size: 12px; line-height: 1.8; margin-top: 16px; }
+.chat-message-editor .ant-alert + .ant-alert { margin-top: 10px; }
+.chat-regenerate-notice { margin: 16px 0; font-size: 12px; color: var(--app-muted); }
+
 @media (prefers-reduced-motion: reduce) {
   .chat-conversation-item,
   .chat-welcome-spacer,

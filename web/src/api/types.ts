@@ -7,6 +7,25 @@ export interface ConversationSummary {
   updated_at: string;
 }
 
+export interface LocalUpdateJob {
+  id: string;
+  phase: string;
+  message: string;
+  version: string;
+  notes: string;
+  files?: number;
+  bytes?: number;
+  error?: string;
+  recovery_error?: string;
+}
+
+export interface LocalUpdateStatus {
+  available: boolean;
+  message?: string;
+  version?: string;
+  job?: LocalUpdateJob | null;
+}
+
 export interface Citation {
   source_id: number;
   // 旧消息只保存正文引用，缺省沿用旧语义。
@@ -110,6 +129,7 @@ export interface ConversationMessage {
   reasoning_content?: string;
   status: "pending" | "complete" | "failed";
   standalone_question?: string | null;
+  retrieval_tags?: string[] | null;
   citations: Citation[];
   trace?: RetrievalTrace | null;
   created_at: string;
@@ -117,6 +137,7 @@ export interface ConversationMessage {
 
 export interface ConversationDetail extends ConversationSummary {
   messages: ConversationMessage[];
+  supports_message_edit?: boolean;
 }
 
 export interface TagInfo {

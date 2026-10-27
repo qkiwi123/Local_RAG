@@ -38,7 +38,9 @@ app = FastAPI(
 # 开发阶段 allow_origins=["*"]，正式部署再收紧
 if settings.DISTRIBUTION_MODE == "portable":
     from backend.services.portable_runtime import LocalOnlyMiddleware
+    from backend.services.update_maintenance import UpdateMaintenanceMiddleware
 
+    app.add_middleware(UpdateMaintenanceMiddleware, root=Path(__file__).resolve().parents[1])
     app.add_middleware(LocalOnlyMiddleware, port_provider=lambda: getattr(app.state, "portable_port", 8000))
 else:
     app.add_middleware(
@@ -105,6 +107,7 @@ from backend.routers import (
     settings as settings_router,
     tags,
     upload,
+    local_update,
 )
 
 app.include_router(upload.router, prefix="/api")
@@ -113,6 +116,7 @@ app.include_router(citations.router)
 app.include_router(conversations.router, prefix="/api")
 app.include_router(tags.router, prefix="/api")
 app.include_router(settings_router.router, prefix="/api")
+app.include_router(local_update.router, prefix="/api")
 
 
 @app.get("/api/health")

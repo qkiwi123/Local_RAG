@@ -16,6 +16,7 @@ import { usePanelResize } from "../../components/usePanelResize";
 import { ChatComposer } from "./ChatComposer";
 import { ConversationRail } from "./ConversationRail";
 import { MessageTimeline } from "./MessageTimeline";
+import { MessageEditor } from "./MessageEditor";
 import { RetrievalScopeBar } from "./RetrievalScopeBar";
 import { useChatController } from "./useChatController";
 import "./chat-page.css";
@@ -55,7 +56,8 @@ export default function ChatPage() {
   const [traceOpen, setTraceOpen] = useState<ConversationMessage | null>(null);
   const [renameTarget, setRenameTarget] = useState<ConversationSummary | null>(null);
   const [renameValue, setRenameValue] = useState("");
-  useEffect(() => setTraceOpen(null), [chat.currentId]);
+  const [editing, setEditing] = useState<{ message: ConversationMessage; tailId: string } | null>(null);
+  useEffect(() => { setTraceOpen(null); setEditing(null); }, [chat.currentId]);
   const hasConversation = Boolean(
     chat.messages.length || chat.pendingQuestion || chat.streaming || chat.streamingError,
   );
@@ -102,6 +104,25 @@ export default function ChatPage() {
     />
   );
 
+  const editMessage = (item: ConversationMessage) => {
+    if (chat.streaming) return;
+    setEditing({ message: item, tailId: chat.messages.at(-1)!.message_id });
+  };
+  const retryMessage = (item: ConversationMessage) => {
+    if (chat.streaming) return;
+    setTraceOpen(null);
+    if (item.retrieval_tags == null || item.retrieval_tags.some((path) => !chat.tags.some((tag) => tag.tag_path === path))) {
+      editMessage(item);
+      return;
+    }
+    const tailId = chat.messages.at(-1)!.message_id;
+    const later = chat.messages.filter((message) => message.role === "user" && message.sequence > item.sequence).length;
+    const retry = () => { void chat.send(item.content, item, item.retrieval_tags!, tailId, chat.currentId!); };
+    if (later) Modal.confirm({ title: "重新生成这条消息？", okText: "重新生成", cancelText: "取消",
+      content: `成功后将替换本轮回答，并清除后续 ${later} 轮对话。失败时原记录保留。`, onOk: retry });
+    else retry();
+  };
+
   return (
     <div
       className="chat-page"
@@ -147,7 +168,11 @@ export default function ChatPage() {
           streamingReasoning={chat.streamingReasoning}
           streamingRequestId={chat.streamingRequestId}
           streamingError={chat.streamingError}
-          onRetry={(item) => void chat.send(item.content, item)}
+          replacingMessageId={chat.replacingMessageId}
+          pendingTags={chat.pendingTags}
+          supportsMessageEdit={chat.supportsMessageEdit}
+          onEdit={editMessage}
+          onRetry={retryMessage}
           onOpenTrace={setTraceOpen}
         />
 
@@ -200,6 +225,14 @@ export default function ChatPage() {
       {traceOpen?.trace && (
         <TraceDrawer trace={traceOpen.trace} onClose={() => setTraceOpen(null)} />
       )}
+      {editing && <MessageEditor key={`${editing.message.message_id}-${editing.message.request_id}`}
+        message={editing.message} tags={chat.tags}
+        laterRounds={chat.messages.filter((item) => item.role === "user" && item.sequence > editing.message.sequence).length}
+        onCancel={() => setEditing(null)} onSave={(question, tags) => {
+          setEditing(null);
+          setTraceOpen(null);
+          void chat.send(question, editing.message, tags, editing.tailId, chat.currentId!);
+        }} />}
     </div>
   );
 }

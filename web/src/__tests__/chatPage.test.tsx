@@ -1,6 +1,7 @@
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import "@testing-library/jest-dom/vitest";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { ConfigProvider } from "antd";
 import ChatPage from "../pages/chat/ChatPage";
 
 const mocks = vi.hoisted(() => ({
@@ -29,6 +30,7 @@ vi.mock("../api/stream", () => ({
 }));
 
 const conversation = {
+  supports_message_edit: true,
   conversation_id: "conversation-1",
   title: "测试会话",
   created_at: "2026-08-15T10:00:00",
@@ -460,7 +462,119 @@ describe("ChatPage 检索范围", () => {
     );
   });
 
-  it("失败消息重试复用原 request_id，并设置 retry_failed", async () => {
+  const savedUser = { message_id: "old-user", request_id: "old-request", sequence: 0,
+    role: "user" as const, content: "原来的问题", status: "complete" as const,
+    retrieval_tags: ["pit"], citations: [], created_at: "" };
+  const savedAnswer = { message_id: "old-answer", request_id: "old-request", sequence: 1,
+    role: "assistant" as const, content: "原来的回答", status: "complete" as const,
+    citations: [], created_at: "" };
+
+  it("成功消息重试使用新请求和原范围，而不是输入区的全库范围", async () => {
+    mocks.getConversation.mockResolvedValue({ ...conversation, messages: [savedUser, savedAnswer] });
+    render(<ChatPage />);
+    fireEvent.click(await screen.findByRole("button", { name: "重试问题：原来的问题" }));
+    await waitFor(() => expect(mocks.streamChat).toHaveBeenCalledTimes(1));
+    expect(mocks.streamChat.mock.calls[0][0]).toMatchObject({ question: "原来的问题", tags: ["pit"],
+      request_id: "request-1", replace_message_id: "old-user", expected_last_message_id: "old-answer", retry_failed: false });
+  });
+
+  it("旧后端未声明支持覆盖时禁用操作，避免把编辑误存成追加问题", async () => {
+    mocks.getConversation.mockResolvedValue({ ...conversation, supports_message_edit: undefined, messages: [savedUser, savedAnswer] });
+    render(<ChatPage />);
+    expect(await screen.findByRole("button", { name: "编辑问题：原来的问题" })).toBeDisabled();
+    expect(screen.getByText("请重启更新后的后端服务，以启用消息编辑、重试及范围保存。")).toBeVisible();
+    fireEvent.click(screen.getByRole("button", { name: "重试问题：原来的问题" }));
+    expect(mocks.streamChat).not.toHaveBeenCalled();
+  });
+
+  it("重新生成期间切换新会话再返回，继续原请求并保存新答案", async () => {
+    let finish!: () => void;
+    let signal!: AbortSignal;
+    mocks.getConversation.mockResolvedValue({ ...conversation, messages: [savedUser, savedAnswer] });
+    mocks.streamChat.mockImplementationOnce(async (_payload, handlers, activeSignal) => {
+      signal = activeSignal;
+      await new Promise<void>((resolve) => { finish = resolve; });
+      handlers.onDone({ event: "done" });
+      return { events: [], aborted: false };
+    });
+    render(<ChatPage />);
+    fireEvent.click(await screen.findByRole("button", { name: "重试问题：原来的问题" }));
+    await waitFor(() => expect(mocks.streamChat).toHaveBeenCalledTimes(1));
+    fireEvent.click(screen.getByRole("button", { name: /新建对话/ }));
+    expect(signal.aborted).toBe(false);
+    expect(screen.queryByText("正在检索并生成回答…")).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "打开会话「测试会话」" }));
+    expect(await screen.findByText("正在检索并生成回答…")).toBeVisible();
+    mocks.getConversation.mockResolvedValue({ ...conversation, messages: [
+      { ...savedUser, request_id: "request-1" }, { ...savedAnswer, request_id: "request-1", content: "重试后的完整回答" }] });
+    await act(async () => finish());
+    expect(await screen.findByText("重试后的完整回答")).toBeVisible();
+    expect(screen.queryByText("原来的回答")).not.toBeInTheDocument();
+    expect(mocks.streamChat).toHaveBeenCalledTimes(1);
+  });
+
+  it("编辑可独立修改问题及检索范围，取消不写入", async () => {
+    mocks.getConversation.mockResolvedValue({ ...conversation, messages: [savedUser, savedAnswer] });
+    render(<ConfigProvider theme={{ token: { motion: false } }}><ChatPage /></ConfigProvider>);
+    fireEvent.click(await screen.findByRole("button", { name: "编辑问题：原来的问题" }));
+    fireEvent.change(screen.getByLabelText("编辑已发送的问题"), { target: { value: "修改后的问题" } });
+    fireEvent.click(screen.getByRole("button", { name: "修改本条检索范围，当前pit" }));
+    fireEvent.click(await screen.findByRole("button", { name: /全部资料不限制标签/ }));
+    await waitFor(() => expect(screen.getByRole("button", { name: "修改本条检索范围，当前全部资料" })).toBeVisible());
+    fireEvent.click(screen.getByRole("button", { name: /保存并重新生成/ }));
+    await waitFor(() => expect(mocks.streamChat).toHaveBeenCalledTimes(1));
+    expect(mocks.streamChat.mock.calls[0][0]).toMatchObject({ question: "修改后的问题", tags: [], replace_message_id: "old-user" });
+    await waitFor(() => expect(screen.getByRole("button", { name: "编辑问题：原来的问题" })).toBeEnabled());
+    fireEvent.click(screen.getByRole("button", { name: "编辑问题：原来的问题" }));
+    fireEvent.click(screen.getByRole("button", { name: /取\s*消/ }));
+    expect(mocks.streamChat).toHaveBeenCalledTimes(1);
+  });
+
+  it("旧消息未保存范围时，重试先打开范围确认编辑器", async () => {
+    mocks.getConversation.mockResolvedValue({ ...conversation, messages: [{ ...savedUser, retrieval_tags: null }, savedAnswer] });
+    render(<ConfigProvider theme={{ token: { motion: false } }}><ChatPage /></ConfigProvider>);
+    fireEvent.click(await screen.findByRole("button", { name: "重试问题：原来的问题" }));
+    await waitFor(() => expect(screen.getByText("这条旧消息未记录检索范围，请确认本次范围后再生成。")).toBeVisible());
+    expect(mocks.streamChat).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: /保存并重新生成/ }));
+    await waitFor(() => expect(mocks.streamChat).toHaveBeenCalledTimes(1));
+    expect(mocks.streamChat.mock.calls[0][0]).toMatchObject({ tags: [] });
+  });
+
+  it("原标签已删除时要求修改范围，不能静默放宽到全库", async () => {
+    mocks.getConversation.mockResolvedValue({ ...conversation, messages: [{ ...savedUser, retrieval_tags: ["已删除"] }, savedAnswer] });
+    render(<ConfigProvider theme={{ token: { motion: false } }}><ChatPage /></ConfigProvider>);
+    fireEvent.click(await screen.findByRole("button", { name: "重试问题：原来的问题" }));
+    await waitFor(() => expect(screen.getByText("部分原标签已不存在，请先修改范围。")).toBeVisible());
+    expect(screen.getByRole("button", { name: /保存并重新生成/ })).toBeDisabled();
+    expect(mocks.streamChat).not.toHaveBeenCalled();
+  });
+
+  it("重新生成失败会恢复旧问题与旧回答，并显示保留提示", async () => {
+    mocks.getConversation.mockResolvedValue({ ...conversation, messages: [savedUser, savedAnswer] });
+    mocks.streamChat.mockImplementationOnce(async (_payload, handlers) => {
+      handlers.onError({ event: "error", code: "llm_error", message: "模拟生成失败" });
+      return { events: [], aborted: false };
+    });
+    render(<ChatPage />);
+    fireEvent.click(await screen.findByRole("button", { name: "重试问题：原来的问题" }));
+    expect(await screen.findByText("重新生成未完成，原记录已保留。")).toBeVisible();
+    expect(screen.getByText("原来的回答")).toBeVisible();
+    expect(screen.getByText("原来的问题")).toBeVisible();
+  });
+
+  it("编辑早期问题说明后续覆盖，切换到新会话关闭编辑器且不发送", async () => {
+    mocks.getConversation.mockResolvedValue({ ...conversation, messages: [savedUser, savedAnswer,
+      { ...savedUser, message_id: "later-user", request_id: "later", sequence: 2, content: "后续问题" }] });
+    render(<ConfigProvider theme={{ token: { motion: false } }}><ChatPage /></ConfigProvider>);
+    fireEvent.click(await screen.findByRole("button", { name: "编辑问题：原来的问题" }));
+    await waitFor(() => expect(screen.getByText(/清除后续 1 轮对话/)).toBeVisible());
+    fireEvent.click(screen.getByRole("button", { name: /新建对话/ }));
+    await waitFor(() => expect(screen.queryByLabelText("编辑已发送的问题")).not.toBeInTheDocument());
+    expect(mocks.streamChat).not.toHaveBeenCalled();
+  });
+
+  it("失败消息也以新请求覆盖，并沿用本条保存的范围", async () => {
     const failedMessage = {
       message_id: "message-failed",
       request_id: "request-failed",
@@ -468,6 +582,7 @@ describe("ChatPage 检索范围", () => {
       role: "user" as const,
       content: "失败的问题",
       status: "failed" as const,
+      retrieval_tags: ["pit"],
       citations: [],
       created_at: "2026-08-15T10:01:00",
     };
@@ -477,16 +592,18 @@ describe("ChatPage 检索范围", () => {
     });
     render(<ChatPage />);
 
-    fireEvent.click(await screen.findByRole("button", { name: "重试该消息" }));
+    fireEvent.click(await screen.findByRole("button", { name: "重试问题：失败的问题" }));
     await waitFor(() => expect(mocks.streamChat).toHaveBeenCalledTimes(1));
     expect(mocks.streamChat.mock.calls[0][0]).toMatchObject({
       question: "失败的问题",
-      request_id: "request-failed",
-      retry_failed: true,
+      request_id: "request-1",
+      replace_message_id: "message-failed",
+      retry_failed: false,
+      tags: ["pit"],
     });
     expect(mocks.streamChat.mock.calls[0][0]).toHaveProperty(
       "expected_last_message_id",
-      undefined,
+      "message-failed",
     );
   });
 });

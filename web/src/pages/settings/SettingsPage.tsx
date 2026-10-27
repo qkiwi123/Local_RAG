@@ -30,6 +30,7 @@ import { ChunkingSettingsCard } from "./ChunkingSettingsCard";
 import { DiagnosticsSettingsCard } from "./DiagnosticsSettingsCard";
 import { RuntimeStatusCard } from "./RuntimeStatusCard";
 import { SettingsApplyBar } from "./SettingsApplyBar";
+import { LocalUpdateCard } from "./LocalUpdateCard";
 import "./settings-page.css";
 
 const llmFields = [
@@ -651,6 +652,7 @@ export default function SettingsPage() {
               { id: "vision", title: "视觉解析", detail: "图片识别与扫描文档", icon: <EyeOutlined /> },
               { id: "diagnostics", title: "诊断与追踪", detail: "检索 Trace 开关", icon: <ExperimentOutlined /> },
               { id: "runtime", title: "运行状态", detail: "本地模型与索引", icon: <DatabaseOutlined /> },
+              { id: "update", title: "关于与更新", detail: "保留数据的本地更新", icon: <ReloadOutlined /> },
             ].map((section) => (
               <button key={section.id} type="button" aria-current={activeSection === section.id ? "location" : undefined}
                 onClick={() => {
@@ -717,6 +719,7 @@ export default function SettingsPage() {
         onRefresh={() => void refreshStatus()}
       />
       </section>
+      <section id="settings-update" className="settings-anchor-section"><LocalUpdateCard /></section>
         </div>
       </div>
 
